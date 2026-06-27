@@ -45,14 +45,18 @@ class CustomDnsProxy {
     debugPrint('CustomDnsProxy: Stopped');
   }
 
-  Future<String> _resolveHost(String host) async {
-    if (_dnsCache.containsKey(host)) {
-      return _dnsCache[host]!;
+  final Map<String, List<String>> _dnsCacheList = {};
+
+  Future<List<String>> _resolveHostList(String host) async {
+    if (_dnsCacheList.containsKey(host)) {
+      return _dnsCacheList[host]!;
     }
+    
+    final List<String> ips = [];
 
     // 1. Try Cloudflare DNS over HTTPS (DoH) JSON API first
     try {
-      final uri = Uri.parse('https://1.1.1.1/dns-query?name=$host&type=A');
+      final uri = Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
       final res = await http.get(uri, headers: {
         'Accept': 'application/dns-json',
       }).timeout(const Duration(seconds: 4));
@@ -65,56 +69,79 @@ class CustomDnsProxy {
             if (ans['type'] == 1) { // Type 1 is A record
               final ip = ans['data'] as String;
               if (ip.isNotEmpty && ip != '0.0.0.0') {
-                debugPrint('CustomDnsProxy: Cloudflare DoH resolved $host -> $ip');
-                _dnsCache[host] = ip;
-                return ip;
+                ips.add(ip);
               }
             }
           }
         }
       }
     } catch (e) {
-      debugPrint('CustomDnsProxy: Cloudflare DoH error for $host: $e');
+      debugPrint('CustomDnsProxy: Cloudflare DoH list error for $host: $e');
     }
 
     // 2. Try Google DNS over HTTPS (DoH) JSON API
-    try {
-      final uri = Uri.parse('https://8.8.8.8/resolve?name=$host&type=A');
-      final res = await http.get(uri).timeout(const Duration(seconds: 4));
-      
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final answers = data['Answer'] as List?;
-        if (answers != null && answers.isNotEmpty) {
-          for (final ans in answers) {
-            if (ans['type'] == 1) { // Type 1 is A record
-              final ip = ans['data'] as String;
-              if (ip.isNotEmpty && ip != '0.0.0.0') {
-                debugPrint('CustomDnsProxy: Google DoH resolved $host -> $ip');
-                _dnsCache[host] = ip;
-                return ip;
+    if (ips.isEmpty) {
+      try {
+        final uri = Uri.parse('https://dns.google/resolve?name=$host&type=A');
+        final res = await http.get(uri).timeout(const Duration(seconds: 4));
+        
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          final answers = data['Answer'] as List?;
+          if (answers != null && answers.isNotEmpty) {
+            for (final ans in answers) {
+              if (ans['type'] == 1) { // Type 1 is A record
+                final ip = ans['data'] as String;
+                if (ip.isNotEmpty && ip != '0.0.0.0') {
+                  ips.add(ip);
+                }
               }
             }
           }
         }
+      } catch (e) {
+        debugPrint('CustomDnsProxy: Google DoH list error for $host: $e');
       }
-    } catch (e) {
-      debugPrint('CustomDnsProxy: Google DoH error for $host: $e');
     }
 
-    // 3. Fallback to standard system DNS resolution only as a last resort
-    try {
-      final list = await InternetAddress.lookup(host);
-      if (list.isNotEmpty) {
-        final ip = list.first.address;
-        if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
-          _dnsCache[host] = ip;
-          return ip;
+    // 3. Fallback to standard system DNS resolution
+    if (ips.isEmpty) {
+      try {
+        final list = await InternetAddress.lookup(host);
+        for (final addr in list) {
+          final ip = addr.address;
+          if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
+            ips.add(ip);
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
-    throw Exception('Failed to resolve host $host via system or secure DNS overrides.');
+    if (ips.isNotEmpty) {
+      debugPrint('CustomDnsProxy resolved $host -> $ips');
+      _dnsCacheList[host] = ips;
+      return ips;
+    }
+    throw Exception('Failed to resolve host $host via secure or system DNS.');
+  }
+
+  Future<Socket> _connectToHost(String host, int port) async {
+    final ips = await _resolveHostList(host);
+    Object? lastError;
+    for (final ip in ips) {
+      try {
+        return await Socket.connect(ip, port).timeout(const Duration(seconds: 5));
+      } catch (e) {
+        lastError = e;
+        debugPrint('CustomDnsProxy: Failed connecting to $ip:$port — trying next IP. Error: $e');
+      }
+    }
+    throw lastError ?? Exception('Could not connect to any resolved IP for $host');
+  }
+
+  Future<String> _resolveHost(String host) async {
+    final ips = await _resolveHostList(host);
+    return ips.first;
   }
 
   Future<String> resolveHostForNative(String host) async {
@@ -164,17 +191,15 @@ class CustomDnsProxy {
     Socket? clientSocket;
 
     try {
-      debugPrint('CustomDnsProxy CONNECT: Resolving host $host');
-      final ip = await _resolveHost(host);
-      debugPrint('CustomDnsProxy CONNECT: Connecting TCP socket to $ip:$portVal');
-      targetSocket = await Socket.connect(ip, portVal, timeout: const Duration(seconds: 10));
+      debugPrint('CustomDnsProxy CONNECT: Connecting TCP socket to $host:$portVal');
+      targetSocket = await _connectToHost(host, portVal);
       
-      debugPrint('CustomDnsProxy CONNECT: Established TCP to $ip:$portVal. Detaching client socket.');
+      debugPrint('CustomDnsProxy CONNECT: Established TCP to $host:$portVal. Detaching client socket.');
       clientSocket = await request.response.detachSocket();
       clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: CustomDnsProxy\r\n\r\n');
       await clientSocket.flush();
 
-      debugPrint('CustomDnsProxy CONNECT: Piping bi-directional tunnel between client and $ip:$portVal');
+
       // Setup bi-directional tunnel piping
       clientSocket.listen(
         (data) {
@@ -232,8 +257,7 @@ class CustomDnsProxy {
     client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
       final targetHost = uri.host;
       final targetPort = uri.port;
-      final ip = await _resolveHost(targetHost);
-      final socket = await Socket.connect(ip, targetPort).timeout(const Duration(seconds: 8));
+      final socket = await _connectToHost(targetHost, targetPort);
       if (uri.scheme == 'https') {
         final secureSocket = await SecureSocket.secure(
           socket,
@@ -258,27 +282,79 @@ class CustomDnsProxy {
         final query = request.uri.hasQuery ? '?' + request.uri.query : '';
         final targetUrl = '$targetScheme://$targetHostRaw$remainingPath$query';
         
-        debugPrint('CustomDnsProxy HTTP Relay: Fetching $targetUrl');
+        debugPrint('CustomDnsProxy HTTP Relay: Fetching $targetUrl with retry loop');
         
-        final req = await client.openUrl(request.method, Uri.parse(targetUrl));
-        req.followRedirects = false;
-        
-        // Copy headers, inject Host
-        request.headers.forEach((name, values) {
-          final nameLower = name.toLowerCase();
-          if (nameLower != 'host' && nameLower != 'connection' && nameLower != 'keep-alive') {
-            for (final value in values) {
-              req.headers.add(name, value);
+        HttpClientResponse? resp;
+        Object? lastError;
+        for (int attempt = 0; attempt < 3; attempt++) {
+          try {
+            final req = await client.openUrl(request.method, Uri.parse(targetUrl))
+                .timeout(const Duration(seconds: 8));
+            req.followRedirects = false;
+            
+            // Copy headers, inject Host, enforce Connection: close
+            request.headers.forEach((name, values) {
+              final nameLower = name.toLowerCase();
+              if (nameLower != 'host' && nameLower != 'connection' && nameLower != 'keep-alive' && nameLower != 'user-agent') {
+                for (final value in values) {
+                  req.headers.add(name, value);
+                }
+              }
+            });
+            req.headers.set('Host', targetHostRaw);
+            req.headers.set('Connection', 'close');
+            req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+            // Dynamically extract security headers encoded in the URL query parameter
+            try {
+              final targetUri = Uri.parse(targetUrl);
+              final headersParam = targetUri.queryParameters['headers'];
+              if (headersParam != null && headersParam.isNotEmpty) {
+                final decodedJson = jsonDecode(headersParam);
+                if (decodedJson is Map) {
+                  decodedJson.forEach((key, value) {
+                    final keyStr = key.toString();
+                    final valStr = value.toString();
+                    if (keyStr.toLowerCase() == 'referer') {
+                      req.headers.set('Referer', valStr);
+                    } else if (keyStr.toLowerCase() == 'origin') {
+                      req.headers.set('Origin', valStr);
+                    } else {
+                      req.headers.set(keyStr, valStr);
+                    }
+                  });
+                }
+              }
+            } catch (e) {
+              debugPrint('CustomDnsProxy: Error extracting query headers: $e');
+            }
+
+            // Auto-inject VidLink headers for VidLink CDNs (applies to both playlists and absolute segment chunks)
+            final targetHostLower = targetHost.toLowerCase();
+            if (targetHostLower.contains('vodvidl.site') || targetHostLower.contains('ironwallnet.com')) {
+              req.headers.set('Referer', 'https://vidlink.pro/');
+              req.headers.set('Origin', 'https://vidlink.pro');
+            }
+            
+            if (request.contentLength > 0 || request.headers.value('transfer-encoding') == 'chunked') {
+              await req.addStream(request);
+            }
+            
+            resp = await req.close().timeout(const Duration(seconds: 8));
+            debugPrint('CustomDnsProxy HTTP Relay: Target returned status ${resp.statusCode} for $targetUrl');
+            break;
+          } catch (e) {
+            lastError = e;
+            debugPrint('CustomDnsProxy: Fetch attempt ${attempt + 1} failed for $targetUrl: $e');
+            if (attempt < 2) {
+              await Future.delayed(const Duration(milliseconds: 300));
             }
           }
-        });
-        req.headers.set('Host', targetHostRaw);
-        
-        if (request.contentLength > 0 || request.headers.value('transfer-encoding') == 'chunked') {
-          await req.addStream(request);
         }
         
-        final resp = await req.close();
+        if (resp == null) {
+          throw lastError ?? Exception('Failed to fetch after retries');
+        }
         request.response.statusCode = resp.statusCode;
         
         resp.headers.forEach((name, values) {
@@ -293,7 +369,20 @@ class CustomDnsProxy {
         // If it's HLS playlist, rewrite absolute stream URLs to go through our proxy
         if (targetUrl.contains('.m3u8')) {
           final bodyBytes = await resp.fold<List<int>>([], (p, e) => p..addAll(e));
-          var bodyStr = utf8.decode(bodyBytes);
+          final contentEncoding = resp.headers.value('content-encoding')?.toLowerCase() ?? '';
+          List<int> decodedBytes;
+          if (contentEncoding.contains('gzip')) {
+            try {
+              decodedBytes = gzip.decode(bodyBytes);
+            } catch (e) {
+              debugPrint('CustomDnsProxy: Error decompressing GZIP body: $e');
+              decodedBytes = bodyBytes;
+            }
+          } else {
+            decodedBytes = bodyBytes;
+          }
+          
+          var bodyStr = utf8.decode(decodedBytes);
           
           final urlRegExp = RegExp(r'(https?://[^\s"\r\n]+)');
           bodyStr = bodyStr.replaceAllMapped(urlRegExp, (match) {
@@ -310,6 +399,7 @@ class CustomDnsProxy {
             }
           });
           
+          request.response.headers.removeAll('content-encoding');
           final rewrittenBytes = utf8.encode(bodyStr);
           request.response.headers.set('content-length', rewrittenBytes.length.toString());
           request.response.add(rewrittenBytes);
@@ -432,7 +522,15 @@ class MyHttpOverrides extends HttpOverrides {
     final host = uri.host.toLowerCase();
     if (host.contains('remoteconsultinggroup') ||
         host.contains('streamimdb') ||
-        host.contains('vidsrc')) {
+        host.contains('vidsrc') ||
+        host.contains('vidlink') ||
+        host.contains('streamtape') ||
+        host.contains('strcloud') ||
+        host.contains('tpead.net') ||
+        host.contains('vodvidl.site') ||
+        host.contains('ironwallnet.com') ||
+        host.contains('fayallc') ||
+        host.contains('workers.dev')) {
       return 'PROXY 127.0.0.1:$port';
     }
     return 'DIRECT';
