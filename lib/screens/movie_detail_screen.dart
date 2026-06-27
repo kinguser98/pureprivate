@@ -203,10 +203,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 .replaceAll('👤', ' Seeders:')
                 .replaceAll('\n', ' ');
             
-            torrentSources.add(StreamSource(
-              name: sourceName,
-              url: magnetLink,
-            ));
+            final isDup = torrentSources.any((s) => s.url == magnetLink);
+            if (!isDup) {
+              torrentSources.add(StreamSource(
+                name: sourceName,
+                url: magnetLink,
+              ));
+            }
           }
         }
         
@@ -258,10 +261,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           
           final cleanName = displayTitle.replaceAll('\n', ' ').trim();
 
-          stravoSources.add(StreamSource(
-            name: 'Stravo: $cleanName',
-            url: urlStr,
-          ));
+          final isDup = stravoSources.any((s) => s.url == urlStr);
+          if (!isDup) {
+            stravoSources.add(StreamSource(
+              name: 'Stravo: $cleanName',
+              url: urlStr,
+            ));
+          }
         }
       }
       
@@ -791,40 +797,77 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final fileId = _extractStreamtapeId(url, sourceName: sourceName);
     if (fileId == null) return null;
 
-    try {
-      // 1. Get download ticket client-side
-      final ticketUrl = 'https://api.streamtape.com/file/dlticket?file=$fileId&login=$_streamtapeLogin&key=$_streamtapeKey';
-      final ticketRes = await http.get(Uri.parse(ticketUrl)).timeout(const Duration(seconds: 12));
-      if (ticketRes.statusCode != 200) {
-        throw Exception('Failed to fetch ticket (HTTP ${ticketRes.statusCode})');
+    final apiDomains = [
+      'api.strcloud.club',
+      'api.streamtape.com',
+      'api.streamtape.to',
+      'api.streamtape.net'
+    ];
+
+    Future<http.Response> getWithRetry(String fetchUrl, {int maxAttempts = 3}) async {
+      Object? lastError;
+      for (int i = 0; i < maxAttempts; i++) {
+        try {
+          debugPrint('Streamtape resolve attempt ${i + 1} fetching...');
+          final res = await http.get(
+            Uri.parse(fetchUrl),
+            headers: {
+              'Connection': 'close',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          ).timeout(const Duration(seconds: 8));
+          return res;
+        } catch (e) {
+          lastError = e;
+          debugPrint('Streamtape resolve attempt ${i + 1} failed: $e');
+          if (i < maxAttempts - 1) {
+            await Future.delayed(const Duration(milliseconds: 500));
+          }
+        }
       }
-      final ticketData = json.decode(ticketRes.body);
-      if (ticketData['status'] != 200 || ticketData['result'] == null) {
-        throw Exception(ticketData['msg'] ?? 'Error fetching ticket');
+      throw lastError ?? Exception('Request failed after $maxAttempts attempts');
+    }
+
+    for (final domain in apiDomains) {
+      try {
+        debugPrint('Attempting Streamtape resolve via $domain');
+        // 1. Get download ticket client-side
+        final ticketUrl = 'https://$domain/file/dlticket?file=$fileId&login=$_streamtapeLogin&key=$_streamtapeKey';
+        final ticketRes = await getWithRetry(ticketUrl);
+        if (ticketRes.statusCode != 200) {
+          throw Exception('Failed to fetch ticket (HTTP ${ticketRes.statusCode})');
+        }
+        final ticketData = json.decode(ticketRes.body);
+        if (ticketData['status'] != 200 || ticketData['result'] == null) {
+          throw Exception(ticketData['msg'] ?? 'Error fetching ticket');
+        }
+        
+        final ticket = ticketData['result']['ticket'];
+        final waitTime = ticketData['result']['wait_time'] ?? 5;
+        debugPrint('Ticket obtained: $ticket. Waiting $waitTime seconds...');
+        
+        // Wait for the required ticket wait time
+        if (waitTime > 0) {
+          await Future.delayed(Duration(seconds: waitTime));
+        }
+        
+        // 2. Get direct download link client-side
+        final dlUrl = 'https://$domain/file/dl?file=$fileId&ticket=$ticket';
+        final dlRes = await getWithRetry(dlUrl);
+        if (dlRes.statusCode != 200) {
+          throw Exception('Failed to fetch download link (HTTP ${dlRes.statusCode})');
+        }
+        final dlData = json.decode(dlRes.body);
+        if (dlData['status'] == 200 && dlData['result'] != null && dlData['result']['url'] != null) {
+          final streamUrl = dlData['result']['url'] as String;
+          debugPrint('Streamtape resolved successfully via $domain -> $streamUrl');
+          return streamUrl;
+        } else {
+          throw Exception(dlData['msg'] ?? 'Failed to resolve download link');
+        }
+      } catch (e) {
+        debugPrint('Streamtape resolution error via $domain: $e');
       }
-      
-      final ticket = ticketData['result']['ticket'];
-      final waitTime = ticketData['result']['wait_time'] ?? 5;
-      
-      // Wait for the required ticket wait time
-      if (waitTime > 0) {
-        await Future.delayed(Duration(seconds: waitTime));
-      }
-      
-      // 2. Get direct download link client-side
-      final dlUrl = 'https://api.streamtape.com/file/dl?file=$fileId&ticket=$ticket';
-      final dlRes = await http.get(Uri.parse(dlUrl)).timeout(const Duration(seconds: 12));
-      if (dlRes.statusCode != 200) {
-        throw Exception('Failed to fetch download link (HTTP ${dlRes.statusCode})');
-      }
-      final dlData = json.decode(dlRes.body);
-      if (dlData['status'] == 200 && dlData['result'] != null && dlData['result']['url'] != null) {
-        return dlData['result']['url'] as String;
-      } else {
-        throw Exception(dlData['msg'] ?? 'Failed to resolve download link');
-      }
-    } catch (e) {
-      debugPrint('Streamtape client-side resolution error: $e');
     }
     return null;
   }
@@ -923,7 +966,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return;
     }
 
-    if (source.contains('movie-scraper-beige.vercel.app')) {
+    final isScraper = source.contains('movie-scraper-beige.vercel.app') || 
+                      source.contains('movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app');
+    if (isScraper) {
       showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -935,18 +980,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       );
       
       try {
-        final response = await http.get(Uri.parse(source)).timeout(const Duration(seconds: 10));
+        final targetUrl = source.replaceAll('movie-scraper-beige.vercel.app', 'movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app');
+        debugPrint('Fetching scraper stream from: $targetUrl');
+        final response = await http.get(Uri.parse(targetUrl)).timeout(const Duration(seconds: 10));
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
         
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           final rawUrl = data['url'] as String?;
           if (rawUrl != null && rawUrl.isNotEmpty) {
-            final headers = EmbedResolver.getHeadersForUrl(rawUrl, fallbackHeaders: {
-              'Referer': 'https://vidlink.pro/',
-              'Origin': 'https://vidlink.pro',
-            });
-            _play(rawUrl, resumeDirectly: resumeDirectly, headers: headers);
+            // VidLink CDN tokens are IP-locked to the server that requested them.
+            // We must play through the scraper's HLS proxy which fetches segments
+            // server-side with its authorized IP and correct headers.
+            final scraperBase = targetUrl.split('/api')[0];
+            final proxyUrl = '$scraperBase/api?url=${Uri.encodeComponent(rawUrl)}';
+            debugPrint('VidLink: Playing via scraper proxy: $proxyUrl');
+            _play(proxyUrl, resumeDirectly: resumeDirectly);
           } else {
             throw Exception('Empty stream URL returned');
           }

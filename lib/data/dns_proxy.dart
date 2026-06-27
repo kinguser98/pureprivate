@@ -46,26 +46,28 @@ class CustomDnsProxy {
   }
 
   Future<String?> _getWithCleanClient(Uri uri, Map<String, String>? headers) async {
-    return await HttpOverrides.runZoned(() async {
-      final client = HttpClient();
-      try {
-        final request = await client.getUrl(uri).timeout(const Duration(seconds: 4));
-        headers?.forEach((key, value) {
-          request.headers.set(key, value);
-        });
-        final response = await request.close().timeout(const Duration(seconds: 4));
-        if (response.statusCode == 200) {
-          return await response.transform(utf8.decoder).join();
-        }
-      } catch (e) {
-        debugPrint('CustomDnsProxy internal network client error: $e');
-      } finally {
-        client.close();
+    // Save the current overrides and temporarily set HttpOverrides.global to null
+    // so we can construct a clean native HttpClient without triggering recursive stack overflows.
+    final oldOverrides = HttpOverrides.current;
+    HttpOverrides.global = null;
+    final client = HttpClient();
+    HttpOverrides.global = oldOverrides; // Restore the global overrides immediately.
+    
+    try {
+      final request = await client.getUrl(uri).timeout(const Duration(seconds: 4));
+      headers?.forEach((key, value) {
+        request.headers.set(key, value);
+      });
+      final response = await request.close().timeout(const Duration(seconds: 4));
+      if (response.statusCode == 200) {
+        return await response.transform(utf8.decoder).join();
       }
-      return null;
-    }, createHttpClient: (SecurityContext? context) {
-      return HttpClient(context: context);
-    });
+    } catch (e) {
+      debugPrint('CustomDnsProxy internal network client error: $e');
+    } finally {
+      client.close();
+    }
+    return null;
   }
 
   final Map<String, List<String>> _dnsCacheList = {};
