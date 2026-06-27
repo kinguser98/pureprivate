@@ -1,0 +1,966 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:private_cinema_mobile/data/api_service.dart';
+
+class StalkerStream {
+  final String url;
+  final Map<String, String> headers;
+
+  StalkerStream({required this.url, required this.headers});
+}
+
+class StalkerResolver {
+  static String? _cachedToken;
+  static String? _cachedCookies;
+  static DateTime? _tokenExpiry;
+  
+  static Map<String, dynamic>? _stalkerSettings;
+
+  /// Fetches Stalker Portal settings from the OTT backend api
+  static Future<Map<String, dynamic>> _getSettings() async {
+    if (_stalkerSettings != null) return _stalkerSettings!;
+
+    final uri = Uri.parse('${ApiService.apiUrl}?action=get_stalker_settings');
+    final response = await http.get(uri).timeout(const Duration(seconds: 8));
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      if (data is Map<String, dynamic> && !data.containsKey('error')) {
+        _stalkerSettings = data;
+        return data;
+      }
+      throw Exception(data['error'] ?? 'Stalker Portal settings not configured on backend.');
+    }
+    throw Exception('Failed to load Stalker credentials from backend.');
+  }
+
+  /// Reset cache to force re-authentication (called on playback failures)
+  static void clearCache() {
+    _cachedToken = null;
+    _cachedCookies = null;
+    _tokenExpiry = null;
+  }
+
+  /// Cleans the portal URL to point to portal.php
+  static String _cleanPortalUrl(String rawUrl) {
+    var url = rawUrl.trim();
+    if (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (url.contains('/c')) {
+      url = url.replaceAll(RegExp(r'\/c$'), '/server/load.php');
+      url = url.replaceAll(RegExp(r'\/c\/'), '/server/load.php');
+    }
+    if (!url.contains('portal.php') && !url.contains('load.php')) {
+      if (url.endsWith('/server')) {
+        url = '$url/load.php';
+      } else {
+        url = '$url/server/load.php';
+      }
+    }
+    return url;
+  }
+
+  static String _appendDeviceParams(String url, String deviceId) {
+    if (deviceId.isEmpty) return url;
+    final separator = url.contains('?') ? '&' : '?';
+    return '$url${separator}device_id=${Uri.encodeComponent(deviceId)}&device_id2=${Uri.encodeComponent(deviceId)}';
+  }
+
+  static String _getXUserAgent(String userAgent) {
+    var model = 'MAG250';
+    final lowerUA = userAgent.toLowerCase();
+    final match = RegExp(r'mag\d+').firstMatch(lowerUA);
+    if (match != null) {
+      model = match.group(0)!.toUpperCase();
+    }
+    return 'Model: $model; Link: Ethernet';
+  }
+
+  /// Centralized GET helper that performs exponential backoff retries on HTTP 429.
+  static Future<http.Response> _stalkerGet(
+    String url, {
+    required Map<String, String> headers,
+    int timeoutSeconds = 12,
+  }) async {
+    int attempts = 0;
+    const maxAttempts = 5;
+    final backoffs = [2000, 4000, 8000, 16000];
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        final response = await http
+            .get(Uri.parse(url), headers: headers)
+            .timeout(Duration(seconds: timeoutSeconds));
+
+        if (response.statusCode == 429) {
+          if (attempts < maxAttempts) {
+            final delay = backoffs[attempts - 1];
+            debugPrint('Stalker GET rate-limited (429) on attempt $attempts. Waiting ${delay}ms to retry url: $url');
+            await Future.delayed(Duration(milliseconds: delay));
+            continue;
+          }
+        }
+        return response;
+      } catch (e) {
+        if (attempts >= maxAttempts) {
+          rethrow;
+        }
+        final delay = backoffs[attempts - 1] ~/ 2;
+        debugPrint('Stalker GET error on attempt $attempts ($e). Waiting ${delay}ms to retry...');
+        await Future.delayed(Duration(milliseconds: delay));
+      }
+    }
+    throw Exception('Failed after $maxAttempts attempts');
+  }
+
+  /// Performs Stalker authentication and returns session cookies & token
+  static Future<String> _authenticate(Map<String, dynamic> settings) async {
+    // Return cached token if valid (less than 2 hours old)
+    if (_cachedToken != null && 
+        _cachedCookies != null && 
+        _tokenExpiry != null && 
+        _tokenExpiry!.isAfter(DateTime.now())) {
+      return _cachedToken!;
+    }
+
+    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+    final macAddress = (settings['mac_address'] ?? '').toString().trim();
+    final serialNumber = (settings['serial_number'] ?? '').toString().trim();
+    var deviceId = (settings['device_id'] ?? '').toString().trim();
+    if (deviceId.contains(' ')) {
+      deviceId = deviceId.split(' ').last.trim();
+    }
+    final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+
+    if (portalUrl.isEmpty || macAddress.isEmpty) {
+      throw Exception('Stalker Portal URL and MAC Address must not be empty.');
+    }
+
+    // 1. Handshake request
+    var handshakeUrl = '$portalUrl?type=stb&action=handshake&js=true';
+    handshakeUrl = _appendDeviceParams(handshakeUrl, deviceId);
+    
+    var cookieStr = 'mac=${Uri.encodeComponent(macAddress)}; stb_lang=en; timezone=GMT';
+    if (deviceId.isNotEmpty) {
+      cookieStr += '; device_id=$deviceId; device_id2=$deviceId';
+    }
+    
+    final handshakeHeaders = {
+      'User-Agent': userAgent,
+      'Cookie': cookieStr,
+      'X-User-Agent': _getXUserAgent(userAgent),
+    };
+
+    debugPrint('Stalker Handshake URL: $handshakeUrl');
+    var handshakeRes = await _stalkerGet(handshakeUrl, headers: handshakeHeaders, timeoutSeconds: 10);
+    
+    if (handshakeRes.statusCode != 200) {
+      throw Exception('Handshake HTTP Error: ${handshakeRes.statusCode}');
+    }
+
+    final handshakeData = json.decode(handshakeRes.body);
+    String token = '';
+    if (handshakeData is Map) {
+      final jsVal = handshakeData['js'];
+      if (jsVal is Map) {
+        token = jsVal['token']?.toString() ?? '';
+      } else if (jsVal is String) {
+        token = jsVal;
+      }
+      if (token.isEmpty) {
+        token = handshakeData['token']?.toString() ?? '';
+      }
+    } else if (handshakeData is List && handshakeData.isNotEmpty) {
+      final first = handshakeData.first;
+      if (first is Map) {
+        final jsVal = first['js'];
+        if (jsVal is Map) {
+          token = jsVal['token']?.toString() ?? '';
+        } else if (jsVal is String) {
+          token = jsVal;
+        }
+        if (token.isEmpty) {
+          token = first['token']?.toString() ?? '';
+        }
+      }
+    } else if (handshakeData is String) {
+      token = handshakeData;
+    }
+    
+    if (token.isEmpty) {
+      throw Exception('Failed to retrieve authentication token from handshake. Response: ${handshakeRes.body}');
+    }
+
+    // 2. Load Profile (Stalker standard initialization)
+    var cookiesStr = 'mac=${Uri.encodeComponent(macAddress)}; token=$token; Bearer=$token; stb_lang=en; timezone=GMT';
+    if (deviceId.isNotEmpty) {
+      cookiesStr += '; device_id=$deviceId; device_id2=$deviceId';
+    }
+    
+    var profileUrl = '$portalUrl?type=stb&action=get_profile&hd=1&ver=ImageDescription&num_err=0&mac=${Uri.encodeComponent(macAddress)}&sn=${Uri.encodeComponent(serialNumber)}';
+    profileUrl = _appendDeviceParams(profileUrl, deviceId);
+    
+    final profileHeaders = {
+      'User-Agent': userAgent,
+      'Cookie': cookiesStr,
+      'Authorization': 'Bearer $token',
+      'X-User-Agent': _getXUserAgent(userAgent),
+    };
+
+    var profileRes = await _stalkerGet(profileUrl, headers: profileHeaders, timeoutSeconds: 10);
+    
+    if (profileRes.statusCode != 200) {
+      throw Exception('Stalker profile init failed: ${profileRes.statusCode}');
+    }
+
+    final profileData = json.decode(profileRes.body);
+    if (profileData is Map && profileData['js'] is Map && profileData['js']['status'] == 1) {
+      throw Exception('Stalker profile validation failed: ${profileData['js']['msg'] ?? 'Device Conflict'}');
+    }
+
+    // Cache credentials
+    _cachedToken = token;
+    _cachedCookies = cookiesStr;
+    _tokenExpiry = DateTime.now().add(const Duration(hours: 2));
+
+    debugPrint('Stalker Auth successful. Token acquired.');
+    return token;
+  }
+
+  /// Resolves the direct channel stream link from Stalker cmd
+  static Future<StalkerStream> resolveStream(String cmd, {bool isLive = true}) async {
+    try {
+      final settings = await _getSettings();
+      final token = await _authenticate(settings);
+      
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      final macAddress = (settings['mac_address'] ?? '').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+
+      // Request stream URL via create_link
+      final typeParam = isLive ? 'itv' : 'vod';
+      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=0&disable_ad=0&download=0&play_lite=0';
+      linkUrl = _appendDeviceParams(linkUrl, deviceId);
+      
+      final headers = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookies!,
+        'Authorization': 'Bearer $token',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+
+      debugPrint('Stalker Resolving Stream: $linkUrl');
+      var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
+      
+      if (response.statusCode != 200) {
+        throw Exception('Stream resolution HTTP error: ${response.statusCode}');
+      }
+
+      final data = json.decode(response.body);
+      String streamUrl = '';
+
+      if (data is Map) {
+        final jsVal = data['js'];
+        final resultVal = data['result'];
+        if (jsVal is Map) {
+          streamUrl = jsVal['cmd']?.toString() ?? '';
+        } else if (jsVal is String) {
+          streamUrl = jsVal;
+        } else if (resultVal is Map) {
+          streamUrl = resultVal['url']?.toString() ?? '';
+        } else if (resultVal is String) {
+          streamUrl = resultVal;
+        }
+      } else if (data is List) {
+        if (data.isNotEmpty) {
+          final first = data.first;
+          if (first is Map) {
+            streamUrl = first['cmd']?.toString() ?? first['url']?.toString() ?? '';
+          } else if (first is String) {
+            streamUrl = first;
+          }
+        }
+      } else if (data is String) {
+        streamUrl = data;
+      }
+
+      if (streamUrl.isEmpty) {
+        throw Exception('Stalker portal returned empty stream url. Response: ${response.body}');
+      }
+
+      // Strip ffmpeg prefix if present
+      if (streamUrl.startsWith('ffmpeg ')) {
+        streamUrl = streamUrl.substring(7);
+      }
+
+      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+      if (deviceId.isNotEmpty) {
+        playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+      }
+
+      // Return direct stream along with validation headers for playback engine
+      return StalkerStream(
+        url: streamUrl,
+        headers: {
+          'User-Agent': userAgent,
+          'Cookie': playerCookies,
+        },
+      );
+    } catch (e) {
+      // If error occurs, reset token and retry once
+      clearCache();
+      debugPrint('Stalker resolution error ($e), retrying handshake...');
+      
+      final settings = await _getSettings();
+      final token = await _authenticate(settings);
+      
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      final macAddress = (settings['mac_address'] ?? '').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+
+      final typeParam = isLive ? 'itv' : 'vod';
+      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=0&disable_ad=0&download=0&play_lite=0';
+      linkUrl = _appendDeviceParams(linkUrl, deviceId);
+      
+      final headers = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookies!,
+        'Authorization': 'Bearer $token',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+
+      var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
+      
+      if (response.statusCode != 200) {
+        throw Exception('Retry Stream resolution failed: ${response.statusCode}');
+      }
+
+      final data = json.decode(response.body);
+      String streamUrl = '';
+
+      if (data is Map) {
+        final jsVal = data['js'];
+        final resultVal = data['result'];
+        if (jsVal is Map) {
+          streamUrl = jsVal['cmd']?.toString() ?? '';
+        } else if (jsVal is String) {
+          streamUrl = jsVal;
+        } else if (resultVal is Map) {
+          streamUrl = resultVal['url']?.toString() ?? '';
+        } else if (resultVal is String) {
+          streamUrl = resultVal;
+        }
+      } else if (data is List) {
+        if (data.isNotEmpty) {
+          final first = data.first;
+          if (first is Map) {
+            streamUrl = first['cmd']?.toString() ?? first['url']?.toString() ?? '';
+          } else if (first is String) {
+            streamUrl = first;
+          }
+        }
+      } else if (data is String) {
+        streamUrl = data;
+      }
+
+      if (streamUrl.isEmpty) {
+        throw Exception('Stalker portal returned empty stream url on retry. Response: ${response.body}');
+      }
+
+      if (streamUrl.startsWith('ffmpeg ')) {
+        streamUrl = streamUrl.substring(7);
+      }
+
+      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+      if (deviceId.isNotEmpty) {
+        playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+      }
+
+      return StalkerStream(
+        url: streamUrl,
+        headers: {
+          'User-Agent': userAgent,
+          'Cookie': playerCookies,
+        },
+      );
+    }
+  }
+
+  /// Resolves logo request headers including user agent and portal MAC cookie.
+  static Future<Map<String, String>> getLogoHeaders() async {
+    try {
+      final settings = await _getSettings();
+      final macAddress = (settings['mac_address'] ?? '').toString().trim();
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+      if (deviceId.isNotEmpty) {
+        playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+      }
+      return {
+        'User-Agent': userAgent,
+        'Cookie': playerCookies,
+      };
+    } catch (e) {
+      debugPrint('Error getting logo headers: $e');
+      return {};
+    }
+  }
+
+  /// Resolves relative Stalker Portal logo paths to absolute URLs
+  static String resolveStalkerLogo(String logo, String portalUrl) {
+    logo = logo.trim();
+    if (logo.isEmpty) return '';
+    if (logo.startsWith('http://') || logo.startsWith('https://')) {
+      return logo;
+    }
+    
+    try {
+      final uri = Uri.parse(portalUrl);
+      final hostBase = '${uri.scheme}://${uri.host}${uri.hasPort ? ":${uri.port}" : ""}';
+      
+      var portalBase = portalUrl.trim();
+      if (portalBase.endsWith('/')) {
+        portalBase = portalBase.substring(0, portalBase.length - 1);
+      }
+      portalBase = portalBase.replaceAll(RegExp(r'\/server\/load\.php$'), '');
+      portalBase = portalBase.replaceAll(RegExp(r'\/c$'), '');
+      portalBase = portalBase.replaceAll(RegExp(r'\/portal\.php$'), '');
+      if (portalBase.endsWith('/')) {
+        portalBase = portalBase.substring(0, portalBase.length - 1);
+      }
+
+      String resolved = logo;
+      if (logo.startsWith('/')) {
+        resolved = '$hostBase$logo';
+      } else if (logo.contains('/')) {
+        resolved = '$portalBase/$logo';
+      } else {
+        // Just a filename (e.g. 1.png), map to standard misc/logos/240/ folder
+        resolved = '$portalBase/misc/logos/240/$logo';
+      }
+
+      // Ensure resolution folder is present in the path if it is under misc/logos
+      if (resolved.contains('/misc/logos/') && !resolved.contains('/misc/logos/240/') && !resolved.contains('/misc/logos/320/')) {
+        resolved = resolved.replaceAll('/misc/logos/', '/misc/logos/240/');
+      }
+
+      return resolved;
+    } catch (e) {
+      return logo;
+    }
+  }
+
+  /// Syncs all channels from the Stalker Portal directly to the OTT backend server database.
+  /// Bypasses server-side Cloudflare blocks because this runs from a clean client-side IP.
+  static Future<Map<String, dynamic>> syncChannelsToServer() async {
+    try {
+      final settings = await _getSettings();
+      final token = await _authenticate(settings);
+      
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+
+      // 1. Fetch categories (genres)
+      var genresUrl = '$portalUrl?type=itv&action=get_genres';
+      genresUrl = _appendDeviceParams(genresUrl, deviceId);
+
+      final headers = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookies!,
+        'Authorization': 'Bearer $token',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+
+      final genresResponse = await _stalkerGet(genresUrl, headers: headers, timeoutSeconds: 12);
+      final Map<String, String> genresMap = {};
+      
+      if (genresResponse.statusCode == 200) {
+        final genresData = json.decode(genresResponse.body);
+        dynamic genresList = [];
+        if (genresData is Map) {
+          genresList = genresData['js'] ?? genresData['result'] ?? [];
+          if (genresList is! List && genresData['js'] is Map) {
+            genresList = genresData['js']['data'] ?? [];
+          }
+        } else if (genresData is List) {
+          genresList = genresData;
+        }
+        if (genresList is List) {
+          for (final g in genresList) {
+            if (g is Map) {
+              final id = g['id']?.toString() ?? '';
+              final title = g['title']?.toString() ?? '';
+              if (id.isNotEmpty && title.isNotEmpty) {
+                genresMap[id] = title;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Fetch all channels
+      var channelsUrl = '$portalUrl?type=itv&action=get_all_channels';
+      channelsUrl = _appendDeviceParams(channelsUrl, deviceId);
+
+      final channelsResponse = await _stalkerGet(channelsUrl, headers: headers, timeoutSeconds: 20);
+      
+      if (channelsResponse.statusCode != 200) {
+        throw Exception('Failed to fetch channels from portal. HTTP: ${channelsResponse.statusCode}');
+      }
+
+      final channelsData = json.decode(channelsResponse.body);
+      dynamic rawChannelsList = [];
+      if (channelsData is Map) {
+        rawChannelsList = channelsData['result'] ?? [];
+        if (rawChannelsList is! List && channelsData['result'] is Map) {
+          rawChannelsList = channelsData['result']['data'] ?? [];
+        }
+        if (rawChannelsList is! List || rawChannelsList.isEmpty) {
+          if (channelsData['js'] is Map) {
+            rawChannelsList = channelsData['js']['data'] ?? [];
+          } else if (channelsData['js'] is List) {
+            rawChannelsList = channelsData['js'];
+          }
+        }
+      } else if (channelsData is List) {
+        rawChannelsList = channelsData;
+      }
+
+      if (rawChannelsList is! List || rawChannelsList.isEmpty) {
+        throw Exception('Stalker Portal returned no channels or invalid response format. Response: ${channelsResponse.body}');
+      }
+
+      // 3. Format channels payload
+      final List<Map<String, dynamic>> payload = [];
+      for (final ch in rawChannelsList) {
+        final id = ch['id']?.toString() ?? ch['number']?.toString() ?? '';
+        final name = ch['name']?.toString() ?? '';
+        final logo = ch['logo']?.toString() ?? '';
+        final cmd = ch['cmd']?.toString() ?? '';
+        
+        final catId = ch['tv_genre_id']?.toString() ?? '';
+        var category = ch['genres_str']?.toString() ?? '';
+        if (category.isEmpty && catId.isNotEmpty && genresMap.containsKey(catId)) {
+          category = genresMap[catId]!;
+        }
+        if (category.isEmpty) {
+          category = 'General';
+        }
+
+        final logoUrl = resolveStalkerLogo(logo, portalUrl);
+
+        if (id.isNotEmpty && name.isNotEmpty && cmd.isNotEmpty) {
+          payload.add({
+            'id': id,
+            'name': name,
+            'logo_url': logoUrl,
+            'cmd': cmd,
+            'category_name': category,
+          });
+        }
+      }
+
+      // 4. Send to OTT backend
+      final uploadUrl = '${ApiService.apiUrl}?action=import_channels_client';
+      final uploadResponse = await http.post(
+        Uri.parse(uploadUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(payload),
+      ).timeout(const Duration(seconds: 15));
+
+      if (uploadResponse.statusCode == 200) {
+        final uploadResult = json.decode(uploadResponse.body);
+        if (uploadResult['success'] == true) {
+          return {
+            'success': true,
+            'imported': uploadResult['imported'] ?? payload.length,
+          };
+        }
+        throw Exception(uploadResult['error'] ?? 'Server failed to save channels.');
+      }
+      throw Exception('Server returned HTTP Error: ${uploadResponse.statusCode}');
+    } catch (e) {
+      debugPrint('Stalker client-side sync failed: $e');
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+
+  /// Fetches VOD categories from Stalker Portal.
+  static Future<List<Map<String, String>> > getVodCategories() async {
+    final settings = await _getSettings();
+    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+    final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+    var deviceId = (settings['device_id'] ?? '').toString().trim();
+    if (deviceId.contains(' ')) {
+      deviceId = deviceId.split(' ').last.trim();
+    }
+
+    Future<http.Response> getWithRetry(String url) async {
+      final currentToken = _cachedToken ?? await _authenticate(settings);
+      final currentHeaders = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookies!,
+        'Authorization': 'Bearer $currentToken',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+      
+      var response = await _stalkerGet(url, headers: currentHeaders, timeoutSeconds: 15);
+
+      if (response.statusCode == 200) {
+        final body = response.body;
+        if (!body.contains('Authorization failed') && !body.contains('Authorisation failed')) {
+          return response;
+        }
+      }
+      
+      debugPrint('Stalker request failed or unauthorized, retrying handshake...');
+      clearCache();
+      
+      final newToken = await _authenticate(settings);
+      final newHeaders = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookies!,
+        'Authorization': 'Bearer $newToken',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+      
+      var responseRetry = await _stalkerGet(url, headers: newHeaders, timeoutSeconds: 15);
+
+      if (responseRetry.statusCode != 200 || responseRetry.body.contains('Authorization failed') || responseRetry.body.contains('Authorisation failed')) {
+        throw Exception('Stalker request failed: HTTP ${responseRetry.statusCode}');
+      }
+      
+      return responseRetry;
+    }
+
+    var categoriesUrl = '$portalUrl?type=vod&action=get_categories';
+    categoriesUrl = _appendDeviceParams(categoriesUrl, deviceId);
+    final categoriesResponse = await getWithRetry(categoriesUrl);
+    
+    final List<Map<String, String>> categoriesList = [];
+    if (categoriesResponse.statusCode == 200) {
+      final categoriesData = json.decode(categoriesResponse.body);
+      dynamic rawList = [];
+      if (categoriesData is Map) {
+        rawList = categoriesData['js'] ?? categoriesData['result'] ?? [];
+        if (rawList is! List && categoriesData['js'] is Map) {
+          rawList = categoriesData['js']['data'] ?? [];
+        }
+      } else if (categoriesData is List) {
+        rawList = categoriesData;
+      }
+      if (rawList is List) {
+        for (final c in rawList) {
+          if (c is Map) {
+            final id = c['id']?.toString() ?? '';
+            final title = c['title']?.toString() ?? c['name']?.toString() ?? '';
+            if (id.isNotEmpty) {
+              categoriesList.add({'id': id, 'title': title});
+            }
+          }
+        }
+      }
+    }
+    return categoriesList;
+  }
+
+  /// Syncs all or selected VOD movies from the Stalker Portal directly to the OTT backend server database.
+  /// Bypasses server-side Cloudflare/datacenter IP blocks because this runs from a clean client-side IP.
+  static Future<Map<String, dynamic>> syncVodsToServer({
+    List<String>? selectedCategoryIds,
+    void Function(String categoryName, int importedThisCategory, int totalAccumulated)? onProgress,
+  }) async {
+    try {
+      final settings = await _getSettings();
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+
+      // Auto-retry helper for requests that handle authorization loss or rate limit (429)
+      Future<http.Response> getWithRetry(String url) async {
+        final currentToken = _cachedToken ?? await _authenticate(settings);
+        final currentHeaders = {
+          'User-Agent': userAgent,
+          'Cookie': _cachedCookies!,
+          'Authorization': 'Bearer $currentToken',
+          'X-User-Agent': _getXUserAgent(userAgent),
+        };
+        
+        var response = await _stalkerGet(url, headers: currentHeaders, timeoutSeconds: 15);
+
+        if (response.statusCode == 200) {
+          final body = response.body;
+          if (!body.contains('Authorization failed') && !body.contains('Authorisation failed')) {
+            return response;
+          }
+        }
+        
+        // Clear cache and try once more
+        debugPrint('Stalker request failed or unauthorized, retrying handshake...');
+        clearCache();
+        
+        final newToken = await _authenticate(settings);
+        final newHeaders = {
+          'User-Agent': userAgent,
+          'Cookie': _cachedCookies!,
+          'Authorization': 'Bearer $newToken',
+          'X-User-Agent': _getXUserAgent(userAgent),
+        };
+        
+        var responseRetry = await _stalkerGet(url, headers: newHeaders, timeoutSeconds: 15);
+
+        if (responseRetry.statusCode != 200 || responseRetry.body.contains('Authorization failed') || responseRetry.body.contains('Authorisation failed')) {
+          throw Exception('Stalker request failed: HTTP ${responseRetry.statusCode}');
+        }
+        
+        return responseRetry;
+      }
+
+      // 1. Fetch VOD categories
+      var categoriesUrl = '$portalUrl?type=vod&action=get_categories';
+      categoriesUrl = _appendDeviceParams(categoriesUrl, deviceId);
+      final categoriesResponse = await getWithRetry(categoriesUrl);
+      
+      final List<Map<String, String>> categoriesList = [];
+      if (categoriesResponse.statusCode == 200) {
+        final categoriesData = json.decode(categoriesResponse.body);
+        dynamic rawList = [];
+        if (categoriesData is Map) {
+          rawList = categoriesData['js'] ?? categoriesData['result'] ?? [];
+          if (rawList is! List && categoriesData['js'] is Map) {
+            rawList = categoriesData['js']['data'] ?? [];
+          }
+        } else if (categoriesData is List) {
+          rawList = categoriesData;
+        }
+        if (rawList is List) {
+          for (final c in rawList) {
+            if (c is Map) {
+              final id = c['id']?.toString() ?? '';
+              final title = c['title']?.toString() ?? c['name']?.toString() ?? '';
+              if (id.isNotEmpty) {
+                categoriesList.add({'id': id, 'title': title});
+              }
+            }
+          }
+        }
+      }
+
+      if (categoriesList.isEmpty) {
+        throw Exception('No VOD categories found on Stalker Portal.');
+      }
+
+      final Set<String> seenIds = {};
+      int totalImported = 0;
+
+      // Filter target categories based on selection or defaults
+      final List<Map<String, String>> targetCategories;
+      if (selectedCategoryIds != null) {
+        targetCategories = categoriesList.where((cat) => selectedCategoryIds.contains(cat['id'])).toList();
+      } else {
+        // Filter out 'All' categories if there are other specific categories available
+        final specificCategories = categoriesList.where((cat) {
+          final id = cat['id']!;
+          final title = cat['title']!;
+          final lowerId = id.toLowerCase().trim();
+          final lowerTitle = title.toLowerCase().trim();
+          return lowerId != '*' &&
+                 lowerId != '0' &&
+                 lowerId != 'all' &&
+                 lowerTitle != 'all' &&
+                 lowerTitle != 'all movies' &&
+                 lowerTitle != 'all vods' &&
+                 lowerTitle != 'all vod' &&
+                 !lowerTitle.contains('all channels');
+        }).toList();
+        targetCategories = specificCategories.isNotEmpty ? specificCategories : categoriesList;
+      }
+
+      // 2. Fetch movies per category
+      for (final cat in targetCategories) {
+        final catId = cat['id']!;
+        final catTitle = cat['title']!;
+        final List<Map<String, dynamic>> categoryPayload = [];
+        
+        // Notify start of category
+        onProgress?.call(catTitle, 0, totalImported);
+        
+        try {
+          // Pacing delay between categories to prevent HTTP 429
+          await Future.delayed(const Duration(milliseconds: 600));
+          
+          final Set<String> seenIdsThisCategory = {};
+          int currentPage = 1;
+          bool hasMore = true;
+          
+          while (hasMore && currentPage <= 3000) { // Limit to 3000 pages to prevent infinite loops
+            var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=$currentPage';
+            moviesUrl = _appendDeviceParams(moviesUrl, deviceId);
+            
+            final moviesResponse = await getWithRetry(moviesUrl);
+            final responseBody = moviesResponse.body;
+            final moviesData = json.decode(responseBody);
+            dynamic rawMoviesList = [];
+            
+            if (moviesData is Map) {
+              rawMoviesList = moviesData['result'] ?? [];
+              if (rawMoviesList is! List && moviesData['result'] is Map) {
+                rawMoviesList = moviesData['result']['data'] ?? [];
+              }
+              if (rawMoviesList is! List || rawMoviesList.isEmpty) {
+                if (moviesData['js'] is Map) {
+                  rawMoviesList = moviesData['js']['data'] ?? [];
+                } else if (moviesData['js'] is List) {
+                  rawMoviesList = moviesData['js'];
+                }
+              }
+            } else if (moviesData is List) {
+              rawMoviesList = moviesData;
+            }
+            
+            if (rawMoviesList is! List || rawMoviesList.isEmpty) {
+              hasMore = false;
+              break;
+            }
+            
+            int newItemsThisCategoryCount = 0;
+            for (final m in rawMoviesList) {
+              final id = m['id']?.toString() ?? '';
+              final name = m['name']?.toString() ?? m['title']?.toString() ?? m['o_name']?.toString() ?? '';
+              final logo = m['logo']?.toString() ?? 
+                           m['logo_url']?.toString() ?? 
+                           m['pic']?.toString() ?? 
+                           m['screenshot_uri']?.toString() ?? '';
+              final cmd = m['cmd']?.toString() ?? m['path']?.toString() ?? '';
+              
+              final logoUrl = resolveStalkerLogo(logo, portalUrl);
+              
+              if (id.isNotEmpty && name.isNotEmpty && cmd.isNotEmpty) {
+                if (!seenIdsThisCategory.contains(id)) {
+                  seenIdsThisCategory.add(id);
+                  newItemsThisCategoryCount++;
+                }
+                if (!seenIds.contains(id)) {
+                  seenIds.add(id);
+                  categoryPayload.add({
+                    'id': id,
+                    'name': name,
+                    'logo_url': logoUrl,
+                    'cmd': cmd,
+                    'category_name': catTitle,
+                  });
+                }
+              }
+            }
+            
+            // If we didn't find any new items for this CATEGORY on this page, it means we are looping
+            // or we reached the end of the category VODs.
+            if (newItemsThisCategoryCount == 0) {
+              hasMore = false;
+              break;
+            }
+            
+            // Check if we retrieved all items or reached end of pagination
+            if (moviesData is Map) {
+              final jsVal = moviesData['js'];
+              final resultVal = moviesData['result'];
+              dynamic totalItems;
+              if (jsVal is Map) {
+                totalItems = jsVal['total_items'];
+              }
+              if (totalItems == null && resultVal is Map) {
+                totalItems = resultVal['total_items'];
+              }
+              if (totalItems != null) {
+                final totalCount = int.tryParse(totalItems.toString()) ?? 0;
+                final totalPages = (totalCount / 14).ceil();
+                if (currentPage >= totalPages) {
+                  hasMore = false;
+                }
+              }
+            }
+            
+            if (rawMoviesList.length < 14) {
+              hasMore = false;
+            }
+            
+            if (hasMore) {
+              currentPage++;
+              // Pause slightly between requests
+              await Future.delayed(const Duration(milliseconds: 600));
+            }
+          }
+
+          // Upload this category's movies immediately to backend to ensure incremental sync progress
+          if (categoryPayload.isNotEmpty) {
+            final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client';
+            final uploadResponse = await http.post(
+              Uri.parse(uploadUrl),
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode(categoryPayload),
+            ).timeout(const Duration(seconds: 25));
+
+            if (uploadResponse.statusCode == 200) {
+              final uploadResult = json.decode(uploadResponse.body);
+              if (uploadResult is Map && uploadResult['success'] == true) {
+                final importedThisCat = (uploadResult['imported'] as num?)?.toInt() ?? categoryPayload.length;
+                totalImported += importedThisCat;
+                debugPrint('Successfully synced category $catTitle: ${categoryPayload.length} movies');
+                onProgress?.call(catTitle, importedThisCat, totalImported);
+              } else {
+                onProgress?.call(catTitle, 0, totalImported);
+              }
+            } else {
+              onProgress?.call(catTitle, 0, totalImported);
+            }
+          } else {
+            // Category has no new movies
+            onProgress?.call(catTitle, 0, totalImported);
+          }
+        } catch (e) {
+          debugPrint('Error syncing category $catTitle (ID: $catId): $e. Skipping.');
+        }
+      }
+
+      if (totalImported == 0) {
+        debugPrint('Stalker sync finished: 0 new movies imported (library is up-to-date).');
+      }
+
+      return {
+        'success': true,
+        'imported': totalImported,
+      };
+    } catch (e) {
+      debugPrint('Stalker client-side VOD sync failed: $e');
+      return {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+}

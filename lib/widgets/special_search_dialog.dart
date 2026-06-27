@@ -1,0 +1,887 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+
+class SpecialSearchDialog extends StatefulWidget {
+  const SpecialSearchDialog({super.key});
+
+  @override
+  State<SpecialSearchDialog> createState() => _SpecialSearchDialogState();
+}
+
+class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _debounceTimer;
+  bool _searching = false;
+  List<dynamic> _searchResults = [];
+  
+  // Detail selection state
+  dynamic _selectedMovie;
+  bool _loadingDetails = false;
+  String? _imdbId;
+  
+  // Stream resolution states
+  bool _resolvingStreams = false;
+  List<StreamSourceInfo> _resolvedSources = [];
+  StreamSourceType? _activeGroupType; // server grouping selection
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    _debounceTimer?.cancel();
+    if (query.trim().isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _searching = false;
+      });
+      return;
+    }
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _performLiveSearch(query.trim());
+    });
+  }
+
+  Future<void> _performLiveSearch(String query) async {
+    setState(() {
+      _searching = true;
+      _selectedMovie = null;
+      _activeGroupType = null;
+    });
+
+    try {
+      const apiKey = '3a73619bbb8fc6d47742d1b5b2b707b5';
+      final targetUrl = 'https://api.themoviedb.org/3/search/movie?api_key=$apiKey&query=${Uri.encodeComponent(query)}';
+      final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
+      
+      debugPrint('TMDB Search via Proxy: $proxyUrl');
+      final response = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final results = data['results'] as List<dynamic>? ?? [];
+        if (mounted) {
+          setState(() {
+            _searchResults = results;
+            _searching = false;
+          });
+        }
+      } else {
+        throw Exception('TMDB error: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Live Search failed: $e');
+      if (mounted) {
+        setState(() {
+          _searching = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Search failed: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  Future<void> _onMovieSelected(dynamic movieData) async {
+    setState(() {
+      _selectedMovie = movieData;
+      _loadingDetails = true;
+      _imdbId = null;
+      _resolvedSources = [];
+      _resolvingStreams = false;
+      _activeGroupType = null;
+    });
+
+    final tmdbId = movieData['id']?.toString();
+    if (tmdbId == null) {
+      setState(() => _loadingDetails = false);
+      return;
+    }
+
+    try {
+      const apiKey = '3a73619bbb8fc6d47742d1b5b2b707b5';
+      final targetUrl = 'https://api.themoviedb.org/3/movie/$tmdbId?api_key=$apiKey';
+      final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
+      
+      debugPrint('TMDB Details via Proxy: $proxyUrl');
+      final detailsResponse = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 10));
+
+      if (detailsResponse.statusCode == 200) {
+        final details = json.decode(detailsResponse.body);
+        final rawImdb = details['imdb_id']?.toString() ?? '';
+        
+        if (mounted) {
+          setState(() {
+            _imdbId = rawImdb.isNotEmpty && rawImdb != 'null' ? rawImdb : null;
+            _loadingDetails = false;
+          });
+          // Resolve streams now
+          _resolveMovieStreams(tmdbId, _imdbId, movieData['title']?.toString() ?? 'Movie');
+        }
+      } else {
+        throw Exception('Failed to fetch details');
+      }
+    } catch (e) {
+      debugPrint('Failed fetching movie external IDs: $e');
+      if (mounted) {
+        setState(() => _loadingDetails = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed loading movie details.'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  Future<void> _resolveMovieStreams(String tmdbId, String? imdbId, String title) async {
+    setState(() {
+      _resolvingStreams = true;
+      _resolvedSources = [];
+    });
+
+    final List<Future<void>> tasks = [];
+
+    // 1. Resolve VidLink (requires TMDB or IMDB ID)
+    final activeId = (imdbId != null && imdbId.isNotEmpty) ? imdbId : tmdbId;
+    tasks.add(_resolveVidLink(activeId));
+
+    if (imdbId != null && imdbId.isNotEmpty) {
+      // 2. Resolve Stravo (requires IMDB ID)
+      tasks.add(_resolveStravo(imdbId));
+
+      // 3. Resolve Torrentio (requires IMDB ID)
+      tasks.add(_resolveTorrentio(imdbId, title));
+    }
+
+    await Future.wait(tasks);
+
+    if (mounted) {
+      setState(() {
+        _resolvingStreams = false;
+      });
+    }
+  }
+
+  Future<void> _resolveVidLink(String activeId) async {
+    try {
+      final url = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?id=$activeId';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final rawUrl = data['url'] as String?;
+        if (rawUrl != null && rawUrl.isNotEmpty) {
+          // Wrap in proxy URL to bypass CDN IP-locking
+          final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(rawUrl)}';
+          if (mounted) {
+            setState(() {
+              _resolvedSources.add(StreamSourceInfo(
+                name: 'VidLink (Native Proxy)',
+                url: proxyUrl,
+                type: StreamSourceType.vidlink,
+              ));
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('VidLink stream resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveStravo(String imdbId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final addonBaseUrl = prefs.getString('stravo_addon_url') ?? 'https://stravo-clfk.onrender.com/default';
+      var baseUrl = addonBaseUrl.trim();
+      if (baseUrl.endsWith('/')) {
+        baseUrl = baseUrl.substring(0, baseUrl.length - 1);
+      }
+      final url = '$baseUrl/stream/movie/$imdbId.json';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final streamsList = data['streams'] as List<dynamic>? ?? [];
+        final List<StreamSourceInfo> sources = [];
+
+        for (final stream in streamsList) {
+          final urlStr = stream['url']?.toString() ?? '';
+          if (urlStr.isNotEmpty) {
+            final name = stream['name']?.toString() ?? '';
+            final title = stream['title']?.toString() ?? '';
+            final displayTitle = title.isNotEmpty 
+                ? (name.isNotEmpty ? '$title ($name)' : title)
+                : (name.isNotEmpty ? name : 'Stravo Stream');
+            
+            final cleanName = displayTitle.replaceAll('\n', ' ').trim();
+            sources.add(StreamSourceInfo(
+              name: 'Stravo: $cleanName',
+              url: urlStr,
+              type: StreamSourceType.stravo,
+            ));
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _resolvedSources.addAll(sources);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stravo streams resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveTorrentio(String imdbId, String title) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final addonBaseUrl = prefs.getString('torrentio_addon_url') ?? 'https://torrentio.strem.fun';
+      var baseUrl = addonBaseUrl.trim();
+      if (baseUrl.endsWith('/')) {
+        baseUrl = baseUrl.substring(0, baseUrl.length - 1);
+      }
+      final url = '$baseUrl/providers=yts,eztv,rarbg,1337x,torrent9,kickasstorrents|limit=5/stream/movie/$imdbId.json';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final streamsList = data['streams'] as List<dynamic>? ?? [];
+        final List<StreamSourceInfo> sources = [];
+
+        for (final stream in streamsList) {
+          final infoHash = stream['infoHash']?.toString() ?? '';
+          final streamTitle = stream['title']?.toString() ?? 'Torrent';
+          if (infoHash.isNotEmpty) {
+            final trackers = [
+              'udp://tracker.coppersurfer.tk:6969/announce',
+              'udp://tracker.openbittorrent.com:6969/announce',
+              'udp://tracker.opentrackr.org:1337/announce',
+              'udp://tracker.leechers-paradise.org:6969/announce',
+              'udp://open.stealth.si:80/announce',
+            ];
+            final trackersQuery = trackers.map((t) => 'tr=${Uri.encodeComponent(t)}').join('&');
+            final magnetLink = 'magnet:?xt=urn:btih:$infoHash&dn=${Uri.encodeComponent(title)}&$trackersQuery';
+
+            final titleLines = streamTitle.split('\n');
+            final mainTitle = titleLines.isNotEmpty ? titleLines[0] : 'Torrent';
+            final peerInfo = titleLines.length > 1 ? titleLines[1] : '';
+            final sizeInfo = titleLines.length > 2 ? titleLines[2] : '';
+
+            var sourceName = mainTitle;
+            if (peerInfo.isNotEmpty || sizeInfo.isNotEmpty) {
+              sourceName += ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
+            }
+            sourceName = sourceName
+                .replaceAll('👥', ' Peers:')
+                .replaceAll('👤', ' Seeders:')
+                .replaceAll('\n', ' ')
+                .trim();
+
+            sources.add(StreamSourceInfo(
+              name: 'Torrent: $sourceName',
+              url: magnetLink,
+              type: StreamSourceType.torrent,
+            ));
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _resolvedSources.addAll(sources);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Torrentio streams resolution failed: $e');
+    }
+  }
+
+  void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) {
+    if (source.url.startsWith('magnet:')) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => WebViewPlayerScreen(
+            embedUrl: source.url,
+            title: movieTitle,
+            backdropUrl: posterPath != null ? 'https://image.tmdb.org/t/p/w780$posterPath' : null,
+          ),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: 'Direct Online Source',
+            movieId: 'special_search_${_selectedMovie['id']}',
+            resumeDirectly: false,
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxWidth: 480, maxHeight: 580),
+                decoration: BoxDecoration(
+                  color: AppColors.surface.withValues(alpha: 0.82),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.accentBright.withValues(alpha: 0.25),
+                      blurRadius: 40,
+                      spreadRadius: -10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: Column(
+                    children: [
+                      // Header bar
+                      _buildHeader(),
+                      // Body content
+                      Expanded(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 300),
+                          child: _selectedMovie != null 
+                              ? _buildMovieDetailsView() 
+                              : _buildSearchView(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_awesome, color: AppColors.accentBright, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'LIVE CINEMA FINDER',
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          IconButton(
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 22),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            style: IconButton.styleFrom(
+              hoverColor: Colors.white10,
+              highlightColor: Colors.white10,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchView() {
+    return Column(
+      key: const ValueKey('search_view'),
+      children: [
+        // Search Input
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+              cursorColor: AppColors.accentBright,
+              decoration: InputDecoration(
+                hintText: 'Search movies live online...',
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 14),
+                prefixIcon: Icon(Icons.search_rounded, color: Colors.white.withValues(alpha: 0.5)),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, color: Colors.white54),
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              ),
+            ),
+          ),
+        ),
+
+        // Results / Loading state
+        Expanded(
+          child: _searching
+              ? Center(child: CircularProgressIndicator(color: AppColors.accentBright))
+              : _searchResults.isEmpty
+                  ? _buildEmptyState()
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      itemCount: _searchResults.length,
+                      itemBuilder: (context, index) {
+                        final item = _searchResults[index];
+                        final title = item['title']?.toString() ?? 'Unknown Title';
+                        final rawYear = item['release_date']?.toString().split('-').first ?? '';
+                        final year = rawYear.isNotEmpty ? rawYear : 'N/A';
+                        final lang = item['original_language']?.toString().toUpperCase() ?? 'EN';
+                        final posterPath = item['poster_path']?.toString();
+                        
+                        return Card(
+                          color: Colors.white.withValues(alpha: 0.03),
+                          margin: const EdgeInsets.only(bottom: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () => _onMovieSelected(item),
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: Row(
+                                children: [
+                                  // Poster image
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: posterPath != null
+                                        ? Image.network(
+                                            'https://image.tmdb.org/t/p/w92$posterPath',
+                                            width: 48,
+                                            height: 70,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => _buildFallbackPoster(),
+                                          )
+                                        : _buildFallbackPoster(),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  // Details
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          title,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.outfit(
+                                            color: Colors.white,
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white12,
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                year,
+                                                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: AppColors.accentBright.withValues(alpha: 0.15),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                lang,
+                                                style: TextStyle(color: AppColors.accentBright, fontSize: 11, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Icon(Icons.chevron_right_rounded, color: Colors.white38),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFallbackPoster() {
+    return Container(
+      width: 48,
+      height: 70,
+      color: Colors.white12,
+      child: const Icon(Icons.movie_filter_rounded, color: Colors.white30, size: 20),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.travel_explore_rounded, size: 48, color: Colors.white.withValues(alpha: 0.2)),
+          const SizedBox(height: 12),
+          Text(
+            _searchController.text.isNotEmpty ? 'No movie found.' : 'Search beyond your library',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMovieDetailsView() {
+    final title = _selectedMovie['title']?.toString() ?? 'Movie Title';
+    final posterPath = _selectedMovie['poster_path']?.toString();
+    final rawYear = _selectedMovie['release_date']?.toString().split('-').first ?? '';
+    final year = rawYear.isNotEmpty ? rawYear : 'N/A';
+    final lang = _selectedMovie['original_language']?.toString().toUpperCase() ?? 'EN';
+
+    return Padding(
+      key: const ValueKey('details_view'),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Movie summary block
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: posterPath != null
+                    ? Image.network(
+                        'https://image.tmdb.org/t/p/w185$posterPath',
+                        width: 80,
+                        height: 120,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 80,
+                          height: 120,
+                          color: Colors.white12,
+                          child: const Icon(Icons.movie_rounded, color: Colors.white30, size: 32),
+                        ),
+                      )
+                    : Container(
+                        width: 80,
+                        height: 120,
+                        color: Colors.white12,
+                        child: const Icon(Icons.movie_rounded, color: Colors.white30, size: 32),
+                      ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white12,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            year,
+                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentBright.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            lang,
+                            style: TextStyle(color: AppColors.accentBright, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          
+          Text(
+            _activeGroupType == null ? 'SELECT STREAM SERVER' : '${_activeGroupType!.name.toUpperCase()} SERVER LINKS',
+            style: GoogleFonts.outfit(
+              color: Colors.white.withValues(alpha: 0.5),
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Streams List / Loader
+          Expanded(
+            child: _loadingDetails || (_resolvingStreams && _resolvedSources.isEmpty)
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(color: AppColors.accentBright),
+                        const SizedBox(height: 14),
+                        Text(
+                          _loadingDetails ? 'Retrieving metadata...' : 'Resolving sources from Stremio & VidLink...',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  )
+                : _buildStreamSelectionContent(title, posterPath),
+          ),
+          
+          const SizedBox(height: 10),
+          // Back Button
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                setState(() {
+                  if (_activeGroupType != null) {
+                    _activeGroupType = null;
+                  } else {
+                    _selectedMovie = null;
+                  }
+                });
+              },
+              icon: const Icon(Icons.arrow_back_rounded, size: 16),
+              label: Text(_activeGroupType != null ? 'BACK TO SERVERS' : 'BACK TO SEARCH'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStreamSelectionContent(String movieTitle, String? posterPath) {
+    final stravoStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stravo).toList();
+    final vidlinkStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidlink).toList();
+    final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
+
+    if (_activeGroupType == null) {
+      // 1. Server groups main list
+      return ListView(
+        children: [
+          // Stravo Server Group
+          _buildServerGroupCard(
+            title: '1. Stravo Server',
+            subtitle: _resolvingStreams && stravoStreams.isEmpty 
+                ? 'Searching streams...' 
+                : '${stravoStreams.length} links available',
+            icon: Icons.rocket_launch_rounded,
+            accentColor: Colors.cyan,
+            onTap: stravoStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.stravo),
+          ),
+          
+          // VidLink Server Group
+          _buildServerGroupCard(
+            title: '2. Vidlink Server',
+            subtitle: _resolvingStreams && vidlinkStreams.isEmpty 
+                ? 'Resolving stream...' 
+                : (vidlinkStreams.isNotEmpty ? '1 native link available' : 'Not available for this title'),
+            icon: Icons.play_arrow_rounded,
+            accentColor: AppColors.accentBright,
+            onTap: vidlinkStreams.isEmpty 
+                ? null 
+                : () => _playStream(vidlinkStreams.first, movieTitle, posterPath),
+          ),
+
+          // Torrent Server Group
+          _buildServerGroupCard(
+            title: '3. Torrent Server',
+            subtitle: _resolvingStreams && torrentStreams.isEmpty 
+                ? 'Scraping torrents...' 
+                : '${torrentStreams.length} links available',
+            icon: Icons.cloud_circle_rounded,
+            accentColor: Colors.amber,
+            onTap: torrentStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.torrent),
+          ),
+        ],
+      );
+    } else {
+      // 2. Expanded group sub-links list
+      final activeList = _activeGroupType == StreamSourceType.stravo ? stravoStreams : torrentStreams;
+      final accentColor = _activeGroupType == StreamSourceType.stravo ? Colors.cyan : Colors.amber;
+      final iconData = _activeGroupType == StreamSourceType.stravo ? Icons.rocket_launch_rounded : Icons.cloud_circle_rounded;
+
+      if (activeList.isEmpty) {
+        return Center(
+          child: Text(
+            'No links found in this server.',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 14),
+          ),
+        );
+      }
+
+      return ListView.builder(
+        itemCount: activeList.length,
+        itemBuilder: (context, index) {
+          final source = activeList[index];
+          return Card(
+            color: Colors.white.withValues(alpha: 0.04),
+            margin: const EdgeInsets.only(bottom: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: accentColor.withValues(alpha: 0.15),
+                child: Icon(iconData, color: accentColor, size: 20),
+              ),
+              title: Text(
+                source.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w500),
+              ),
+              trailing: Icon(Icons.play_arrow_rounded, color: Colors.white.withValues(alpha: 0.4)),
+              onTap: () => _playStream(source, movieTitle, posterPath),
+            ),
+          );
+        },
+      );
+    }
+  }
+
+  Widget _buildServerGroupCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color accentColor,
+    VoidCallback? onTap,
+  }) {
+    final bool disabled = onTap == null;
+    return Card(
+      color: Colors.white.withValues(alpha: disabled ? 0.015 : 0.04),
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ListTile(
+        onTap: onTap,
+        enabled: !disabled,
+        leading: CircleAvatar(
+          backgroundColor: accentColor.withValues(alpha: disabled ? 0.05 : 0.15),
+          child: Icon(icon, color: accentColor.withValues(alpha: disabled ? 0.4 : 1.0), size: 22),
+        ),
+        title: Text(
+          title,
+          style: GoogleFonts.outfit(
+            color: disabled ? Colors.white30 : Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(
+            color: disabled ? Colors.white24 : Colors.white54,
+            fontSize: 12.5,
+          ),
+        ),
+        trailing: Icon(
+          Icons.chevron_right_rounded,
+          color: disabled ? Colors.white12 : Colors.white54,
+        ),
+      ),
+    );
+  }
+}
+
+enum StreamSourceType { vidlink, stravo, torrent }
+
+class StreamSourceInfo {
+  final String name;
+  final String url;
+  final StreamSourceType type;
+
+  StreamSourceInfo({
+    required this.name,
+    required this.url,
+    required this.type,
+  });
+}

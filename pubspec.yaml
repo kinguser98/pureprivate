@@ -1,0 +1,38 @@
+name: private_cinema_mobile
+description: "GoXio - Mobile streaming app."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  google_fonts: ^8.1.0
+  cached_network_image: ^3.4.1
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_android_video: ^1.3.8
+  file_picker: ^10.3.2
+  shared_preferences: ^2.3.2
+  youtube_explode_dart: ^2.2.2
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  permission_handler: ^12.0.3
+  http: ^1.6.0
+  share_plus: ^10.0.0
+  flutter_inappwebview: ^6.1.5
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
