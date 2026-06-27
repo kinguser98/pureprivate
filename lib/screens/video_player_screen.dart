@@ -404,6 +404,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerHost.contains('vodvidl.site') ||
               lowerHost.contains('ironwallnet.com') ||
               lowerHost.contains('fayallc') ||
+              lowerHost.contains('hakunamatata') ||
               lowerHost.contains('workers.dev')) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {

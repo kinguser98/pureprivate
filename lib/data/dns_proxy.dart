@@ -384,7 +384,19 @@ class CustomDnsProxy {
         
         resp.headers.forEach((name, values) {
           final nameLower = name.toLowerCase();
-          if (nameLower != 'connection' && nameLower != 'keep-alive' && nameLower != 'transfer-encoding') {
+          if (nameLower == 'location') {
+            for (final value in values) {
+              try {
+                final locUri = Uri.parse(value);
+                final hostWithPort = locUri.hasPort ? '${locUri.host}:${locUri.port}' : locUri.host;
+                final proxyRedirect = 'http://127.0.0.1:$port/proxy/${locUri.scheme}/$hostWithPort${locUri.path}${locUri.hasQuery ? "?" + locUri.query : ""}';
+                request.response.headers.set('location', proxyRedirect);
+                debugPrint('CustomDnsProxy: Rewrote redirect location: $proxyRedirect');
+              } catch (_) {
+                request.response.headers.add(name, value);
+              }
+            }
+          } else if (nameLower != 'connection' && nameLower != 'keep-alive' && nameLower != 'transfer-encoding') {
             for (final value in values) {
               request.response.headers.add(name, value);
             }
@@ -555,6 +567,7 @@ class MyHttpOverrides extends HttpOverrides {
         host.contains('vodvidl.site') ||
         host.contains('ironwallnet.com') ||
         host.contains('fayallc') ||
+        host.contains('hakunamatata') ||
         host.contains('workers.dev')) {
       return 'PROXY 127.0.0.1:$port';
     }
