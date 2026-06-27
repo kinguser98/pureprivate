@@ -45,6 +45,29 @@ class CustomDnsProxy {
     debugPrint('CustomDnsProxy: Stopped');
   }
 
+  Future<String?> _getWithCleanClient(Uri uri, Map<String, String>? headers) async {
+    return await HttpOverrides.runZoned(() async {
+      final client = HttpClient();
+      try {
+        final request = await client.getUrl(uri).timeout(const Duration(seconds: 4));
+        headers?.forEach((key, value) {
+          request.headers.set(key, value);
+        });
+        final response = await request.close().timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          return await response.transform(utf8.decoder).join();
+        }
+      } catch (e) {
+        debugPrint('CustomDnsProxy internal network client error: $e');
+      } finally {
+        client.close();
+      }
+      return null;
+    }, createHttpClient: (SecurityContext? context) {
+      return HttpClient(context: context);
+    });
+  }
+
   final Map<String, List<String>> _dnsCacheList = {};
 
   Future<List<String>> _resolveHostList(String host) async {
@@ -54,18 +77,39 @@ class CustomDnsProxy {
     
     final List<String> ips = [];
 
-    // Wrap the HTTP DoH client requests inside HttpOverrides.runZoned to bypass
-    // the global HttpOverrides proxy and prevent infinite recursive DNS deadlocks.
-    await HttpOverrides.runZoned(() async {
-      // 1. Try Cloudflare DNS over HTTPS (DoH) JSON API first
+    // 1. Try Cloudflare DNS over HTTPS (DoH) JSON API first
+    try {
+      final uri = Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
+      final resBody = await _getWithCleanClient(uri, {
+        'Accept': 'application/dns-json',
+      });
+      
+      if (resBody != null) {
+        final data = jsonDecode(resBody);
+        final answers = data['Answer'] as List?;
+        if (answers != null && answers.isNotEmpty) {
+          for (final ans in answers) {
+            if (ans['type'] == 1) { // Type 1 is A record
+              final ip = ans['data'] as String;
+              if (ip.isNotEmpty && ip != '0.0.0.0') {
+                ips.add(ip);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('CustomDnsProxy: Cloudflare DoH list error for $host: $e');
+    }
+
+    // 2. Try Google DNS over HTTPS (DoH) JSON API
+    if (ips.isEmpty) {
       try {
-        final uri = Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
-        final res = await http.get(uri, headers: {
-          'Accept': 'application/dns-json',
-        }).timeout(const Duration(seconds: 4));
+        final uri = Uri.parse('https://dns.google/resolve?name=$host&type=A');
+        final resBody = await _getWithCleanClient(uri, null);
         
-        if (res.statusCode == 200) {
-          final data = jsonDecode(res.body);
+        if (resBody != null) {
+          final data = jsonDecode(resBody);
           final answers = data['Answer'] as List?;
           if (answers != null && answers.isNotEmpty) {
             for (final ans in answers) {
@@ -79,37 +123,9 @@ class CustomDnsProxy {
           }
         }
       } catch (e) {
-        debugPrint('CustomDnsProxy: Cloudflare DoH list error for $host: $e');
+        debugPrint('CustomDnsProxy: Google DoH list error for $host: $e');
       }
-
-      // 2. Try Google DNS over HTTPS (DoH) JSON API
-      if (ips.isEmpty) {
-        try {
-          final uri = Uri.parse('https://dns.google/resolve?name=$host&type=A');
-          final res = await http.get(uri).timeout(const Duration(seconds: 4));
-          
-          if (res.statusCode == 200) {
-            final data = jsonDecode(res.body);
-            final answers = data['Answer'] as List?;
-            if (answers != null && answers.isNotEmpty) {
-              for (final ans in answers) {
-                if (ans['type'] == 1) { // Type 1 is A record
-                  final ip = ans['data'] as String;
-                  if (ip.isNotEmpty && ip != '0.0.0.0') {
-                    ips.add(ip);
-                  }
-                }
-              }
-            }
-          }
-        } catch (e) {
-          debugPrint('CustomDnsProxy: Google DoH list error for $host: $e');
-        }
-      }
-    }, createHttpClient: (SecurityContext? context) {
-      // Return a basic HttpClient bypassing the global overrides
-      return HttpClient(context: context);
-    });
+    }
 
     // 3. Fallback to standard system DNS resolution
     if (ips.isEmpty) {
