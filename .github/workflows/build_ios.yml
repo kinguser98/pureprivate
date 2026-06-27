@@ -34,13 +34,19 @@ jobs:
         run: |
           mkdir -p Payload
           
+          # Diagnostics: Print all compiled frameworks in the build directory
+          echo "=== SEARCHING FOR ALL COMPILED FRAMEWORKS ==="
+          find build -name "*.framework"
+          
           # Ensure the Frameworks folder exists inside Runner.app
           mkdir -p build/ios/iphoneos/Runner.app/Frameworks
           
-          # Copy any dynamic frameworks compiled by CocoaPods to Runner.app/Frameworks
-          if [ -d "build/ios/iphoneos" ]; then
-            find build/ios/iphoneos/ -maxdepth 1 -name "*.framework" -exec cp -R {} build/ios/iphoneos/Runner.app/Frameworks/ \;
-          fi
+          # Find and copy all compiled dynamic frameworks recursively to Runner.app/Frameworks
+          find build/ios -name "*.framework" -not -path "*/Runner.app/*" -exec cp -R {} build/ios/iphoneos/Runner.app/Frameworks/ \;
+          
+          # Diagnostics: Print what was successfully copied into the app
+          echo "=== FILES COPIED TO RUNNER.APP/FRAMEWORKS ==="
+          ls -la build/ios/iphoneos/Runner.app/Frameworks/
           
           # Move Runner.app into the Payload folder and compress it as a ZIP renamed to .ipa
           mv build/ios/iphoneos/Runner.app Payload/
