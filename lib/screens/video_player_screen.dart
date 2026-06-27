@@ -337,8 +337,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         // Disable SSL/TLS verification to prevent Cloudflare certificate trust chain issues
         await nativePlayer.setProperty('tls-verify', 'no');
         
-        // Force IPv4 DNS lookups to avoid broken/blocked IPv6 routing on some carriers/ISPs
-        await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
+        if (!Platform.isIOS) {
+          // Force IPv4 DNS lookups to avoid broken/blocked IPv6 routing on some carriers/ISPs
+          await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
+        }
         
         if (playHeaders.isNotEmpty) {
           final userAgent = playHeaders['User-Agent'] ?? playHeaders['user-agent'];
@@ -404,10 +406,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerHost.contains('fayallc') ||
               lowerHost.contains('workers.dev')) {
             final dnsProxy = CustomDnsProxy();
-            if (dnsProxy.port != null) {
-              final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
-              resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
-              debugPrint('VideoPlayerScreen: Rewrote blocked source to proxy relay: $resolvedSource');
+            if (Platform.isIOS) {
+              final ip = await dnsProxy.resolveHostForNative(host);
+              if (ip != null) {
+                playHeaders['Host'] = host;
+                resolvedSource = uri.replace(host: ip).toString();
+                debugPrint('VideoPlayerScreen: Rewrote blocked source to direct IP ($ip) on iOS: $resolvedSource');
+              } else if (dnsProxy.port != null) {
+                final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+                resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
+                debugPrint('VideoPlayerScreen: Rewrote blocked source to proxy fallback: $resolvedSource');
+              }
+            } else {
+              if (dnsProxy.port != null) {
+                final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+                resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
+                debugPrint('VideoPlayerScreen: Rewrote blocked source to proxy relay: $resolvedSource');
+              }
             }
           }
         } catch (e) {

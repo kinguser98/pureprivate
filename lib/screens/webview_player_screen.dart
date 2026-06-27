@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:private_cinema_mobile/data/dns_proxy.dart';
 
 class WebViewPlayerScreen extends StatefulWidget {
   const WebViewPlayerScreen({
@@ -242,6 +243,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                       ),
               initialData: widget.embedUrl.startsWith('magnet:')
                   ? InAppWebViewInitialData(
+                      baseUrl: WebUri('https://webtor.io'),
                       data: """
 <!DOCTYPE html>
 <html>
@@ -541,6 +543,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 javaScriptEnabled: true,
                 mediaPlaybackRequiresUserGesture: false,
                 allowsInlineMediaPlayback: true,
+
                 useHybridComposition: true,
                 domStorageEnabled: true,
                 databaseEnabled: true,
