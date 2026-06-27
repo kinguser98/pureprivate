@@ -224,11 +224,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : (name.isNotEmpty ? name : 'Stravo Stream');
             
             final cleanName = displayTitle.replaceAll('\n', ' ').trim();
-            sources.add(StreamSourceInfo(
-              name: 'Stravo: $cleanName',
-              url: urlStr,
-              type: StreamSourceType.stravo,
-            ));
+            final isDup = _resolvedSources.any((s) => s.url == urlStr) || sources.any((s) => s.url == urlStr);
+            if (!isDup) {
+              sources.add(StreamSourceInfo(
+                name: 'Stravo: $cleanName',
+                url: urlStr,
+                type: StreamSourceType.stravo,
+              ));
+            }
           }
         }
         if (mounted) {
@@ -287,11 +290,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 .replaceAll('\n', ' ')
                 .trim();
 
-            sources.add(StreamSourceInfo(
-              name: 'Torrent: $sourceName',
-              url: magnetLink,
-              type: StreamSourceType.torrent,
-            ));
+            final isDup = _resolvedSources.any((s) => s.url == magnetLink) || sources.any((s) => s.url == magnetLink);
+            if (!isDup) {
+              sources.add(StreamSourceInfo(
+                name: 'Torrent: $sourceName',
+                url: magnetLink,
+                type: StreamSourceType.torrent,
+              ));
+            }
           }
         }
         if (mounted) {
