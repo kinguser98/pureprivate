@@ -1004,9 +1004,30 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       } catch (e) {
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
+        debugPrint('Vercel proxy failed: $e. Falling back to WebView Player via VidSrc...');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Vercel proxy failed: $e')),
+            const SnackBar(
+              content: Text('VidLink scraper is currently offline. Launching Web Player...'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+          
+          final imdbId = movie.imdbId;
+          final tmdbId = movie.tmdbId;
+          final activeId = (imdbId != null && imdbId.isNotEmpty && imdbId != 'null')
+              ? imdbId
+              : ((tmdbId != null && tmdbId.isNotEmpty && tmdbId != '0' && tmdbId != 'null') ? tmdbId : '');
+              
+          final fallbackEmbedUrl = 'https://vidsrc.me/embed/movie/$activeId';
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => WebViewPlayerScreen(
+                embedUrl: fallbackEmbedUrl,
+                title: movie.title,
+                backdropUrl: movie.displayBackdrop,
+              ),
+            ),
           );
         }
       }
