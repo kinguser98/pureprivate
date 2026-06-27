@@ -403,9 +403,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerHost.contains('tpead.net') ||
               lowerHost.contains('vodvidl.site') ||
               lowerHost.contains('ironwallnet.com') ||
-              lowerHost.contains('fayallc') ||
-              lowerHost.contains('hakunamatata') ||
-              lowerHost.contains('workers.dev')) {
+              lowerHost.contains('hakunamatata')) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {
               final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;

@@ -566,9 +566,7 @@ class MyHttpOverrides extends HttpOverrides {
         host.contains('tpead.net') ||
         host.contains('vodvidl.site') ||
         host.contains('ironwallnet.com') ||
-        host.contains('fayallc') ||
-        host.contains('hakunamatata') ||
-        host.contains('workers.dev')) {
+        host.contains('hakunamatata')) {
       return 'PROXY 127.0.0.1:$port';
     }
     return 'DIRECT';
