@@ -26,7 +26,7 @@ class CategoryGridScreen extends StatelessWidget {
 
     // Grid aspect ratio (width / height) -> based on MovieCard size
     final double cardWidth = 115.0;
-    final double cardHeight = 172.5;
+    final double cardHeight = 220.0;
     final double childAspectRatio = cardWidth / cardHeight;
 
     return Scaffold(
