@@ -313,8 +313,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   final catsData = json.decode(catsBody);
                   final rawList = catsData['js'] ?? catsData['result'] ?? [];
                   if (rawList is List && rawList.isNotEmpty) {
-                    firstCategory = rawList.first;
-                    results.add('✅ A Succeeded: Found ${rawList.length} categories (First: ${firstCategory['title'] ?? firstCategory['name']})');
+                    firstCategory = rawList.firstWhere(
+                      (c) => c['id']?.toString() != 'All' && c['id']?.toString() != '*' && c['title']?.toString().toLowerCase() != 'all' && c['name']?.toString().toLowerCase() != 'all',
+                      orElse: () => rawList.first,
+                    );
+                    results.add('✅ A Succeeded: Found ${rawList.length} categories (First Selected: ${firstCategory['title'] ?? firstCategory['name']})');
                   }
                 } else {
                   results.add('❌ A Failed: $catsBody');
