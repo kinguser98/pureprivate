@@ -243,7 +243,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
     
     final url = '$baseUrl/stream/movie/$imdbId.json';
-    final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+    final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
     
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
@@ -260,6 +260,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               : (name.isNotEmpty ? name : 'Stravo Stream');
           
           final cleanName = displayTitle.replaceAll('\n', ' ').trim();
+          
+          if (cleanName.contains('🖥️') || name.contains('🖥️') || title.contains('🖥️')) {
+            continue; // Skip direct PC streams as requested
+          }
 
           final isDup = stravoSources.any((s) => s.url == urlStr);
           if (!isDup) {
@@ -972,7 +976,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final vidlinkTmdbId = (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null')
           ? movie.tmdbId
           : movie.imdbId;
-      final targetEmbedUrl = 'https://vidlink.pro/embed/movie/$vidlinkTmdbId';
+      final targetEmbedUrl = 'https://vidlink.pro/movie/$vidlinkTmdbId';
       
       try {
         debugPrint('Resolving VidLink stream in background from: $targetEmbedUrl');
@@ -999,13 +1003,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             ),
           );
           
-          final imdbId = movie.imdbId;
-          final tmdbId = movie.tmdbId;
-          final activeId = (imdbId != null && imdbId.isNotEmpty && imdbId != 'null')
-              ? imdbId
-              : ((tmdbId != null && tmdbId.isNotEmpty && tmdbId != '0' && tmdbId != 'null') ? tmdbId : '');
-              
-          final fallbackEmbedUrl = 'https://vidsrc.me/embed/movie/$activeId';
+          final fallbackEmbedUrl = 'https://vidlink.pro/movie/$vidlinkTmdbId';
           Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => WebViewPlayerScreen(

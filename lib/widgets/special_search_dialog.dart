@@ -207,7 +207,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
       }
       final url = '$baseUrl/stream/movie/$imdbId.json';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -224,6 +224,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : (name.isNotEmpty ? name : 'Stravo Stream');
             
             final cleanName = displayTitle.replaceAll('\n', ' ').trim();
+            
+            if (cleanName.contains('🖥️') || name.contains('🖥️') || title.contains('🖥️')) {
+              continue; // Skip direct PC streams as requested
+            }
+
             final isDup = _resolvedSources.any((s) => s.url == urlStr) || sources.any((s) => s.url == urlStr);
             if (!isDup) {
               sources.add(StreamSourceInfo(
