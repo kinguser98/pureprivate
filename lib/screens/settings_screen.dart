@@ -158,6 +158,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final name = portal['name']?.toString() ?? 'Portal $id';
         final rawUrl = portal['portal_url']?.toString() ?? '';
         final mac = portal['mac_address']?.toString() ?? '';
+        final serialNumber = portal['serial_number']?.toString() ?? '';
         var deviceId = portal['device_id']?.toString() ?? '';
         if (deviceId.contains(' ')) {
           deviceId = deviceId.split(' ').last.trim();
@@ -261,7 +262,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // 2. Perform Profile Init
               results.add('--- Profile Init ---');
               final profileCookies = '$cookies; token=$token; Bearer=$token';
-              var profileUrl = '$portalUrl?type=stb&action=get_profile&hd=1&ver=ImageDescription&num_err=0&mac=${Uri.encodeComponent(mac)}';
+              var profileUrl = '$portalUrl?type=stb&action=get_profile&hd=1&ver=ImageDescription&num_err=0&mac=${Uri.encodeComponent(mac)}&sn=${Uri.encodeComponent(serialNumber)}';
               if (deviceId.isNotEmpty) {
                 profileUrl += '&device_id=$deviceId&device_id2=$deviceId';
               }
