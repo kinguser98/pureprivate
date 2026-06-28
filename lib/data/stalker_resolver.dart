@@ -414,7 +414,7 @@ class StalkerResolver {
       'X-User-Agent': _getXUserAgent(userAgent),
     };
 
-    String? streamUrl;
+    String streamUrl = '';
     dynamic lastErr;
 
     // Try variation 1: standard url with extra parameters
@@ -429,7 +429,7 @@ class StalkerResolver {
     }
 
     // Try variation 2: simple url if variation 1 fails
-    if (streamUrl == null || streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
+    if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
       try {
         var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}';
         linkUrl = _appendDeviceParams(linkUrl, deviceId);
@@ -441,7 +441,7 @@ class StalkerResolver {
       }
     }
 
-    if (streamUrl == null || streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
+    if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
       throw lastErr ?? Exception('nothing_to_play');
     }
 
