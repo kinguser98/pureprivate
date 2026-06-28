@@ -240,6 +240,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           extractCookies(response);
 
           results.add('HTTP Status: ${response.statusCode}');
+          results.add('Handshake Set-Cookies: ${response.headers[HttpHeaders.setCookieHeader] ?? 'None'}');
 
           if (response.statusCode == 200) {
             // Try to parse token
@@ -266,15 +267,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final profileReq = await ioClient.getUrl(Uri.parse(profileUrl));
-              profileReq.headers.set('Cookie', getCookieHeader(profileCookies));
+              final mergedProfileCookies = getCookieHeader(profileCookies);
+              profileReq.headers.set('Cookie', mergedProfileCookies);
               profileReq.headers.set('Authorization', 'Bearer $token');
               profileReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              results.add('Profile Cookies Sent: $mergedProfileCookies');
 
               final profileRes = await profileReq.close().timeout(const Duration(seconds: 8));
               final profileBody = await profileRes.transform(utf8.decoder).join();
               extractCookies(profileRes);
               
               results.add('Profile Status: ${profileRes.statusCode}');
+              results.add('Profile Set-Cookies: ${profileRes.headers[HttpHeaders.setCookieHeader] ?? 'None'}');
               if (profileRes.statusCode == 200) {
                 results.add('✅ Profile loaded');
               } else {
@@ -289,9 +294,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-              catsReq.headers.set('Cookie', getCookieHeader(profileCookies));
+              final mergedCatsCookies = getCookieHeader(profileCookies);
+              catsReq.headers.set('Cookie', mergedCatsCookies);
               catsReq.headers.set('Authorization', 'Bearer $token');
               catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              results.add('Cats Cookies Sent: $mergedCatsCookies');
 
               final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
               final catsBody = await catsRes.transform(utf8.decoder).join();
