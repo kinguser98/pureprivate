@@ -417,7 +417,7 @@ class StalkerResolver {
 
       if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
         debugPrint('Stalker VOD resolution failed via create_link, falling back to direct HTTP link: $urlToCheck');
-        var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+        var playerCookies = 'mac=$macAddress';
         if (deviceId.isNotEmpty) {
           playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
         }
@@ -546,7 +546,7 @@ class StalkerResolver {
       } catch (_) {}
     }
 
-    var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+    var playerCookies = 'mac=$macAddress';
     if (deviceId.isNotEmpty) {
       playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
     }
@@ -570,7 +570,7 @@ class StalkerResolver {
       if (deviceId.contains(' ')) {
         deviceId = deviceId.split(' ').last.trim();
       }
-      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+      var playerCookies = 'mac=$macAddress';
       if (deviceId.isNotEmpty) {
         playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
       }
