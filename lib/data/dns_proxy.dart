@@ -554,20 +554,26 @@ class MyHttpOverrides extends HttpOverrides {
   final int port;
   MyHttpOverrides(this.port);
 
+  static List<String> blocklist = [
+    'remoteconsultinggroup',
+    'streamimdb',
+    'vidsrc',
+    'vidlink',
+    'streamtape',
+    'strcloud',
+    'tpead.net',
+    'vodvidl.site',
+    'ironwallnet.com',
+    'hakunamatata',
+  ];
+
   @override
   String findProxyFromEnvironment(Uri uri, Map<String, String>? environment) {
     final host = uri.host.toLowerCase();
-    if (host.contains('remoteconsultinggroup') ||
-        host.contains('streamimdb') ||
-        host.contains('vidsrc') ||
-        host.contains('vidlink') ||
-        host.contains('streamtape') ||
-        host.contains('strcloud') ||
-        host.contains('tpead.net') ||
-        host.contains('vodvidl.site') ||
-        host.contains('ironwallnet.com') ||
-        host.contains('hakunamatata')) {
-      return 'PROXY 127.0.0.1:$port';
+    for (final pattern in blocklist) {
+      if (host.contains(pattern)) {
+        return 'PROXY 127.0.0.1:$port';
+      }
     }
     return 'DIRECT';
   }

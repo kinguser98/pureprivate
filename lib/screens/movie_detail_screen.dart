@@ -32,6 +32,7 @@ class MovieDetailScreen extends StatefulWidget {
 class _MovieDetailScreenState extends State<MovieDetailScreen> {
   String? _pickedPath;
   bool _isFavorite = false;
+  bool _inWatchlist = false;
   bool _isDownloaded = false;
 
   List<CastMember> _dynamicCast = [];
@@ -125,6 +126,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   void initState() {
     super.initState();
     _loadFavoriteStatus();
+    _loadWatchlistState();
     _loadTmdbDetails();
     _checkDownloadStatus();
     _loadWatchProgress();
@@ -396,6 +398,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _loadWatchlistState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('watchlist_ids') ?? [];
+      if (mounted) {
+        setState(() {
+          _inWatchlist = list.contains(movie.id);
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleWatchlist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('watchlist_ids') ?? [];
+      if (list.contains(movie.id)) {
+        list.remove(movie.id);
+        setState(() => _inWatchlist = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Removed from Watchlist.')),
+        );
+      } else {
+        list.add(movie.id);
+        setState(() => _inWatchlist = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Added to Watchlist.')),
+        );
+      }
+      await prefs.setStringList('watchlist_ids', list);
+    } catch (_) {}
+  }
+
   Future<void> _loadFavoriteStatus() async {
     final isFav = await ApiService.checkFavoriteCloud(movie.id);
     final prefs = await SharedPreferences.getInstance();
@@ -624,6 +659,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           title: movie.title,
           subtitle: subtitle,
           movieId: movie.id,
+          imdbId: movie.imdbId,
           resumeDirectly: resumeDirectly,
           headers: headers,
         ),
@@ -1791,13 +1827,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     ),
                                   ),
                                 ),
-                                // Sharp Poster Card
+                                // Sharp Poster Card with Gold Border
                                 Container(
                                   width: 120,
                                   height: 180,
                                   decoration: BoxDecoration(
                                     color: AppColors.surface,
                                     borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.8), width: 1.5), // Gold Border
                                     boxShadow: const [
                                       BoxShadow(
                                         color: Colors.black54,
@@ -1807,7 +1844,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     ],
                                   ),
                                   child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
+                                    borderRadius: BorderRadius.circular(14),
                                     child: MovieImage(
                                       source: movie.posterUrl,
                                       fit: BoxFit.cover,
@@ -1817,7 +1854,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               ],
                             ),
                             const SizedBox(width: 16),
-                            // Right Metadata Column
+                            // Right Metadata Column (Redesigned)
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1832,64 +1869,55 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                       height: 1.2,
                                     ),
                                   ),
-                                  const SizedBox(height: 6),
+                                  const SizedBox(height: 8),
                                   
-                                  // Meta tags (Year, Content Rating, Runtime)
-                                  Row(
-                                    children: [
-                                      if (movie.year != null) ...[
-                                        Text(
-                                          movie.year.toString(),
-                                          style: GoogleFonts.outfit(
-                                            color: Colors.white60,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                      ],
-                                      if (movie.contentRating != null && movie.contentRating!.isNotEmpty) ...[
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            border: Border.all(color: Colors.white30, width: 1),
-                                            borderRadius: BorderRadius.circular(4),
-                                          ),
-                                          child: Text(
-                                            movie.contentRating!,
+                                  // Combined Meta tags (Year • Runtime • Genre • Content Rating)
+                                  Builder(
+                                    builder: (context) {
+                                      final List<String> detailsParts = [];
+                                      if (movie.year != null) detailsParts.add(movie.year.toString());
+                                      if (movie.runtime != null) detailsParts.add(movie.runtime!);
+                                      if (movie.genre.isNotEmpty) {
+                                        detailsParts.add(movie.genre.split(',').first.trim());
+                                      }
+                                      return Wrap(
+                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: [
+                                          Text(
+                                            detailsParts.join(' • '),
                                             style: GoogleFonts.outfit(
-                                              color: Colors.white70,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white60,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w400,
                                             ),
                                           ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                      ],
-                                      if (movie.runtime != null)
-                                        Text(
-                                          movie.runtime!,
-                                          style: GoogleFonts.outfit(
-                                            color: Colors.white60,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  
-                                  // Genre
-                                  Text(
-                                    movie.genre,
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white60,
-                                      fontSize: 13,
-                                    ),
+                                          if (movie.contentRating != null && movie.contentRating!.isNotEmpty) ...[
+                                            const Text('•', style: TextStyle(color: Colors.white60)),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                              decoration: BoxDecoration(
+                                                border: Border.all(color: Colors.white54, width: 0.8),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                movie.contentRating!,
+                                                style: GoogleFonts.outfit(
+                                                  color: Colors.white,
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      );
+                                    }
                                   ),
                                   const SizedBox(height: 12),
                                   
-                                  // Rating Badges Row (IMDb & TMDB side-by-side)
+                                  // Redesigned IMDb & TMDB Rating Badges side-by-side
                                   Row(
                                     children: [
                                       // IMDb Badge
@@ -1899,64 +1927,79 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                           color: const Color(0xFFF5C518), // IMDb Gold
                                           borderRadius: BorderRadius.circular(6),
                                         ),
-                                        child: Text(
-                                          'IMDb',
-                                          style: GoogleFonts.outfit(
-                                            color: Colors.black,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        movie.rating.toStringAsFixed(1),
-                                        style: GoogleFonts.outfit(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      
-                                      if (_dynamicRating != null) ...[
-                                        const SizedBox(width: 14),
-                                        // TMDB Badge
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF032541), // TMDB Dark Blue
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: const Color(0xFF01B4E4), width: 1), // TMDB Cyan
-                                          ),
-                                          child: Text(
-                                            'TMDB',
-                                            style: GoogleFonts.outfit(
-                                              color: const Color(0xFF01B4E4),
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.star_rounded, color: Colors.black, size: 14),
+                                            const SizedBox(width: 3),
+                                            Text(
+                                              movie.rating.toStringAsFixed(1),
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.black,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
                                             ),
-                                          ),
+                                            const SizedBox(width: 4),
+                                            Container(width: 0.8, height: 10, color: Colors.black26),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'IMDb',
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.black,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          _dynamicRating!.toStringAsFixed(1),
-                                          style: GoogleFonts.outfit(
-                                            color: Colors.white,
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                          ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      // TMDB Badge
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF032541).withOpacity(0.6),
+                                          border: Border.all(color: const Color(0xFF01B4E4), width: 1.2),
+                                          borderRadius: BorderRadius.circular(6),
                                         ),
-                                      ],
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.star_rounded, color: Color(0xFF01B4E4), size: 14),
+                                            const SizedBox(width: 3),
+                                            Text(
+                                              (_dynamicRating ?? 6.5).toStringAsFixed(1),
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Container(width: 0.8, height: 10, color: Colors.white24),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'TMDB',
+                                              style: GoogleFonts.outfit(
+                                                color: const Color(0xFF01B4E4),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                     ],
                                   ),
-                                  const SizedBox(height: 10),
+                                  const SizedBox(height: 12),
                                   
-                                  // Popularity Metric
+                                  // Redesigned Popularity Metric
                                   Row(
                                     children: [
-                                      Icon(
+                                      const Icon(
                                         Icons.trending_up_rounded,
-                                        color: activeTheme.accentBright,
+                                        color: Color(0xFFA855F7), // Purple trending icon
                                         size: 16,
                                       ),
                                       const SizedBox(width: 6),
@@ -1968,111 +2011,118 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                           fontWeight: FontWeight.w500,
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
+                           const SizedBox(height: 18),
 
                         // Row 1: Primary actions (Watch Now / Favorite)
                         Row(
                           children: [
                             // Watch Now
                             Expanded(
-                              flex: 3,
-                              child: ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFFFB300), // Amber
-                                  foregroundColor: Colors.black,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
+                              flex: 5,
+                              child: Container(
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [Color(0xFFFBBF24), Color(0xFFF59E0B)],
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
                                   ),
-                                  elevation: 2,
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                                onPressed: _handlePlayPressed,
-                                icon: const Icon(Icons.play_arrow_rounded, size: 22),
-                                label: Text(
-                                  'Watch Now',
-                                  style: GoogleFonts.outfit(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.transparent,
+                                    shadowColor: Colors.transparent,
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: _handlePlayPressed,
+                                  icon: const Icon(Icons.play_arrow_rounded, color: Colors.black, size: 20),
+                                  label: Text(
+                                    'Watch Now',
+                                    style: GoogleFonts.outfit(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black,
+                                      fontSize: 14,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 12),
                             // Favorite
                             Expanded(
-                              flex: 2,
-                              child: OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: _isFavorite ? Colors.pinkAccent : Colors.white70,
-                                  side: BorderSide(
-                                    color: _isFavorite ? Colors.pinkAccent.withValues(alpha: 0.5) : Colors.white30,
-                                    width: 1.5,
-                                  ),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
+                              flex: 4,
+                              child: Container(
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: Colors.transparent,
+                                  border: Border.all(color: Colors.white24, width: 1.2),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                                onPressed: _toggleFavorite,
-                                icon: Icon(
-                                  _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                                  size: 20,
-                                ),
-                                label: Text(
-                                  'Favorite',
-                                  style: GoogleFonts.outfit(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.transparent,
+                                    shadowColor: Colors.transparent,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: _toggleFavorite,
+                                  icon: Icon(
+                                    _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                    color: _isFavorite ? Colors.redAccent : Colors.white70,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    'Favorite',
+                                    style: GoogleFonts.outfit(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
 
-                        // Row 2: Secondary horizontal actions (Trailer, Download)
-                        if ((movie.trailerUrl != null && movie.trailerUrl!.isNotEmpty) || _canDownload) ...[
-                          SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            physics: const BouncingScrollPhysics(),
-                            child: Row(
-                              children: [
-                                // Trailer
-                                if (movie.trailerUrl != null && movie.trailerUrl!.isNotEmpty) ...[
-                                  _buildSecondaryOutlineButton(
-                                    onPressed: _watchTrailer,
-                                    icon: Icons.movie_filter_rounded,
-                                    label: 'Trailer',
-                                  ),
-                                  const SizedBox(width: 10),
-                                ],
-                                
-                                // Download
-                                if (_canDownload) ...[
-                                  _buildSecondaryOutlineButton(
-                                    onPressed: _isDownloaded ? _deleteDownload : _startDownload,
-                                    icon: _isDownloaded ? Icons.download_done_rounded : Icons.download_rounded,
-                                    label: _isDownloaded ? 'Downloaded' : 'Download',
-                                    foregroundColor: _isDownloaded ? Colors.redAccent : Colors.white70,
-                                    borderColor: _isDownloaded ? Colors.redAccent.withValues(alpha: 0.5) : Colors.white30,
-                                  ),
-                                  const SizedBox(width: 10),
-                                ],
-                              ],
+                        // Row 2: Secondary horizontal actions grid (Trailer, Download, Watchlist, Share)
+                        Row(
+                          children: [
+                            _buildActionButtonCard(
+                              icon: Icons.movie_filter_rounded,
+                              label: 'Trailer',
+                              onTap: _watchTrailer,
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-
-                        const SizedBox(height: 8),
+                            _buildActionButtonCard(
+                              icon: _isDownloaded ? Icons.download_done_rounded : Icons.download_rounded,
+                              label: _isDownloaded ? 'Downloaded' : 'Download',
+                              onTap: _isDownloaded ? _deleteDownload : _startDownload,
+                              activeColor: _isDownloaded ? Colors.redAccent : null,
+                            ),
+                            _buildActionButtonCard(
+                              icon: _inWatchlist ? Icons.playlist_add_check_rounded : Icons.playlist_add_rounded,
+                              label: 'Watchlist',
+                              onTap: _toggleWatchlist,
+                              activeColor: _inWatchlist ? activeTheme.accentBright : null,
+                            ),
+                            _buildActionButtonCard(
+                              icon: Icons.share_rounded,
+                              label: 'Share',
+                              onTap: _shareMovie,
+                            ),
+                          ],
+                        const SizedBox(height: 16),
 
                         // Synopsis / Description
                         Text(
@@ -2114,9 +2164,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     : null,
                               ),
                               const SizedBox(width: 12),
-                              Text(
-                                _dynamicDirector!,
-                                style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _dynamicDirector!,
+                                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Director',
+                                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -2130,7 +2190,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           ),
                           const SizedBox(height: 12),
                           SizedBox(
-                            height: 100,
+                            height: 105,
                             child: ListView.separated(
                               scrollDirection: Axis.horizontal,
                               itemCount: _dynamicCast.length,
@@ -2140,17 +2200,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 return Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    CircleAvatar(
-                                      radius: 26,
-                                      backgroundColor: AppColors.surface,
-                                      backgroundImage: actor.profileUrl.isNotEmpty
-                                          ? NetworkImage(actor.profileUrl)
-                                          : null,
-                                      child: actor.profileUrl.isEmpty
-                                          ? const Icon(Icons.person_rounded, color: Colors.white30, size: 20)
-                                          : null,
+                                    Container(
+                                      width: 60,
+                                      height: 60,
+                                      decoration: BoxDecoration(
+                                        color: AppColors.surface,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: Colors.white12, width: 0.8),
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: actor.profileUrl.isNotEmpty
+                                            ? MovieImage(source: actor.profileUrl, fit: BoxFit.cover)
+                                            : const Icon(Icons.person_rounded, color: Colors.white30, size: 24),
+                                      ),
                                     ),
-                                    const SizedBox(height: 6),
+                                    const SizedBox(height: 8),
                                     SizedBox(
                                       width: 80,
                                       child: Text(
@@ -2166,7 +2231,45 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               },
                             ),
                           ),
-                        ]
+                          const SizedBox(height: 24),
+                        ],
+
+                        // Bottom Redesigned Info Grid
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.02),
+                            border: Border.all(color: Colors.white10, width: 0.8),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              _buildBottomGridItem(
+                                icon: Icons.language_rounded,
+                                title: 'Language',
+                                value: movie.language ?? 'Hindi',
+                              ),
+                              _buildVerticalDivider(),
+                              _buildBottomGridItem(
+                                icon: Icons.volume_up_rounded,
+                                title: 'Audio',
+                                value: '5.1 Surround',
+                              ),
+                              _buildVerticalDivider(),
+                              _buildBottomGridItem(
+                                icon: Icons.closed_caption_rounded,
+                                title: 'Subtitles',
+                                value: 'English, Hindi',
+                              ),
+                              _buildVerticalDivider(),
+                              _buildBottomGridItem(
+                                icon: Icons.hd_rounded,
+                                title: 'Quality',
+                                value: '1080p • HD',
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -2214,6 +2317,76 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildActionButtonCard({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? activeColor,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            border: Border.all(color: Colors.white10, width: 0.8),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: activeColor ?? Colors.white, size: 20),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: GoogleFonts.outfit(
+                  color: activeColor ?? Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomGridItem({required IconData icon, required String title, required String value}) {
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: const Color(0xFF3B82F6), size: 20),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: GoogleFonts.outfit(
+              color: const Color(0xFFFFB300),
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerticalDivider() {
+    return Container(
+      width: 0.8,
+      height: 40,
+      color: Colors.white10,
     );
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -21,6 +22,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.title,
     this.subtitle,
     this.movieId,
+    this.imdbId,
     this.resumeDirectly = false,
     this.headers,
     this.isLive = false,
@@ -30,6 +32,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final String? title;
   final String? subtitle;
   final String? movieId;
+  final String? imdbId;
   final bool resumeDirectly;
   final Map<String, String>? headers;
   final bool isLive;
@@ -394,16 +397,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final uri = Uri.parse(widget.videoSource);
           final host = uri.host;
           final lowerHost = host.toLowerCase();
-          if (lowerHost.contains('remoteconsultinggroup') ||
-              lowerHost.contains('streamimdb') ||
-              lowerHost.contains('vidsrc') ||
-              lowerHost.contains('vidlink') ||
-              lowerHost.contains('streamtape') ||
-              lowerHost.contains('strcloud') ||
-              lowerHost.contains('tpead.net') ||
-              lowerHost.contains('vodvidl.site') ||
-              lowerHost.contains('ironwallnet.com') ||
-              lowerHost.contains('hakunamatata')) {
+          bool shouldProxy = false;
+          for (final pattern in MyHttpOverrides.blocklist) {
+            if (lowerHost.contains(pattern)) {
+              shouldProxy = true;
+              break;
+            }
+          }
+          if (shouldProxy) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {
               final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
@@ -942,69 +943,373 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _showOnlineSubtitleImportDialog() {
     final textController = TextEditingController();
+    int activeTab = 0; // 0: OpenSubtitles Search, 1: Manual URL
+    bool loading = false;
+    List<dynamic> subtitleTracks = [];
+    Map<String, List<dynamic>> groupedTracks = {};
+    String? expandedLang;
+    String errorMsg = '';
+
+    final langNames = {
+      'eng': 'English',
+      'spa': 'Spanish',
+      'fre': 'French',
+      'ger': 'German',
+      'ita': 'Italian',
+      'por': 'Portuguese',
+      'rus': 'Russian',
+      'ara': 'Arabic',
+      'chi': 'Chinese',
+      'jpn': 'Japanese',
+      'kor': 'Korean',
+      'hin': 'Hindi',
+      'tam': 'Tamil',
+      'tel': 'Telugu',
+      'mal': 'Malayalam',
+      'kan': 'Kannada',
+      'ind': 'Indonesian',
+      'may': 'Malay',
+      'tha': 'Thai',
+      'tur': 'Turkish',
+      'vie': 'Vietnamese',
+      'dut': 'Dutch',
+      'pol': 'Polish',
+      'swe': 'Swedish',
+      'nor': 'Norwegian',
+      'dan': 'Danish',
+      'fin': 'Finnish',
+      'heb': 'Hebrew',
+      'gre': 'Greek',
+      'bul': 'Bulgarian',
+      'ron': 'Romanian',
+      'hun': 'Hungarian',
+      'cze': 'Czech',
+      'slv': 'Slovenian',
+      'hrv': 'Croatian',
+      'srp': 'Serbian',
+      'slk': 'Slovak',
+      'ukr': 'Ukrainian',
+      'est': 'Estonian',
+      'lav': 'Latvian',
+      'lit': 'Lithuanian',
+    };
+
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text(
-          'Import Online Subtitle',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Enter a direct URL to a WebVTT (.vtt) or SubRip (.srt) subtitle file:',
-              style: TextStyle(color: Colors.white70, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: textController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'https://example.com/subtitles.srt',
-                hintStyle: const TextStyle(color: Colors.white30),
-                filled: true,
-                fillColor: Colors.black26,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> fetchSubtitles() async {
+              final imdb = widget.imdbId;
+              if (imdb == null || imdb.isEmpty || imdb == 'null') {
+                setDialogState(() {
+                  errorMsg = 'No IMDb ID available for this movie.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                loading = true;
+                errorMsg = '';
+              });
+
+              try {
+                final url = 'https://opensubtitles-v3.strem.io/subtitles/movie/$imdb.json';
+                debugPrint('Querying subtitles from stremio API: $url');
+                final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+                if (response.statusCode == 200) {
+                  final data = jsonDecode(response.body);
+                  final List<dynamic> subs = data['subtitles'] as List<dynamic>? ?? [];
+
+                  final Map<String, List<dynamic>> grouped = {};
+                  for (final s in subs) {
+                    final lang = s['lang']?.toString() ?? 'unknown';
+                    if (!grouped.containsKey(lang)) {
+                      grouped[lang] = [];
+                    }
+                    grouped[lang]!.add(s);
+                  }
+
+                  setDialogState(() {
+                    subtitleTracks = subs;
+                    groupedTracks = grouped;
+                    loading = false;
+                  });
+                } else {
+                  throw Exception('HTTP error ${response.statusCode}');
+                }
+              } catch (e) {
+                debugPrint('Failed to query OpenSubtitles: $e');
+                setDialogState(() {
+                  loading = false;
+                  errorMsg = 'Could not retrieve subtitles from OpenSubtitles.';
+                });
+              }
+            }
+
+            // Auto-trigger subtitles fetch on first load of the OpenSubtitles search tab
+            if (activeTab == 0 && subtitleTracks.isEmpty && !loading && errorMsg.isEmpty) {
+              Future.microtask(() => fetchSubtitles());
+            }
+
+            return AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setDialogState(() => activeTab = 0),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: activeTab == 0 ? AppColors.accentBright : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                        child: Text(
+                          'OpenSubtitles Search',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: activeTab == 0 ? Colors.white : Colors.white54,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setDialogState(() => activeTab = 1),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: activeTab == 1 ? AppColors.accentBright : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                        child: Text(
+                          'Custom URL Importer',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: activeTab == 1 ? Colors.white : Colors.white54,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              content: SizedBox(
+                width: 450,
+                height: 180, // Landscape compatible size
+                child: activeTab == 0
+                    ? _buildOpenSubtitlesTab(
+                        loading: loading,
+                        errorMsg: errorMsg,
+                        groupedTracks: groupedTracks,
+                        expandedLang: expandedLang,
+                        langNames: langNames,
+                        onRetry: fetchSubtitles,
+                        onLangTap: (lang) {
+                          setDialogState(() {
+                            expandedLang = expandedLang == lang ? null : lang;
+                          });
+                        },
+                        onTrackSelected: (track, displayLang) {
+                          final subUrl = track['url']?.toString() ?? '';
+                          if (subUrl.isNotEmpty) {
+                            _player.setSubtitleTrack(SubtitleTrack.uri(subUrl, title: 'OpenSubtitles: $displayLang', language: displayLang));
+                            Navigator.of(context).pop();
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(content: Text('OpenSubtitles ($displayLang) loaded successfully.')),
+                            );
+                          }
+                        },
+                      )
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Enter a direct URL to a WebVTT (.vtt) or SubRip (.srt) subtitle file:',
+                            style: TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: textController,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            decoration: InputDecoration(
+                              hintText: 'https://example.com/subtitles.srt',
+                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                              filled: true,
+                              fillColor: Colors.black26,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                ),
+                if (activeTab == 1)
+                  ElevatedButton(
+                    onPressed: () {
+                      final url = textController.text.trim();
+                      if (url.isNotEmpty && url.startsWith('http')) {
+                        _player.setSubtitleTrack(SubtitleTrack.uri(url, title: 'Imported Subtitle', language: 'Imported'));
+                        Navigator.of(context).pop();
+                        ScaffoldMessenger.of(this.context).showSnackBar(
+                          const SnackBar(content: Text('Online subtitle imported successfully.')),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Please enter a valid HTTP/HTTPS URL.')),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accentBright,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: const Text('Import', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildOpenSubtitlesTab({
+    required bool loading,
+    required String errorMsg,
+    required Map<String, List<dynamic>> groupedTracks,
+    required String? expandedLang,
+    required Map<String, String> langNames,
+    required VoidCallback onRetry,
+    required ValueChanged<String> onLangTap,
+    required void Function(dynamic track, String displayLang) onTrackSelected,
+  }) {
+    if (loading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: AppColors.accentBright),
+            SizedBox(height: 12),
+            Text('Searching OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    if (errorMsg.isNotEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(errorMsg, style: const TextStyle(color: Colors.white54, fontSize: 12), textAlign: TextAlign.center),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: onRetry,
+              child: const Text('Retry Search', style: TextStyle(color: AppColors.accentBright, fontSize: 13)),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final url = textController.text.trim();
-              if (url.isNotEmpty && url.startsWith('http')) {
-                _player.setSubtitleTrack(SubtitleTrack.uri(url, title: 'Imported Subtitle', language: 'Imported'));
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(content: Text('Online subtitle imported successfully.')),
-                );
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a valid HTTP/HTTPS URL.')),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.accentBright,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      );
+    }
+
+    if (groupedTracks.isEmpty) {
+      return const Center(
+        child: Text('No subtitles found for this movie.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: groupedTracks.keys.length,
+      itemBuilder: (context, index) {
+        final langCode = groupedTracks.keys.elementAt(index);
+        final langDisplay = langNames[langCode] ?? langCode.toUpperCase();
+        final tracksList = groupedTracks[langCode] ?? [];
+        final isExpanded = expandedLang == langCode;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+              title: Text(
+                langDisplay,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+              trailing: Icon(
+                isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                color: Colors.white54,
+                size: 18,
+              ),
+              onTap: () => onLangTap(langCode),
             ),
-            child: const Text('Import', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+            if (isExpanded)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, bottom: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: List.generate(tracksList.length, (idx) {
+                    final track = tracksList[idx];
+                    final encoding = track['SubEncoding']?.toString() ?? 'Default';
+                    return GestureDetector(
+                      onTap: () => onTrackSelected(track, langDisplay),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                        margin: const EdgeInsets.only(bottom: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Track ${idx + 1} ($langDisplay)',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                            Text(
+                              encoding,
+                              style: const TextStyle(color: Colors.white30, fontSize: 10),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            const Divider(color: Colors.white12, height: 1),
+          ],
+        );
+      },
     );
   }
 
