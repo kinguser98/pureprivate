@@ -317,7 +317,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       (c) => c['id']?.toString() != 'All' && c['id']?.toString() != '*' && c['title']?.toString().toLowerCase() != 'all' && c['name']?.toString().toLowerCase() != 'all',
                       orElse: () => rawList.first,
                     );
-                    results.add('✅ A Succeeded: Found ${rawList.length} categories (First Selected: ${firstCategory['title'] ?? firstCategory['name']})');
+                    results.add('✅ A Succeeded: Found ${rawList.length} categories. Selected category data: $firstCategory');
                   }
                 } else {
                   results.add('❌ A Failed: $catsBody');
