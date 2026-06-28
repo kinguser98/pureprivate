@@ -391,42 +391,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // 4. Get VOD Movie
               results.add('--- Fetching Sample VOD Movie ---');
               final catId = firstCategory != null ? (firstCategory['id']?.toString() ?? '') : '';
-              var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=1';
-              if (firstCategory != null) {
-                // If B or C succeeded, construct url and cookies accordingly
-                moviesUrl = '$moviesUrl&token=$token';
-              }
+              var moviesUrlStandard = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=1';
               if (deviceId.isNotEmpty) {
-                moviesUrl += '&device_id=$deviceId&device_id2=$deviceId';
+                moviesUrlStandard += '&device_id=$deviceId&device_id2=$deviceId';
               }
-
-              final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
-              moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
-              moviesReq.headers.set('Authorization', 'Bearer $token');
-              moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
-
-              final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
-              final moviesBody = await moviesRes.transform(utf8.decoder).join();
-              extractCookies(moviesRes);
-              
-              results.add('Movies List Status: ${moviesRes.statusCode}');
 
               String cmd = '';
               String movieName = '';
-              if (moviesRes.statusCode == 200) {
-                try {
+
+              // Try Variation A (No query token)
+              results.add('Trying VOD Movies (No query token)...');
+              try {
+                final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrlStandard));
+                moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
+                moviesReq.headers.set('Authorization', 'Bearer $token');
+                moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+                final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
+                final moviesBody = await moviesRes.transform(utf8.decoder).join();
+                extractCookies(moviesRes);
+
+                results.add('Movies Status: ${moviesRes.statusCode}');
+                if (moviesRes.statusCode == 200 && !moviesBody.contains('Authorization failed')) {
                   final moviesData = json.decode(moviesBody);
                   final rawMovies = moviesData['js']?['data'] ?? moviesData['result']?['data'] ?? moviesData['js'] ?? moviesData['result'] ?? [];
                   if (rawMovies is List && rawMovies.isNotEmpty) {
                     final firstMovie = rawMovies.first;
                     cmd = firstMovie['cmd']?.toString() ?? '';
                     movieName = firstMovie['name']?.toString() ?? '';
-                    results.add('✅ Movie: "$movieName", CMD: "$cmd"');
+                    results.add('✅ Movies Succeeded (No query token): "$movieName", CMD: "$cmd"');
                   } else {
-                    results.add('⚠️ No movies found.');
+                    results.add('⚠️ No movies returned.');
+                  }
+                } else {
+                  results.add('❌ Movies Standard Failed: $moviesBody');
+                }
+              } catch (e) {
+                results.add('❌ Movies Standard Error: $e');
+              }
+
+              // Try Variation B (Query token)
+              if (cmd.isEmpty) {
+                results.add('Trying VOD Movies (With query token)...');
+                try {
+                  final moviesReq = await ioClient.getUrl(Uri.parse('$moviesUrlStandard&token=$token'));
+                  moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
+                  moviesReq.headers.set('Authorization', 'Bearer $token');
+                  moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+                  final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
+                  final moviesBody = await moviesRes.transform(utf8.decoder).join();
+                  extractCookies(moviesRes);
+
+                  results.add('Movies Status: ${moviesRes.statusCode}');
+                  if (moviesRes.statusCode == 200 && !moviesBody.contains('Authorization failed')) {
+                    final moviesData = json.decode(moviesBody);
+                    final rawMovies = moviesData['js']?['data'] ?? moviesData['result']?['data'] ?? moviesData['js'] ?? moviesData['result'] ?? [];
+                    if (rawMovies is List && rawMovies.isNotEmpty) {
+                      final firstMovie = rawMovies.first;
+                      cmd = firstMovie['cmd']?.toString() ?? '';
+                      movieName = firstMovie['name']?.toString() ?? '';
+                      results.add('✅ Movies Succeeded (With query token): "$movieName", CMD: "$cmd"');
+                    } else {
+                      results.add('⚠️ No movies returned.');
+                    }
+                  } else {
+                    results.add('❌ Movies Query Token Failed: $moviesBody');
                   }
                 } catch (e) {
-                  results.add('⚠️ Movies response not JSON. Error: $e. Body: ${moviesBody.substring(0, moviesBody.length > 250 ? 250 : moviesBody.length)}');
+                  results.add('❌ Movies Query Token Error: $e');
                 }
               }
 
