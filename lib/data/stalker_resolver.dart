@@ -24,6 +24,48 @@ class StalkerResolver {
   static final Map<int, DateTime> _tokenExpiries = {};
   
   static final Map<int, Map<String, dynamic>> _stalkerSettingsMap = {};
+  
+  static final Map<int, Map<String, String>> _portalCookiesJar = {};
+
+  /// Merges new cookie header strings into the jar for the portal
+  static void _saveCookies(int portalId, List<String> setCookieHeaders) {
+    if (setCookieHeaders.isEmpty) return;
+    final jar = _portalCookiesJar.putIfAbsent(portalId, () => {});
+    for (final header in setCookieHeaders) {
+      final parts = header.split(';');
+      if (parts.isNotEmpty) {
+        final pair = parts.first.split('=');
+        if (pair.length >= 2) {
+          final key = pair.first.trim();
+          final val = pair.sublist(1).join('=').trim();
+          if (key.isNotEmpty) {
+            jar[key] = val;
+          }
+        }
+      }
+    }
+  }
+
+  /// Builds the full Cookie header string merging manual cookies with jar cookies
+  static String _getMergedCookies(int portalId, String manualCookiesStr) {
+    final jar = _portalCookiesJar[portalId];
+    if (jar == null || jar.isEmpty) return manualCookiesStr;
+    
+    final merged = <String, String>{};
+    final manualParts = manualCookiesStr.split(';');
+    for (final part in manualParts) {
+      final pair = part.split('=');
+      if (pair.length >= 2) {
+        merged[pair.first.trim()] = pair.sublist(1).join('=').trim();
+      }
+    }
+    
+    jar.forEach((key, value) {
+      merged[key] = value;
+    });
+    
+    return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
 
   /// Fetches the list of all configured portals from the backend
   static Future<List<Map<String, dynamic>>> getAllPortals() async {
@@ -62,10 +104,12 @@ class StalkerResolver {
       _cachedTokens.remove(portalId);
       _cachedCookiesMap.remove(portalId);
       _tokenExpiries.remove(portalId);
+      _portalCookiesJar.remove(portalId);
     } else {
       _cachedTokens.clear();
       _cachedCookiesMap.clear();
       _tokenExpiries.clear();
+      _portalCookiesJar.clear();
     }
   }
 
@@ -111,11 +155,18 @@ class StalkerResolver {
   static Future<_StalkerHttpResponse> _stalkerGet(
     String url, {
     required Map<String, String> headers,
+    int? portalId,
     int timeoutSeconds = 12,
   }) async {
     int attempts = 0;
     const maxAttempts = 5;
     final backoffs = [2000, 4000, 8000, 16000];
+
+    // If portalId is provided, merge cached session cookies (like PHPSESSID)
+    final Map<String, String> processedHeaders = Map.from(headers);
+    if (portalId != null && processedHeaders.containsKey('Cookie')) {
+      processedHeaders['Cookie'] = _getMergedCookies(portalId, processedHeaders['Cookie']!);
+    }
 
     while (attempts < maxAttempts) {
       attempts++;
@@ -123,13 +174,13 @@ class StalkerResolver {
         final ioClient = HttpClient();
         ioClient.connectionTimeout = Duration(seconds: timeoutSeconds);
         // Set User-Agent from headers if provided
-        if (headers.containsKey('User-Agent')) {
-          ioClient.userAgent = headers['User-Agent'];
+        if (processedHeaders.containsKey('User-Agent')) {
+          ioClient.userAgent = processedHeaders['User-Agent'];
         }
         
         final request = await ioClient.getUrl(Uri.parse(url));
         // Apply all headers
-        headers.forEach((key, value) {
+        processedHeaders.forEach((key, value) {
           if (key != 'User-Agent') { // Already set above
             request.headers.set(key, value);
           }
@@ -138,6 +189,14 @@ class StalkerResolver {
         final response = await request.close().timeout(Duration(seconds: timeoutSeconds));
         final body = await response.transform(utf8.decoder).join();
         ioClient.close();
+        
+        // Save any set cookies (like PHPSESSID) for future requests
+        if (portalId != null) {
+          final setCookies = response.headers[HttpHeaders.setCookieHeader];
+          if (setCookies != null && setCookies.isNotEmpty) {
+            _saveCookies(portalId, setCookies);
+          }
+        }
         
         final statusCode = response.statusCode;
 
@@ -201,7 +260,7 @@ class StalkerResolver {
     };
 
     debugPrint('Stalker Handshake URL: $handshakeUrl');
-    var handshakeRes = await _stalkerGet(handshakeUrl, headers: handshakeHeaders, timeoutSeconds: 10);
+    var handshakeRes = await _stalkerGet(handshakeUrl, headers: handshakeHeaders, portalId: portalId, timeoutSeconds: 10);
     
     if (handshakeRes.statusCode != 200) {
       throw Exception('Handshake HTTP Error: ${handshakeRes.statusCode}');
@@ -256,7 +315,7 @@ class StalkerResolver {
       'X-User-Agent': _getXUserAgent(userAgent),
     };
 
-    var profileRes = await _stalkerGet(profileUrl, headers: profileHeaders, timeoutSeconds: 10);
+    var profileRes = await _stalkerGet(profileUrl, headers: profileHeaders, portalId: portalId, timeoutSeconds: 10);
     
     if (profileRes.statusCode != 200) {
       throw Exception('Stalker profile init failed: ${profileRes.statusCode}');
@@ -376,8 +435,8 @@ class StalkerResolver {
   }
 
   /// Helper to resolve a single command variation
-  static Future<String> _performResolveRequest(String linkUrl, Map<String, String> headers) async {
-    final response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
+  static Future<String> _performResolveRequest(int portalId, String linkUrl, Map<String, String> headers) async {
+    final response = await _stalkerGet(linkUrl, headers: headers, portalId: portalId, timeoutSeconds: 12);
     if (response.statusCode != 200) {
       throw Exception('Stalker response code: ${response.statusCode}');
     }
@@ -449,7 +508,7 @@ class StalkerResolver {
       var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&disable_ad=1&download=0&play_lite=0';
       linkUrl = _appendDeviceParams(linkUrl, deviceId);
       debugPrint('Stalker Resolving Single Cmd (V1): $linkUrl');
-      streamUrl = await _performResolveRequest(linkUrl, headers);
+      streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
     } catch (e) {
       lastErr = e;
       debugPrint('Stalker resolving V1 failed: $e');
@@ -461,7 +520,7 @@ class StalkerResolver {
         var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}';
         linkUrl = _appendDeviceParams(linkUrl, deviceId);
         debugPrint('Stalker Resolving Single Cmd (V2 Fallback): $linkUrl');
-        streamUrl = await _performResolveRequest(linkUrl, headers);
+        streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
       } catch (e) {
         lastErr = e;
         debugPrint('Stalker resolving V2 fallback failed: $e');
@@ -594,7 +653,7 @@ class StalkerResolver {
         'X-User-Agent': _getXUserAgent(userAgent),
       };
 
-      final genresResponse = await _stalkerGet(genresUrl, headers: headers, timeoutSeconds: 12);
+      final genresResponse = await _stalkerGet(genresUrl, headers: headers, portalId: portalId, timeoutSeconds: 12);
       final Map<String, String> genresMap = {};
       
       if (genresResponse.statusCode == 200) {
@@ -625,7 +684,7 @@ class StalkerResolver {
       var channelsUrl = '$portalUrl?type=itv&action=get_all_channels';
       channelsUrl = _appendDeviceParams(channelsUrl, deviceId);
 
-      final channelsResponse = await _stalkerGet(channelsUrl, headers: headers, timeoutSeconds: 20);
+      final channelsResponse = await _stalkerGet(channelsUrl, headers: headers, portalId: portalId, timeoutSeconds: 20);
       
       if (channelsResponse.statusCode != 200) {
         throw Exception('Failed to fetch channels from portal. HTTP: ${channelsResponse.statusCode}');
@@ -730,7 +789,7 @@ class StalkerResolver {
         'X-User-Agent': _getXUserAgent(userAgent),
       };
       
-      var response = await _stalkerGet(url, headers: currentHeaders, timeoutSeconds: 15);
+      var response = await _stalkerGet(url, headers: currentHeaders, portalId: portalId, timeoutSeconds: 15);
 
       if (response.statusCode == 200) {
         final body = response.body;
@@ -750,7 +809,7 @@ class StalkerResolver {
         'X-User-Agent': _getXUserAgent(userAgent),
       };
       
-      var responseRetry = await _stalkerGet(url, headers: newHeaders, timeoutSeconds: 15);
+      var responseRetry = await _stalkerGet(url, headers: newHeaders, portalId: portalId, timeoutSeconds: 15);
 
       if (responseRetry.statusCode != 200 || responseRetry.body.contains('Authorization failed') || responseRetry.body.contains('Authorisation failed')) {
         throw Exception('Stalker request failed: HTTP ${responseRetry.statusCode}');
@@ -807,7 +866,7 @@ class StalkerResolver {
       }
 
       // Auto-retry helper for requests that handle authorization loss or rate limit (429)
-      Future<_StalkerHttpResponse> getWithRetry(String url) async {
+       Future<_StalkerHttpResponse> getWithRetry(String url) async {
         final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
         final currentHeaders = {
           'User-Agent': userAgent,
@@ -816,7 +875,7 @@ class StalkerResolver {
           'X-User-Agent': _getXUserAgent(userAgent),
         };
         
-        var response = await _stalkerGet(url, headers: currentHeaders, timeoutSeconds: 15);
+        var response = await _stalkerGet(url, headers: currentHeaders, portalId: portalId, timeoutSeconds: 15);
 
         if (response.statusCode == 200) {
           final body = response.body;
@@ -837,7 +896,7 @@ class StalkerResolver {
           'X-User-Agent': _getXUserAgent(userAgent),
         };
         
-        var responseRetry = await _stalkerGet(url, headers: newHeaders, timeoutSeconds: 15);
+        var responseRetry = await _stalkerGet(url, headers: newHeaders, portalId: portalId, timeoutSeconds: 15);
 
         if (responseRetry.statusCode != 200 || responseRetry.body.contains('Authorization failed') || responseRetry.body.contains('Authorisation failed')) {
           throw Exception('Stalker request failed: HTTP ${responseRetry.statusCode}');

@@ -200,12 +200,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ioClient.userAgent = userAgent;
           ioClient.connectionTimeout = const Duration(seconds: 12);
           
+          final Map<String, String> sessionCookies = {};
+          
+          void extractCookies(HttpClientResponse res) {
+            final setCookies = res.headers[HttpHeaders.setCookieHeader];
+            if (setCookies != null) {
+              for (final header in setCookies) {
+                final parts = header.split(';');
+                if (parts.isNotEmpty) {
+                  final pair = parts.first.split('=');
+                  if (pair.length >= 2) {
+                    sessionCookies[pair.first.trim()] = pair.sublist(1).join('=').trim();
+                  }
+                }
+              }
+            }
+          }
+
+          String getCookieHeader(String manualCookies) {
+            final merged = <String, String>{};
+            for (final part in manualCookies.split(';')) {
+              final pair = part.split('=');
+              if (pair.length >= 2) {
+                merged[pair.first.trim()] = pair.sublist(1).join('=').trim();
+              }
+            }
+            sessionCookies.forEach((key, val) {
+              merged[key] = val;
+            });
+            return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
+          }
+
           final request = await ioClient.getUrl(Uri.parse(hsUrl));
-          request.headers.set('Cookie', cookies);
+          request.headers.set('Cookie', getCookieHeader(cookies));
           request.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
           final response = await request.close().timeout(const Duration(seconds: 12));
           final body = await response.transform(utf8.decoder).join();
+          extractCookies(response);
 
           results.add('HTTP Status: ${response.statusCode}');
 
@@ -234,12 +266,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final profileReq = await ioClient.getUrl(Uri.parse(profileUrl));
-              profileReq.headers.set('Cookie', profileCookies);
+              profileReq.headers.set('Cookie', getCookieHeader(profileCookies));
               profileReq.headers.set('Authorization', 'Bearer $token');
               profileReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
               final profileRes = await profileReq.close().timeout(const Duration(seconds: 8));
               final profileBody = await profileRes.transform(utf8.decoder).join();
+              extractCookies(profileRes);
+              
               results.add('Profile Status: ${profileRes.statusCode}');
               if (profileRes.statusCode == 200) {
                 results.add('✅ Profile loaded');
@@ -255,12 +289,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-              catsReq.headers.set('Cookie', profileCookies);
+              catsReq.headers.set('Cookie', getCookieHeader(profileCookies));
               catsReq.headers.set('Authorization', 'Bearer $token');
               catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
               final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
               final catsBody = await catsRes.transform(utf8.decoder).join();
+              extractCookies(catsRes);
+              
               results.add('VOD Categories Status: ${catsRes.statusCode}');
 
               dynamic firstCategory;
@@ -288,12 +324,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
-              moviesReq.headers.set('Cookie', profileCookies);
+              moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
               moviesReq.headers.set('Authorization', 'Bearer $token');
               moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
               final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
               final moviesBody = await moviesRes.transform(utf8.decoder).join();
+              extractCookies(moviesRes);
+              
               results.add('Movies List Status: ${moviesRes.statusCode}');
 
               String cmd = '';
@@ -324,12 +362,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 }
 
                 final linkReq = await ioClient.getUrl(Uri.parse(linkUrl));
-                linkReq.headers.set('Cookie', profileCookies);
+                linkReq.headers.set('Cookie', getCookieHeader(profileCookies));
                 linkReq.headers.set('Authorization', 'Bearer $token');
                 linkReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
                 final linkRes = await linkReq.close().timeout(const Duration(seconds: 8));
                 final linkBody = await linkRes.transform(utf8.decoder).join();
+                extractCookies(linkRes);
+                
                 results.add('Create Link Status: ${linkRes.statusCode}');
                 try {
                   final linkData = json.decode(linkBody);
