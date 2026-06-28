@@ -63,8 +63,46 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
       _isSyncing = true;
     });
 
+    List<Map<String, dynamic>> portals = [];
     try {
-      final res = await StalkerResolver.syncChannelsToServer();
+      portals = await StalkerResolver.getAllPortals();
+    } catch (e) {
+      debugPrint('Error getting portals: $e');
+    }
+
+    if (portals.isEmpty) {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No Stalker Portals configured. Please add one first in the admin panel.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
+    int? selectedPortalId;
+    if (mounted) {
+      setState(() => _isSyncing = false);
+      selectedPortalId = await showDialog<int>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => MobilePortalPickerDialog(portals: portals),
+      );
+    }
+
+    if (selectedPortalId == null) {
+      return;
+    }
+
+    setState(() {
+      _isSyncing = true;
+    });
+
+    try {
+      final res = await StalkerResolver.syncChannelsToServer(selectedPortalId);
       if (mounted) {
         setState(() {
           _isSyncing = false;
@@ -982,6 +1020,56 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
           ),
         ),
       ),
+    );
+  }
+}
+
+class MobilePortalPickerDialog extends StatelessWidget {
+  final List<Map<String, dynamic>> portals;
+
+  const MobilePortalPickerDialog({super.key, required this.portals});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.grey[900],
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text(
+        'Select Stalker Portal',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: portals.length,
+          itemBuilder: (context, index) {
+            final p = portals[index];
+            final portalId = int.tryParse(p['id']?.toString() ?? '') ?? 0;
+            final portalName = p['name']?.toString() ?? 'Stalker Portal';
+            final portalUrl = p['portal_url']?.toString() ?? '';
+
+            return Card(
+              color: Colors.white.withValues(alpha: 0.05),
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: const Icon(Icons.settings_input_hdmi, color: Colors.pinkAccent),
+                title: Text(portalName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(portalUrl, style: const TextStyle(color: Colors.white60, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  Navigator.of(context).pop(portalId);
+                },
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+        ),
+      ],
     );
   }
 }
