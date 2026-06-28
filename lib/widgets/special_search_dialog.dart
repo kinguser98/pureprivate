@@ -437,7 +437,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               elevation: 0,
               child: Container(
                 width: double.infinity,
-                constraints: const BoxConstraints(maxWidth: 480, maxHeight: 580),
+                constraints: const BoxConstraints(maxWidth: 480, maxHeight: 650),
                 decoration: BoxDecoration(
                   color: AppColors.surface.withValues(alpha: 0.82),
                   borderRadius: BorderRadius.circular(28),
@@ -882,7 +882,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             title: '4. Stalker VOD Server (Portal 2)',
             subtitle: _resolvingStreams && stalkerStreams.isEmpty 
                 ? 'Searching local library...' 
-                : (stalkerStreams.isNotEmpty ? '${stalkerStreams.length} links available' : 'Not found in Stalker library'),
+                : (stalkerStreams.isNotEmpty ? '${stalkerStreams.length} links available' : 'Not available'),
             icon: Icons.movie_filter_rounded,
             accentColor: Colors.purpleAccent,
             onTap: stalkerStreams.isEmpty 
