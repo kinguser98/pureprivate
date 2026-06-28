@@ -2013,9 +2013,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                       ),
                                   ],
                                 ),
-                              ),
                             ),
-                           const SizedBox(height: 18),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
 
                         // Row 1: Primary actions (Watch Now / Favorite)
                         Row(

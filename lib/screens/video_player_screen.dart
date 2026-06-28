@@ -1216,7 +1216,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const CircularProgressIndicator(color: AppColors.accentBright),
+            CircularProgressIndicator(color: AppColors.accentBright),
             const SizedBox(height: 12),
             const Text('Searching OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
           ],
