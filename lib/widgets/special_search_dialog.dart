@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
   const SpecialSearchDialog({super.key});
@@ -163,6 +165,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       tasks.add(_resolveTorrentio(imdbId, title));
     }
 
+    // 4. Resolve Stalker Synced VOD Database (requires movie title)
+    tasks.add(_resolveStalkerVodDatabase(title));
+
     await Future.wait(tasks);
 
     if (mounted) {
@@ -195,6 +200,45 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('VidLink stream resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveStalkerVodDatabase(String title) async {
+    try {
+      final url = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final movies = data['movies'] as List<dynamic>? ?? [];
+        final List<StreamSourceInfo> sources = [];
+        
+        for (final item in movies) {
+          final portalId = int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
+          final cmd = item['cmd']?.toString() ?? '';
+          final name = item['name']?.toString() ?? 'Stalker VOD';
+          
+          if (cmd.isNotEmpty) {
+            // As requested, focus on Portal 2 VODs only (Airtel)
+            if (portalId == 2) {
+              final isDup = _resolvedSources.any((s) => s.url == 'stalker://$portalId$cmd') || sources.any((s) => s.url == 'stalker://$portalId$cmd');
+              if (!isDup) {
+                sources.add(StreamSourceInfo(
+                  name: 'Stalker: $name',
+                  url: 'stalker://$portalId$cmd',
+                  type: StreamSourceType.stalker,
+                ));
+              }
+            }
+          }
+        }
+        if (mounted && sources.isNotEmpty) {
+          setState(() {
+            _resolvedSources.addAll(sources);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stalker VOD database search failed: $e');
     }
   }
 
@@ -316,8 +360,44 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) {
-    if (source.url.startsWith('magnet:')) {
+  void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) async {
+    if (source.url.startsWith('stalker://')) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: Colors.pinkAccent),
+        ),
+      );
+      try {
+        final uri = Uri.parse(source.url);
+        final portalId = int.parse(uri.host);
+        final cmd = uri.path;
+        final resolved = await StalkerResolver.resolveStream(cmd, portalId, isLive: false);
+        if (mounted) {
+          Navigator.of(context).pop(); // Dismiss loading
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => VideoPlayerScreen(
+                videoSource: resolved.url,
+                title: movieTitle,
+                subtitle: 'Stalker Portal',
+                movieId: 'special_search_${_selectedMovie['id']}',
+                resumeDirectly: false,
+                headers: resolved.headers,
+              ),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          Navigator.of(context).pop(); // Dismiss loading
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to resolve Stalker stream: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+    } else if (source.url.startsWith('magnet:')) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => WebViewPlayerScreen(
@@ -752,6 +832,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final stravoStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stravo).toList();
     final vidlinkStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidlink).toList();
     final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
+    final stalkerStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stalker).toList();
 
     if (_activeGroupType == null) {
       // 1. Server groups main list
@@ -795,13 +876,32 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 ? null 
                 : () => setState(() => _activeGroupType = StreamSourceType.torrent),
           ),
+
+          // Stalker Server Group (Portal 2 VODs)
+          _buildServerGroupCard(
+            title: '4. Stalker VOD Server (Portal 2)',
+            subtitle: _resolvingStreams && stalkerStreams.isEmpty 
+                ? 'Searching local library...' 
+                : (stalkerStreams.isNotEmpty ? '${stalkerStreams.length} links available' : 'Not found in Stalker library'),
+            icon: Icons.movie_filter_rounded,
+            accentColor: Colors.purpleAccent,
+            onTap: stalkerStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.stalker),
+          ),
         ],
       );
     } else {
       // 2. Expanded group sub-links list
-      final activeList = _activeGroupType == StreamSourceType.stravo ? stravoStreams : torrentStreams;
-      final accentColor = _activeGroupType == StreamSourceType.stravo ? Colors.cyan : Colors.amber;
-      final iconData = _activeGroupType == StreamSourceType.stravo ? Icons.rocket_launch_rounded : Icons.cloud_circle_rounded;
+      final activeList = _activeGroupType == StreamSourceType.stravo 
+          ? stravoStreams 
+          : (_activeGroupType == StreamSourceType.torrent ? torrentStreams : stalkerStreams);
+      final accentColor = _activeGroupType == StreamSourceType.stravo 
+          ? Colors.cyan 
+          : (_activeGroupType == StreamSourceType.torrent ? Colors.amber : Colors.purpleAccent);
+      final iconData = _activeGroupType == StreamSourceType.stravo 
+          ? Icons.rocket_launch_rounded 
+          : (_activeGroupType == StreamSourceType.torrent ? Icons.cloud_circle_rounded : Icons.movie_filter_rounded);
 
       if (activeList.isEmpty) {
         return Center(
@@ -883,7 +983,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 }
 
-enum StreamSourceType { vidlink, stravo, torrent }
+enum StreamSourceType { vidlink, stravo, torrent, stalker }
 
 class StreamSourceInfo {
   final String name;
