@@ -1,0 +1,30 @@
+workflows:
+  default-workflow:
+    name: Build iOS App
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: '*'
+          include: true
+          source: true
+    scripts:
+      - name: Flutter clean and get dependencies
+        script: |
+          flutter clean
+          flutter pub get
+      - name: Install Pods
+        script: |
+          cd ios
+          pod install
+      - name: Build Flutter iOS IPA
+        script: |
+          flutter build ipa --release --no-codesign
+    artifacts:
+      - build/ios/ipa/*.ipa
