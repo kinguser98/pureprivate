@@ -232,169 +232,140 @@ class StalkerResolver {
 
   /// Resolves the direct channel stream link from Stalker cmd
   static Future<StalkerStream> resolveStream(String cmd, {bool isLive = true}) async {
-    try {
-      final settings = await _getSettings();
-      final token = await _authenticate(settings);
-      
-      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
-      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
-      final macAddress = (settings['mac_address'] ?? '').toString().trim();
-      var deviceId = (settings['device_id'] ?? '').toString().trim();
-      if (deviceId.contains(' ')) {
-        deviceId = deviceId.split(' ').last.trim();
-      }
-
-      // Request stream URL via create_link
-      final typeParam = isLive ? 'itv' : 'vod';
-      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=&disable_ad=1&download=0&play_lite=0';
-      linkUrl = _appendDeviceParams(linkUrl, deviceId);
-      
-      final headers = {
-        'User-Agent': userAgent,
-        'Cookie': _cachedCookies!,
-        'Authorization': 'Bearer $token',
-        'X-User-Agent': _getXUserAgent(userAgent),
-      };
-
-      debugPrint('Stalker Resolving Stream: $linkUrl');
-      var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
-      
-      if (response.statusCode != 200) {
-        throw Exception('Stream resolution HTTP error: ${response.statusCode}');
-      }
-
-      final data = json.decode(response.body);
-      String streamUrl = '';
-
-      if (data is Map) {
-        final jsVal = data['js'];
-        final resultVal = data['result'];
-        if (jsVal is Map) {
-          streamUrl = jsVal['cmd']?.toString() ?? '';
-        } else if (jsVal is String) {
-          streamUrl = jsVal;
-        } else if (resultVal is Map) {
-          streamUrl = resultVal['url']?.toString() ?? '';
-        } else if (resultVal is String) {
-          streamUrl = resultVal;
-        }
-      } else if (data is List) {
-        if (data.isNotEmpty) {
-          final first = data.first;
-          if (first is Map) {
-            streamUrl = first['cmd']?.toString() ?? first['url']?.toString() ?? '';
-          } else if (first is String) {
-            streamUrl = first;
-          }
-        }
-      } else if (data is String) {
-        streamUrl = data;
-      }
-
-      if (streamUrl.isEmpty) {
-        throw Exception('Stalker portal returned empty stream url. Response: ${response.body}');
-      }
-
-      // Strip ffmpeg prefix if present
-      if (streamUrl.startsWith('ffmpeg ')) {
-        streamUrl = streamUrl.substring(7);
-      }
-
-      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
-      if (deviceId.isNotEmpty) {
-        playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
-      }
-
-      // Return direct stream along with validation headers for playback engine
-      return StalkerStream(
-        url: streamUrl,
-        headers: {
-          'User-Agent': userAgent,
-          'Cookie': playerCookies,
-        },
-      );
-    } catch (e) {
-      // If error occurs, reset token and retry once
-      clearCache();
-      debugPrint('Stalker resolution error ($e), retrying handshake...');
-      
-      final settings = await _getSettings();
-      final token = await _authenticate(settings);
-      
-      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
-      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
-      final macAddress = (settings['mac_address'] ?? '').toString().trim();
-      var deviceId = (settings['device_id'] ?? '').toString().trim();
-      if (deviceId.contains(' ')) {
-        deviceId = deviceId.split(' ').last.trim();
-      }
-
-      final typeParam = isLive ? 'itv' : 'vod';
-      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=&disable_ad=1&download=0&play_lite=0';
-      linkUrl = _appendDeviceParams(linkUrl, deviceId);
-      
-      final headers = {
-        'User-Agent': userAgent,
-        'Cookie': _cachedCookies!,
-        'Authorization': 'Bearer $token',
-        'X-User-Agent': _getXUserAgent(userAgent),
-      };
-
-      var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
-      
-      if (response.statusCode != 200) {
-        throw Exception('Retry Stream resolution failed: ${response.statusCode}');
-      }
-
-      final data = json.decode(response.body);
-      String streamUrl = '';
-
-      if (data is Map) {
-        final jsVal = data['js'];
-        final resultVal = data['result'];
-        if (jsVal is Map) {
-          streamUrl = jsVal['cmd']?.toString() ?? '';
-        } else if (jsVal is String) {
-          streamUrl = jsVal;
-        } else if (resultVal is Map) {
-          streamUrl = resultVal['url']?.toString() ?? '';
-        } else if (resultVal is String) {
-          streamUrl = resultVal;
-        }
-      } else if (data is List) {
-        if (data.isNotEmpty) {
-          final first = data.first;
-          if (first is Map) {
-            streamUrl = first['cmd']?.toString() ?? first['url']?.toString() ?? '';
-          } else if (first is String) {
-            streamUrl = first;
-          }
-        }
-      } else if (data is String) {
-        streamUrl = data;
-      }
-
-      if (streamUrl.isEmpty) {
-        throw Exception('Stalker portal returned empty stream url on retry. Response: ${response.body}');
-      }
-
-      if (streamUrl.startsWith('ffmpeg ')) {
-        streamUrl = streamUrl.substring(7);
-      }
-
-      var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
-      if (deviceId.isNotEmpty) {
-        playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
-      }
-
-      return StalkerStream(
-        url: streamUrl,
-        headers: {
-          'User-Agent': userAgent,
-          'Cookie': playerCookies,
-        },
-      );
+    final settings = await _getSettings();
+    
+    final cmdVariations = <String>[];
+    cmdVariations.add(cmd);
+    
+    if (!cmd.startsWith('ffmpeg ') && !cmd.startsWith('auto ')) {
+      cmdVariations.add('ffmpeg $cmd');
+      cmdVariations.add('auto $cmd');
+    } else if (cmd.startsWith('ffmpeg ')) {
+      final stripped = cmd.substring(7);
+      cmdVariations.add('auto $stripped');
+      cmdVariations.add(stripped);
+    } else if (cmd.startsWith('auto ')) {
+      final stripped = cmd.substring(5);
+      cmdVariations.add('ffmpeg $stripped');
+      cmdVariations.add(stripped);
     }
+
+    dynamic lastError;
+
+    for (int i = 0; i < cmdVariations.length; i++) {
+      final currentCmd = cmdVariations[i];
+      debugPrint('Stalker resolveStream trying variation $i: "$currentCmd"');
+      
+      try {
+        final token = await _authenticate(settings);
+        final stream = await _resolveSingleCmd(currentCmd, settings, token, isLive);
+        debugPrint('Stalker resolveStream successful with variation: "$currentCmd"');
+        return stream;
+      } catch (e) {
+        lastError = e;
+        debugPrint('Stalker resolveStream failed for variation "$currentCmd": $e');
+        
+        // Clear auth cache to ensure subsequent retries use a fresh token/session
+        clearCache();
+        
+        // Short pause before next attempt if there are more variations to try
+        if (i < cmdVariations.length - 1) {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
+      }
+    }
+
+    throw lastError ?? Exception('Failed to resolve stalker stream for cmd: $cmd');
+  }
+
+  /// Helper to resolve a single command variation
+  static Future<StalkerStream> _resolveSingleCmd(
+    String cmd,
+    Map<String, dynamic> settings,
+    String token,
+    bool isLive,
+  ) async {
+    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+    final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+    final macAddress = (settings['mac_address'] ?? '').toString().trim();
+    var deviceId = (settings['device_id'] ?? '').toString().trim();
+    if (deviceId.contains(' ')) {
+      deviceId = deviceId.split(' ').last.trim();
+    }
+
+    final typeParam = isLive ? 'itv' : 'vod';
+    // Omit forced_storage completely from linkUrl
+    var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&disable_ad=1&download=0&play_lite=0';
+    linkUrl = _appendDeviceParams(linkUrl, deviceId);
+    
+    final headers = {
+      'User-Agent': userAgent,
+      'Cookie': _cachedCookies ?? 'mac=${Uri.encodeComponent(macAddress)}',
+      'Authorization': 'Bearer $token',
+      'X-User-Agent': _getXUserAgent(userAgent),
+    };
+
+    debugPrint('Stalker Resolving Single Cmd: $linkUrl');
+    var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
+    
+    if (response.statusCode != 200) {
+      throw Exception('Stream resolution HTTP error: ${response.statusCode}');
+    }
+
+    final responseBody = response.body;
+    if (responseBody.contains('nothing_to_play')) {
+      throw Exception('nothing_to_play');
+    }
+
+    final data = json.decode(responseBody);
+    String streamUrl = '';
+
+    if (data is Map) {
+      final jsVal = data['js'];
+      final resultVal = data['result'];
+      if (jsVal is Map) {
+        streamUrl = jsVal['cmd']?.toString() ?? '';
+      } else if (jsVal is String) {
+        streamUrl = jsVal;
+      } else if (resultVal is Map) {
+        streamUrl = resultVal['url']?.toString() ?? '';
+      } else if (resultVal is String) {
+        streamUrl = resultVal;
+      }
+    } else if (data is List) {
+      if (data.isNotEmpty) {
+        final first = data.first;
+        if (first is Map) {
+          streamUrl = first['cmd']?.toString() ?? first['url']?.toString() ?? '';
+        } else if (first is String) {
+          streamUrl = first;
+        }
+      }
+    } else if (data is String) {
+      streamUrl = data;
+    }
+
+    if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
+      throw Exception('nothing_to_play');
+    }
+
+    // Strip ffmpeg prefix if present
+    if (streamUrl.startsWith('ffmpeg ')) {
+      streamUrl = streamUrl.substring(7);
+    }
+
+    var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+    if (deviceId.isNotEmpty) {
+      playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+    }
+
+    return StalkerStream(
+      url: streamUrl,
+      headers: {
+        'User-Agent': userAgent,
+        'Cookie': playerCookies,
+      },
+    );
   }
 
   /// Resolves logo request headers including user agent and portal MAC cookie.
