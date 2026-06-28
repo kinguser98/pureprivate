@@ -206,23 +206,143 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           final response = await request.close().timeout(const Duration(seconds: 12));
           final body = await response.transform(utf8.decoder).join();
-          ioClient.close();
 
           results.add('HTTP Status: ${response.statusCode}');
-          results.add('Headers: ${response.headers.value('content-type') ?? 'unknown'}');
 
           if (response.statusCode == 200) {
             // Try to parse token
+            String token = '';
             try {
               final data = json.decode(body);
-              final token = data['js']?['token']?.toString() ?? '';
+              token = data['js']?['token']?.toString() ?? '';
               if (token.isNotEmpty) {
-                results.add('✅ Token: ${token.substring(0, token.length > 20 ? 20 : token.length)}...');
+                results.add('✅ Handshake Token: ${token.substring(0, token.length > 15 ? 15 : token.length)}...');
               } else {
                 results.add('⚠️ 200 OK but no token. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
               }
             } catch (_) {
               results.add('⚠️ 200 OK but not JSON. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
+            }
+
+            if (token.isNotEmpty) {
+              // 2. Perform Profile Init
+              results.add('--- Profile Init ---');
+              final profileCookies = '$cookies; token=$token; Bearer=$token';
+              var profileUrl = '$portalUrl?type=stb&action=get_profile&hd=1&ver=ImageDescription&num_err=0&mac=${Uri.encodeComponent(mac)}';
+              if (deviceId.isNotEmpty) {
+                profileUrl += '&device_id=$deviceId&device_id2=$deviceId';
+              }
+
+              final profileReq = await ioClient.getUrl(Uri.parse(profileUrl));
+              profileReq.headers.set('Cookie', profileCookies);
+              profileReq.headers.set('Authorization', 'Bearer $token');
+              profileReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              final profileRes = await profileReq.close().timeout(const Duration(seconds: 8));
+              final profileBody = await profileRes.transform(utf8.decoder).join();
+              results.add('Profile Status: ${profileRes.statusCode}');
+              if (profileRes.statusCode == 200) {
+                results.add('✅ Profile loaded');
+              } else {
+                results.add('❌ Profile failed: ${profileBody.substring(0, profileBody.length > 100 ? 100 : profileBody.length)}');
+              }
+
+              // 3. Get VOD Categories
+              results.add('--- Fetching VOD Categories ---');
+              var catsUrl = '$portalUrl?type=vod&action=get_categories';
+              if (deviceId.isNotEmpty) {
+                catsUrl += '&device_id=$deviceId&device_id2=$deviceId';
+              }
+
+              final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
+              catsReq.headers.set('Cookie', profileCookies);
+              catsReq.headers.set('Authorization', 'Bearer $token');
+              catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
+              final catsBody = await catsRes.transform(utf8.decoder).join();
+              results.add('VOD Categories Status: ${catsRes.statusCode}');
+
+              dynamic firstCategory;
+              if (catsRes.statusCode == 200) {
+                try {
+                  final catsData = json.decode(catsBody);
+                  final rawList = catsData['js'] ?? catsData['result'] ?? [];
+                  if (rawList is List && rawList.isNotEmpty) {
+                    firstCategory = rawList.first;
+                    results.add('✅ Found ${rawList.length} categories (First: ${firstCategory['title'] ?? firstCategory['name']})');
+                  } else {
+                    results.add('⚠️ No categories returned or empty.');
+                  }
+                } catch (_) {
+                  results.add('⚠️ VOD Categories response not JSON.');
+                }
+              }
+
+              // 4. Get VOD Movie
+              results.add('--- Fetching Sample VOD Movie ---');
+              final catId = firstCategory != null ? (firstCategory['id']?.toString() ?? '') : '';
+              var moviesUrl = '$portalUrl?type=vod&action=get_objects&category=$catId&p=1';
+              if (deviceId.isNotEmpty) {
+                moviesUrl += '&device_id=$deviceId&device_id2=$deviceId';
+              }
+
+              final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
+              moviesReq.headers.set('Cookie', profileCookies);
+              moviesReq.headers.set('Authorization', 'Bearer $token');
+              moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
+              final moviesBody = await moviesRes.transform(utf8.decoder).join();
+              results.add('Movies List Status: ${moviesRes.statusCode}');
+
+              String cmd = '';
+              String movieName = '';
+              if (moviesRes.statusCode == 200) {
+                try {
+                  final moviesData = json.decode(moviesBody);
+                  final rawMovies = moviesData['js']?['data'] ?? moviesData['result']?['data'] ?? moviesData['js'] ?? moviesData['result'] ?? [];
+                  if (rawMovies is List && rawMovies.isNotEmpty) {
+                    final firstMovie = rawMovies.first;
+                    cmd = firstMovie['cmd']?.toString() ?? '';
+                    movieName = firstMovie['name']?.toString() ?? '';
+                    results.add('✅ Movie: "$movieName", CMD: "$cmd"');
+                  } else {
+                    results.add('⚠️ No movies found.');
+                  }
+                } catch (_) {
+                  results.add('⚠️ Movies response not JSON.');
+                }
+              }
+
+              // 5. Try Create Link
+              if (cmd.isNotEmpty) {
+                results.add('--- Trying Create Link ---');
+                var linkUrl = '$portalUrl?type=vod&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&disable_ad=1&download=0&play_lite=0';
+                if (deviceId.isNotEmpty) {
+                  linkUrl += '&device_id=$deviceId&device_id2=$deviceId';
+                }
+
+                final linkReq = await ioClient.getUrl(Uri.parse(linkUrl));
+                linkReq.headers.set('Cookie', profileCookies);
+                linkReq.headers.set('Authorization', 'Bearer $token');
+                linkReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+                final linkRes = await linkReq.close().timeout(const Duration(seconds: 8));
+                final linkBody = await linkRes.transform(utf8.decoder).join();
+                results.add('Create Link Status: ${linkRes.statusCode}');
+                try {
+                  final linkData = json.decode(linkBody);
+                  final finalUrl = linkData['js']?['cmd']?.toString() ?? linkData['result']?.toString() ?? '';
+                  if (finalUrl.isNotEmpty) {
+                    results.add('✅ Stream URL: ${finalUrl.substring(0, finalUrl.length > 30 ? 30 : finalUrl.length)}...');
+                  } else {
+                    results.add('❌ Response: $linkBody');
+                  }
+                } catch (_) {
+                  results.add('❌ Response (non-JSON): $linkBody');
+                }
+              }
             }
           } else if (response.statusCode == 403) {
             if (body.contains('Cloudflare') || body.contains('cloudflare')) {
@@ -233,6 +353,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           } else {
             results.add('❌ Status ${response.statusCode}. Body: ${body.substring(0, body.length > 150 ? 150 : body.length)}');
           }
+          ioClient.close();
         } catch (e) {
           results.add('❌ Error: $e');
         }
