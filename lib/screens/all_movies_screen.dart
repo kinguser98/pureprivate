@@ -248,6 +248,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
                         final movie = _filteredMovies[index];
                         return MovieCard(
                           movie: movie,
+                          showAllMoviesDesign: true,
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute<void>(
