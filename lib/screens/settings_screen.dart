@@ -220,8 +220,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               } else {
                 results.add('⚠️ 200 OK but no token. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
               }
-            } catch (_) {
-              results.add('⚠️ 200 OK but not JSON. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
+            } catch (e) {
+              results.add('⚠️ Handshake response not JSON. Error: $e. Body: ${body.substring(0, body.length > 250 ? 250 : body.length)}');
             }
 
             if (token.isNotEmpty) {
@@ -274,8 +274,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   } else {
                     results.add('⚠️ No categories returned or empty.');
                   }
-                } catch (_) {
-                  results.add('⚠️ VOD Categories response not JSON.');
+                } catch (e) {
+                  results.add('⚠️ VOD Categories not JSON. Error: $e. Body: ${catsBody.substring(0, catsBody.length > 250 ? 250 : catsBody.length)}');
                 }
               }
 
@@ -310,8 +310,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   } else {
                     results.add('⚠️ No movies found.');
                   }
-                } catch (_) {
-                  results.add('⚠️ Movies response not JSON.');
+                } catch (e) {
+                  results.add('⚠️ Movies response not JSON. Error: $e. Body: ${moviesBody.substring(0, moviesBody.length > 250 ? 250 : moviesBody.length)}');
                 }
               }
 
@@ -339,8 +339,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   } else {
                     results.add('❌ Response: $linkBody');
                   }
-                } catch (_) {
-                  results.add('❌ Response (non-JSON): $linkBody');
+                } catch (e) {
+                  results.add('❌ Response (non-JSON). Error: $e. Body: ${linkBody.substring(0, linkBody.length > 250 ? 250 : linkBody.length)}');
                 }
               }
             }
