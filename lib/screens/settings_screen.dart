@@ -187,7 +187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
 
         var hsUrl = '$portalUrl?type=stb&action=handshake&js=true';
-        var cookies = 'mac=${Uri.encodeComponent(mac)}; stb_lang=en; timezone=GMT';
+        var cookies = 'mac=$mac; stb_lang=en; timezone=GMT';
         if (deviceId.isNotEmpty) {
           cookies += '; device_id=$deviceId; device_id2=$deviceId';
           hsUrl += '&device_id=${Uri.encodeComponent(deviceId)}&device_id2=${Uri.encodeComponent(deviceId)}';

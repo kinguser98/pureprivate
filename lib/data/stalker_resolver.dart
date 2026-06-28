@@ -248,7 +248,7 @@ class StalkerResolver {
     var handshakeUrl = '$portalUrl?type=stb&action=handshake&js=true';
     handshakeUrl = _appendDeviceParams(handshakeUrl, deviceId);
     
-    var cookieStr = 'mac=${Uri.encodeComponent(macAddress)}; stb_lang=en; timezone=GMT';
+    var cookieStr = 'mac=$macAddress; stb_lang=en; timezone=GMT';
     if (deviceId.isNotEmpty) {
       cookieStr += '; device_id=$deviceId; device_id2=$deviceId';
     }
@@ -300,7 +300,7 @@ class StalkerResolver {
     }
 
     // 2. Load Profile (Stalker standard initialization)
-    var cookiesStr = 'mac=${Uri.encodeComponent(macAddress)}; token=$token; Bearer=$token; stb_lang=en; timezone=GMT';
+    var cookiesStr = 'mac=$macAddress; token=$token; Bearer=$token; stb_lang=en; timezone=GMT';
     if (deviceId.isNotEmpty) {
       cookiesStr += '; device_id=$deviceId; device_id2=$deviceId';
     }
