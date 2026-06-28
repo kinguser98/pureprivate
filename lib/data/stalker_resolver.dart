@@ -265,8 +265,14 @@ class StalkerResolver {
         lastError = e;
         debugPrint('Stalker resolveStream failed for variation "$currentCmd": $e');
         
-        // Clear auth cache to ensure subsequent retries use a fresh token/session
-        clearCache();
+        final errStr = e.toString().toLowerCase();
+        // ONLY clear auth cache if the error is related to authentication/authorization.
+        // Doing so for standard stream resolution issues (like "nothing_to_play") leads to
+        // rapid handshake calls and HTTP 429 Rate Limiting.
+        if (!errStr.contains('nothing_to_play')) {
+          debugPrint('Stalker clearing cache due to potential auth/network error: $e');
+          clearCache();
+        }
         
         // Short pause before next attempt if there are more variations to try
         if (i < cmdVariations.length - 1) {
@@ -313,6 +319,9 @@ class StalkerResolver {
     }
 
     final responseBody = response.body;
+    if (responseBody.contains('Authorization failed') || responseBody.contains('Authorisation failed')) {
+      throw Exception('Authorization failed');
+    }
     if (responseBody.contains('nothing_to_play')) {
       throw Exception('nothing_to_play');
     }
