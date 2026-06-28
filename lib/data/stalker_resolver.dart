@@ -281,6 +281,39 @@ class StalkerResolver {
       }
     }
 
+    // Fallback: If all variations failed, check if we can play the HTTP link directly
+    final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+    final macAddress = (settings['mac_address'] ?? '').toString().trim();
+    var deviceId = (settings['device_id'] ?? '').toString().trim();
+    if (deviceId.contains(' ')) {
+      deviceId = deviceId.split(' ').last.trim();
+    }
+
+    for (final cmdVar in cmdVariations) {
+      var urlToCheck = cmdVar;
+      if (urlToCheck.startsWith('ffmpeg ')) {
+        urlToCheck = urlToCheck.substring(7);
+      }
+      if (urlToCheck.startsWith('auto ')) {
+        urlToCheck = urlToCheck.substring(5);
+      }
+      urlToCheck = urlToCheck.trim();
+      if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
+        debugPrint('Stalker VOD resolution failed via create_link, falling back to direct HTTP link: $urlToCheck');
+        var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
+        if (deviceId.isNotEmpty) {
+          playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+        }
+        return StalkerStream(
+          url: urlToCheck,
+          headers: {
+            'User-Agent': userAgent,
+            'Cookie': playerCookies,
+          },
+        );
+      }
+    }
+
     throw lastError ?? Exception('Failed to resolve stalker stream for cmd: $cmd');
   }
 
