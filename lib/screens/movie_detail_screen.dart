@@ -948,9 +948,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         },
       );
       
+      var stalkerCmd = source;
+      var portalId = 1;
+      
       try {
-        var stalkerCmd = source;
-        var portalId = 1;
         if (source.startsWith('stalker://')) {
           final uri = Uri.parse(source);
           portalId = int.tryParse(uri.host) ?? 1;
@@ -968,8 +969,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Stalker VOD resolution failed: $e'),
+              content: Text('Stalker VOD failed (Portal $portalId, cmd: $stalkerCmd): $e'),
               backgroundColor: Colors.redAccent,
+              duration: const Duration(seconds: 8),
             ),
           );
         }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -129,6 +131,152 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Device ID copied to clipboard.')),
     );
+  }
+
+  Future<void> _testPortalConnectivity() async {
+    setState(() {
+      _isSyncing = true;
+      _syncMessage = 'Fetching portal list...';
+    });
+
+    try {
+      final portals = await StalkerResolver.getAllPortals();
+      if (portals.isEmpty) {
+        if (mounted) {
+          setState(() => _isSyncing = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No portals configured'), backgroundColor: Colors.redAccent),
+          );
+        }
+        return;
+      }
+
+      final results = <String>[];
+
+      for (final portal in portals) {
+        final id = portal['id']?.toString() ?? '?';
+        final name = portal['name']?.toString() ?? 'Portal $id';
+        final rawUrl = portal['portal_url']?.toString() ?? '';
+        final mac = portal['mac_address']?.toString() ?? '';
+        var deviceId = portal['device_id']?.toString() ?? '';
+        if (deviceId.contains(' ')) {
+          deviceId = deviceId.split(' ').last.trim();
+        }
+        final userAgent = portal['user_agent']?.toString().isNotEmpty == true
+            ? portal['user_agent'].toString()
+            : 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3';
+
+        results.add('═══ Portal $id: $name ═══');
+        results.add('URL: $rawUrl');
+        results.add('MAC: $mac');
+
+        if (rawUrl.isEmpty || mac.isEmpty) {
+          results.add('❌ SKIP: URL or MAC is empty');
+          results.add('');
+          continue;
+        }
+
+        // Build handshake URL
+        var portalUrl = rawUrl.trim();
+        if (portalUrl.endsWith('/')) portalUrl = portalUrl.substring(0, portalUrl.length - 1);
+        portalUrl = portalUrl.replaceAll(RegExp(r'/c$'), '/server/load.php');
+        portalUrl = portalUrl.replaceAll(RegExp(r'/c/$'), '/server/load.php');
+        if (!portalUrl.contains('portal.php') && !portalUrl.contains('load.php')) {
+          portalUrl = '$portalUrl/server/load.php';
+        }
+
+        var hsUrl = '$portalUrl?type=stb&action=handshake&js=true';
+        var cookies = 'mac=${Uri.encodeComponent(mac)}; stb_lang=en; timezone=GMT';
+        if (deviceId.isNotEmpty) {
+          cookies += '; device_id=$deviceId; device_id2=$deviceId';
+          hsUrl += '&device_id=${Uri.encodeComponent(deviceId)}&device_id2=${Uri.encodeComponent(deviceId)}';
+        }
+
+        setState(() => _syncMessage = 'Testing Portal $id: $name...');
+
+        try {
+          // Use dart:io HttpClient for better cookie/redirect handling
+          final ioClient = HttpClient();
+          ioClient.userAgent = userAgent;
+          ioClient.connectionTimeout = const Duration(seconds: 12);
+          
+          final request = await ioClient.getUrl(Uri.parse(hsUrl));
+          request.headers.set('Cookie', cookies);
+          request.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+          final response = await request.close().timeout(const Duration(seconds: 12));
+          final body = await response.transform(utf8.decoder).join();
+          ioClient.close();
+
+          results.add('HTTP Status: ${response.statusCode}');
+          results.add('Headers: ${response.headers.value('content-type') ?? 'unknown'}');
+
+          if (response.statusCode == 200) {
+            // Try to parse token
+            try {
+              final data = json.decode(body);
+              final token = data['js']?['token']?.toString() ?? '';
+              if (token.isNotEmpty) {
+                results.add('✅ Token: ${token.substring(0, token.length > 20 ? 20 : token.length)}...');
+              } else {
+                results.add('⚠️ 200 OK but no token. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
+              }
+            } catch (_) {
+              results.add('⚠️ 200 OK but not JSON. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
+            }
+          } else if (response.statusCode == 403) {
+            if (body.contains('Cloudflare') || body.contains('cloudflare')) {
+              results.add('❌ CLOUDFLARE BLOCKED from this device');
+            } else {
+              results.add('❌ 403 Forbidden. Body: ${body.substring(0, body.length > 200 ? 200 : body.length)}');
+            }
+          } else {
+            results.add('❌ Status ${response.statusCode}. Body: ${body.substring(0, body.length > 150 ? 150 : body.length)}');
+          }
+        } catch (e) {
+          results.add('❌ Error: $e');
+        }
+        results.add('');
+      }
+
+      setState(() => _isSyncing = false);
+
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1a1a2e),
+            title: Text('Portal Connectivity Test', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Text(
+                results.join('\n'),
+                style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: results.join('\n')));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                },
+                child: const Text('Copy', style: TextStyle(color: Colors.orangeAccent)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close', style: TextStyle(color: Colors.white54)),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isSyncing = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Test failed: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
   }
 
   Future<void> _runStalkerSync(bool isVod) async {
@@ -574,6 +722,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           subtitle: const Text('Fetch and upload all portal VOD movies to your admin panel database', style: TextStyle(color: Colors.white38, fontSize: 12)),
                           onTap: () => _runStalkerSync(true),
+                        ),
+                        const Divider(color: Colors.white10, height: 1),
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          leading: const Icon(Icons.network_check_rounded, color: Colors.orangeAccent),
+                          title: Text(
+                            'Test Portal Connectivity',
+                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text('Test handshake from this device for all portals', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                          onTap: _testPortalConnectivity,
                         ),
                       ],
                     ),

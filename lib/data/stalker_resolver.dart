@@ -1,7 +1,15 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'api_service.dart';
+
+/// Simple response wrapper for dart:io HttpClient responses
+class _StalkerHttpResponse {
+  final int statusCode;
+  final String body;
+  _StalkerHttpResponse(this.statusCode, this.body);
+}
 
 class StalkerStream {
   final String url;
@@ -97,8 +105,10 @@ class StalkerResolver {
     return 'Model: $model; Link: Ethernet';
   }
 
-  /// Centralized GET helper that performs exponential backoff retries on HTTP 429.
-  static Future<http.Response> _stalkerGet(
+  /// Centralized GET helper using dart:io HttpClient for better Cloudflare compatibility.
+  /// dart:io handles cookies, redirects, and connection reuse properly which allows
+  /// requests to pass through Cloudflare-protected Stalker portals.
+  static Future<_StalkerHttpResponse> _stalkerGet(
     String url, {
     required Map<String, String> headers,
     int timeoutSeconds = 12,
@@ -110,11 +120,28 @@ class StalkerResolver {
     while (attempts < maxAttempts) {
       attempts++;
       try {
-        final response = await http
-            .get(Uri.parse(url), headers: headers)
-            .timeout(Duration(seconds: timeoutSeconds));
+        final ioClient = HttpClient();
+        ioClient.connectionTimeout = Duration(seconds: timeoutSeconds);
+        // Set User-Agent from headers if provided
+        if (headers.containsKey('User-Agent')) {
+          ioClient.userAgent = headers['User-Agent'];
+        }
+        
+        final request = await ioClient.getUrl(Uri.parse(url));
+        // Apply all headers
+        headers.forEach((key, value) {
+          if (key != 'User-Agent') { // Already set above
+            request.headers.set(key, value);
+          }
+        });
+        
+        final response = await request.close().timeout(Duration(seconds: timeoutSeconds));
+        final body = await response.transform(utf8.decoder).join();
+        ioClient.close();
+        
+        final statusCode = response.statusCode;
 
-        if (response.statusCode == 429) {
+        if (statusCode == 429) {
           if (attempts < maxAttempts) {
             final delay = backoffs[attempts - 1];
             debugPrint('Stalker GET rate-limited (429) on attempt $attempts. Waiting ${delay}ms to retry url: $url');
@@ -122,7 +149,7 @@ class StalkerResolver {
             continue;
           }
         }
-        return response;
+        return _StalkerHttpResponse(statusCode, body);
       } catch (e) {
         if (attempts >= maxAttempts) {
           rethrow;
@@ -694,7 +721,7 @@ class StalkerResolver {
       deviceId = deviceId.split(' ').last.trim();
     }
 
-    Future<http.Response> getWithRetry(String url) async {
+    Future<_StalkerHttpResponse> getWithRetry(String url) async {
       final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
       final currentHeaders = {
         'User-Agent': userAgent,
@@ -780,7 +807,7 @@ class StalkerResolver {
       }
 
       // Auto-retry helper for requests that handle authorization loss or rate limit (429)
-      Future<http.Response> getWithRetry(String url) async {
+      Future<_StalkerHttpResponse> getWithRetry(String url) async {
         final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
         final currentHeaders = {
           'User-Agent': userAgent,
