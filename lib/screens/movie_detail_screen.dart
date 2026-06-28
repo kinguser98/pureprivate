@@ -949,7 +949,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       );
       
       try {
-        final stalkerStream = await StalkerResolver.resolveStream(source, isLive: false);
+        var stalkerCmd = source;
+        var portalId = 1;
+        if (source.startsWith('stalker://')) {
+          final uri = Uri.parse(source);
+          portalId = int.tryParse(uri.host) ?? 1;
+          stalkerCmd = uri.path;
+          if (uri.query.isNotEmpty) {
+            stalkerCmd += '?${uri.query}';
+          }
+        }
+        final stalkerStream = await StalkerResolver.resolveStream(stalkerCmd, portalId, isLive: false);
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
         
         _play(stalkerStream.url, resumeDirectly: resumeDirectly, headers: stalkerStream.headers);

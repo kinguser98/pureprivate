@@ -134,6 +134,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _runStalkerSync(bool isVod) async {
     setState(() {
       _isSyncing = true;
+      _syncMessage = isVod ? 'Fetching Stalker Portals list...' : 'Syncing Stalker Channels...';
+    });
+
+    List<Map<String, dynamic>> portals = [];
+    try {
+      portals = await StalkerResolver.getAllPortals();
+    } catch (e) {
+      debugPrint('Error getting portals: $e');
+    }
+
+    if (portals.isEmpty) {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No Stalker Portals configured on the backend. Please add one first in the admin panel.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
+    int? selectedPortalId;
+    if (mounted) {
+      setState(() => _isSyncing = false);
+      selectedPortalId = await showDialog<int>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => MobilePortalPickerDialog(portals: portals),
+      );
+    }
+
+    if (selectedPortalId == null) {
+      return; // Cancelled
+    }
+
+    setState(() {
+      _isSyncing = true;
       _syncMessage = isVod ? 'Fetching Stalker VOD Categories...' : 'Syncing Stalker Channels...';
     });
 
@@ -141,7 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (isVod) {
       try {
-        final categories = await StalkerResolver.getVodCategories();
+        final categories = await StalkerResolver.getVodCategories(selectedPortalId);
         if (mounted) {
           setState(() {
             _isSyncing = false;
@@ -188,6 +227,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final Map<String, dynamic> result;
       if (isVod) {
         result = await StalkerResolver.syncVodsToServer(
+          portalId: selectedPortalId,
           selectedCategoryIds: selectedCategoryIds,
           onProgress: (categoryName, currentPage, totalPages, totalAccumulated) {
             if (mounted) {
@@ -201,7 +241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
         );
       } else {
-        result = await StalkerResolver.syncChannelsToServer();
+        result = await StalkerResolver.syncChannelsToServer(selectedPortalId);
       }
       
       if (mounted) {
@@ -772,6 +812,56 @@ class _MobileCategoryPickerDialogState extends State<MobileCategoryPickerDialog>
             'Sync (${_selectedIds.length})',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class MobilePortalPickerDialog extends StatelessWidget {
+  final List<Map<String, dynamic>> portals;
+
+  const MobilePortalPickerDialog({super.key, required this.portals});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.grey[900],
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text(
+        'Select Stalker Portal',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: portals.length,
+          itemBuilder: (context, index) {
+            final p = portals[index];
+            final portalId = int.tryParse(p['id']?.toString() ?? '') ?? 0;
+            final portalName = p['name']?.toString() ?? 'Stalker Portal';
+            final portalUrl = p['portal_url']?.toString() ?? '';
+
+            return Card(
+              color: Colors.white.withValues(alpha: 0.05),
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: const Icon(Icons.settings_input_hdmi, color: Colors.pinkAccent),
+                title: Text(portalName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(portalUrl, style: const TextStyle(color: Colors.white60, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () {
+                  Navigator.of(context).pop(portalId);
+                },
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
         ),
       ],
     );

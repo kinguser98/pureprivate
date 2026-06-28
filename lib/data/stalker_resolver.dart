@@ -11,23 +11,36 @@ class StalkerStream {
 }
 
 class StalkerResolver {
-  static String? _cachedToken;
-  static String? _cachedCookies;
-  static DateTime? _tokenExpiry;
+  static final Map<int, String> _cachedTokens = {};
+  static final Map<int, String> _cachedCookiesMap = {};
+  static final Map<int, DateTime> _tokenExpiries = {};
   
-  static Map<String, dynamic>? _stalkerSettings;
+  static final Map<int, Map<String, dynamic>> _stalkerSettingsMap = {};
+
+  /// Fetches the list of all configured portals from the backend
+  static Future<List<Map<String, dynamic>>> getAllPortals() async {
+    final uri = Uri.parse('${ApiService.apiUrl}?action=get_stalker_settings');
+    final response = await http.get(uri).timeout(const Duration(seconds: 8));
+    if (response.statusCode == 200) {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      if (data is List) {
+        return List<Map<String, dynamic>>.from(data);
+      }
+    }
+    return [];
+  }
 
   /// Fetches Stalker Portal settings from the OTT backend api
-  static Future<Map<String, dynamic>> _getSettings() async {
-    if (_stalkerSettings != null) return _stalkerSettings!;
+  static Future<Map<String, dynamic>> _getSettings(int portalId) async {
+    if (_stalkerSettingsMap.containsKey(portalId)) return _stalkerSettingsMap[portalId]!;
 
-    final uri = Uri.parse('${ApiService.apiUrl}?action=get_stalker_settings');
+    final uri = Uri.parse('${ApiService.apiUrl}?action=get_stalker_settings&portal_id=$portalId');
     final response = await http.get(uri).timeout(const Duration(seconds: 8));
     
     if (response.statusCode == 200) {
       final data = json.decode(utf8.decode(response.bodyBytes));
       if (data is Map<String, dynamic> && !data.containsKey('error')) {
-        _stalkerSettings = data;
+        _stalkerSettingsMap[portalId] = data;
         return data;
       }
       throw Exception(data['error'] ?? 'Stalker Portal settings not configured on backend.');
@@ -36,10 +49,16 @@ class StalkerResolver {
   }
 
   /// Reset cache to force re-authentication (called on playback failures)
-  static void clearCache() {
-    _cachedToken = null;
-    _cachedCookies = null;
-    _tokenExpiry = null;
+  static void clearCache({int? portalId}) {
+    if (portalId != null) {
+      _cachedTokens.remove(portalId);
+      _cachedCookiesMap.remove(portalId);
+      _tokenExpiries.remove(portalId);
+    } else {
+      _cachedTokens.clear();
+      _cachedCookiesMap.clear();
+      _tokenExpiries.clear();
+    }
   }
 
   /// Cleans the portal URL to point to portal.php
@@ -117,13 +136,13 @@ class StalkerResolver {
   }
 
   /// Performs Stalker authentication and returns session cookies & token
-  static Future<String> _authenticate(Map<String, dynamic> settings) async {
+  static Future<String> _authenticate(int portalId, Map<String, dynamic> settings) async {
     // Return cached token if valid (less than 2 hours old)
-    if (_cachedToken != null && 
-        _cachedCookies != null && 
-        _tokenExpiry != null && 
-        _tokenExpiry!.isAfter(DateTime.now())) {
-      return _cachedToken!;
+    if (_cachedTokens.containsKey(portalId) && 
+        _cachedCookiesMap.containsKey(portalId) && 
+        _tokenExpiries.containsKey(portalId) && 
+        _tokenExpiries[portalId]!.isAfter(DateTime.now())) {
+      return _cachedTokens[portalId]!;
     }
 
     final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
@@ -222,17 +241,17 @@ class StalkerResolver {
     }
 
     // Cache credentials
-    _cachedToken = token;
-    _cachedCookies = cookiesStr;
-    _tokenExpiry = DateTime.now().add(const Duration(hours: 2));
+    _cachedTokens[portalId] = token;
+    _cachedCookiesMap[portalId] = cookiesStr;
+    _tokenExpiries[portalId] = DateTime.now().add(const Duration(hours: 2));
 
     debugPrint('Stalker Auth successful. Token acquired.');
     return token;
   }
 
   /// Resolves the direct channel stream link from Stalker cmd
-  static Future<StalkerStream> resolveStream(String cmd, {bool isLive = true}) async {
-    final settings = await _getSettings();
+  static Future<StalkerStream> resolveStream(String cmd, int portalId, {bool isLive = true}) async {
+    final settings = await _getSettings(portalId);
     
     final cmdVariations = <String>[];
     cmdVariations.add(cmd);
@@ -257,8 +276,8 @@ class StalkerResolver {
       debugPrint('Stalker resolveStream trying variation $i: "$currentCmd"');
       
       try {
-        final token = await _authenticate(settings);
-        final stream = await _resolveSingleCmd(currentCmd, settings, token, isLive);
+        final token = await _authenticate(portalId, settings);
+        final stream = await _resolveSingleCmd(portalId, currentCmd, settings, token, isLive);
         debugPrint('Stalker resolveStream successful with variation: "$currentCmd"');
         return stream;
       } catch (e) {
@@ -271,7 +290,7 @@ class StalkerResolver {
         // rapid handshake calls and HTTP 429 Rate Limiting.
         if (!errStr.contains('nothing_to_play')) {
           debugPrint('Stalker clearing cache due to potential auth/network error: $e');
-          clearCache();
+          clearCache(portalId: portalId);
         }
         
         // Short pause before next attempt if there are more variations to try
@@ -319,6 +338,7 @@ class StalkerResolver {
 
   /// Helper to resolve a single command variation
   static Future<StalkerStream> _resolveSingleCmd(
+    int portalId,
     String cmd,
     Map<String, dynamic> settings,
     String token,
@@ -339,7 +359,7 @@ class StalkerResolver {
     
     final headers = {
       'User-Agent': userAgent,
-      'Cookie': _cachedCookies ?? 'mac=${Uri.encodeComponent(macAddress)}',
+      'Cookie': _cachedCookiesMap[portalId] ?? 'mac=${Uri.encodeComponent(macAddress)}',
       'Authorization': 'Bearer $token',
       'X-User-Agent': _getXUserAgent(userAgent),
     };
@@ -348,18 +368,15 @@ class StalkerResolver {
     var response = await _stalkerGet(linkUrl, headers: headers, timeoutSeconds: 12);
     
     if (response.statusCode != 200) {
-      throw Exception('Stream resolution HTTP error: ${response.statusCode}');
+      throw Exception('Stalker response code: ${response.statusCode}');
     }
 
-    final responseBody = response.body;
-    if (responseBody.contains('Authorization failed') || responseBody.contains('Authorisation failed')) {
-      throw Exception('Authorization failed');
-    }
-    if (responseBody.contains('nothing_to_play')) {
-      throw Exception('nothing_to_play');
+    final body = response.body;
+    if (body.contains('Authorization failed') || body.contains('Authorisation failed')) {
+      throw Exception('Authorization failed on Stalker Portal.');
     }
 
-    final data = json.decode(responseBody);
+    final data = json.decode(body);
     String streamUrl = '';
 
     if (data is Map) {
@@ -411,9 +428,9 @@ class StalkerResolver {
   }
 
   /// Resolves logo request headers including user agent and portal MAC cookie.
-  static Future<Map<String, String>> getLogoHeaders() async {
+  static Future<Map<String, String>> getLogoHeaders(int portalId) async {
     try {
-      final settings = await _getSettings();
+      final settings = await _getSettings(portalId);
       final macAddress = (settings['mac_address'] ?? '').toString().trim();
       final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
       var deviceId = (settings['device_id'] ?? '').toString().trim();
@@ -480,10 +497,10 @@ class StalkerResolver {
 
   /// Syncs all channels from the Stalker Portal directly to the OTT backend server database.
   /// Bypasses server-side Cloudflare blocks because this runs from a clean client-side IP.
-  static Future<Map<String, dynamic>> syncChannelsToServer() async {
+  static Future<Map<String, dynamic>> syncChannelsToServer(int portalId) async {
     try {
-      final settings = await _getSettings();
-      final token = await _authenticate(settings);
+      final settings = await _getSettings(portalId);
+      final token = await _authenticate(portalId, settings);
       
       final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
       final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
@@ -498,7 +515,7 @@ class StalkerResolver {
 
       final headers = {
         'User-Agent': userAgent,
-        'Cookie': _cachedCookies!,
+        'Cookie': _cachedCookiesMap[portalId]!,
         'Authorization': 'Bearer $token',
         'X-User-Agent': _getXUserAgent(userAgent),
       };
@@ -593,7 +610,7 @@ class StalkerResolver {
       }
 
       // 4. Send to OTT backend
-      final uploadUrl = '${ApiService.apiUrl}?action=import_channels_client';
+      final uploadUrl = '${ApiService.apiUrl}?action=import_channels_client&portal_id=$portalId';
       final uploadResponse = await http.post(
         Uri.parse(uploadUrl),
         headers: {'Content-Type': 'application/json'},
@@ -621,8 +638,8 @@ class StalkerResolver {
   }
 
   /// Fetches VOD categories from Stalker Portal.
-  static Future<List<Map<String, String>> > getVodCategories() async {
-    final settings = await _getSettings();
+  static Future<List<Map<String, String>> > getVodCategories(int portalId) async {
+    final settings = await _getSettings(portalId);
     final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
     final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
     var deviceId = (settings['device_id'] ?? '').toString().trim();
@@ -631,10 +648,10 @@ class StalkerResolver {
     }
 
     Future<http.Response> getWithRetry(String url) async {
-      final currentToken = _cachedToken ?? await _authenticate(settings);
+      final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
       final currentHeaders = {
         'User-Agent': userAgent,
-        'Cookie': _cachedCookies!,
+        'Cookie': _cachedCookiesMap[portalId]!,
         'Authorization': 'Bearer $currentToken',
         'X-User-Agent': _getXUserAgent(userAgent),
       };
@@ -649,12 +666,12 @@ class StalkerResolver {
       }
       
       debugPrint('Stalker request failed or unauthorized, retrying handshake...');
-      clearCache();
+      clearCache(portalId: portalId);
       
-      final newToken = await _authenticate(settings);
+      final newToken = await _authenticate(portalId, settings);
       final newHeaders = {
         'User-Agent': userAgent,
-        'Cookie': _cachedCookies!,
+        'Cookie': _cachedCookiesMap[portalId]!,
         'Authorization': 'Bearer $newToken',
         'X-User-Agent': _getXUserAgent(userAgent),
       };
@@ -702,11 +719,12 @@ class StalkerResolver {
   /// Syncs all or selected VOD movies from the Stalker Portal directly to the OTT backend server database.
   /// Bypasses server-side Cloudflare/datacenter IP blocks because this runs from a clean client-side IP.
   static Future<Map<String, dynamic>> syncVodsToServer({
+    required int portalId,
     List<String>? selectedCategoryIds,
     void Function(String categoryName, int currentPage, int totalPages, int totalAccumulated)? onProgress,
   }) async {
     try {
-      final settings = await _getSettings();
+      final settings = await _getSettings(portalId);
       final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
       final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
       var deviceId = (settings['device_id'] ?? '').toString().trim();
@@ -716,10 +734,10 @@ class StalkerResolver {
 
       // Auto-retry helper for requests that handle authorization loss or rate limit (429)
       Future<http.Response> getWithRetry(String url) async {
-        final currentToken = _cachedToken ?? await _authenticate(settings);
+        final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
         final currentHeaders = {
           'User-Agent': userAgent,
-          'Cookie': _cachedCookies!,
+          'Cookie': _cachedCookiesMap[portalId]!,
           'Authorization': 'Bearer $currentToken',
           'X-User-Agent': _getXUserAgent(userAgent),
         };
@@ -735,12 +753,12 @@ class StalkerResolver {
         
         // Clear cache and try once more
         debugPrint('Stalker request failed or unauthorized, retrying handshake...');
-        clearCache();
+        clearCache(portalId: portalId);
         
-        final newToken = await _authenticate(settings);
+        final newToken = await _authenticate(portalId, settings);
         final newHeaders = {
           'User-Agent': userAgent,
-          'Cookie': _cachedCookies!,
+          'Cookie': _cachedCookiesMap[portalId]!,
           'Authorization': 'Bearer $newToken',
           'X-User-Agent': _getXUserAgent(userAgent),
         };
@@ -946,7 +964,7 @@ class StalkerResolver {
 
             // Incremental Upload in chunks of 300 to prevent OOM
             if (categoryPayload.isNotEmpty && categoryPayload.length >= 300) {
-              final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client';
+              final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client&portal_id=$portalId';
               final uploadResponse = await http.post(
                 Uri.parse(uploadUrl),
                 headers: {'Content-Type': 'application/json'},
@@ -973,7 +991,7 @@ class StalkerResolver {
 
           // Upload remaining VOD movies for this category
           if (categoryPayload.isNotEmpty) {
-            final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client';
+            final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client&portal_id=$portalId';
             final uploadResponse = await http.post(
               Uri.parse(uploadUrl),
               headers: {'Content-Type': 'application/json'},

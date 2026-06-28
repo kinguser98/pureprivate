@@ -116,7 +116,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
     if (mounted) setState(() => _isLoading = true);
 
     try {
-      final headers = await StalkerResolver.getLogoHeaders();
+      final headers = await StalkerResolver.getLogoHeaders(1);
       final uri = Uri.parse('${ApiService.apiUrl}?action=get_live_channels');
       final response = await http.get(uri).timeout(const Duration(seconds: 12));
       
@@ -205,8 +205,9 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
     });
 
     try {
+      final portalId = int.tryParse(channel['portal_id']?.toString() ?? '') ?? 1;
       // Resolve direct stream link from Stalker Portal
-      final resolved = await StalkerResolver.resolveStream(cmd);
+      final resolved = await StalkerResolver.resolveStream(cmd, portalId);
       
       if (mounted) {
         setState(() => _isResolvingStream = false);
