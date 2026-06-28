@@ -1828,13 +1828,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   ),
                                 ),
                                 // Sharp Poster Card with Gold Border
+                                // Sharp Poster Card with Border
                                 Container(
                                   width: 120,
                                   height: 180,
                                   decoration: BoxDecoration(
                                     color: AppColors.surface,
                                     borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.8), width: 1.5), // Gold Border
+                                    border: Border.all(color: Colors.white.withOpacity(0.12), width: 0.8),
                                     boxShadow: const [
                                       BoxShadow(
                                         color: Colors.black54,
@@ -1859,6 +1860,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  const SizedBox(height: 35),
                                   // Movie Title
                                   Text(
                                     movie.title,

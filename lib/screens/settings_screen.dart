@@ -189,11 +189,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (isVod) {
         result = await StalkerResolver.syncVodsToServer(
           selectedCategoryIds: selectedCategoryIds,
-          onProgress: (categoryName, importedThisCategory, totalAccumulated) {
+          onProgress: (categoryName, currentPage, totalPages, totalAccumulated) {
             if (mounted) {
               setState(() {
                 _syncMessage = 'Syncing Stalker VOD Library...\n\n'
                     'Category: $categoryName\n'
+                    'Page: $currentPage / $totalPages\n'
                     'Total Imported: $totalAccumulated movies';
               });
             }

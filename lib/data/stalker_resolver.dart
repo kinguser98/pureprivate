@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:private_cinema_mobile/data/api_service.dart';
+import 'api_service.dart';
 
 class StalkerStream {
   final String url;
@@ -246,7 +246,7 @@ class StalkerResolver {
 
       // Request stream URL via create_link
       final typeParam = isLive ? 'itv' : 'vod';
-      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=0&disable_ad=0&download=0&play_lite=0';
+      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=&disable_ad=1&download=0&play_lite=0';
       linkUrl = _appendDeviceParams(linkUrl, deviceId);
       
       final headers = {
@@ -330,7 +330,7 @@ class StalkerResolver {
       }
 
       final typeParam = isLive ? 'itv' : 'vod';
-      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=0&disable_ad=0&download=0&play_lite=0';
+      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&forced_storage=&disable_ad=1&download=0&play_lite=0';
       linkUrl = _appendDeviceParams(linkUrl, deviceId);
       
       final headers = {
@@ -690,7 +690,7 @@ class StalkerResolver {
   /// Bypasses server-side Cloudflare/datacenter IP blocks because this runs from a clean client-side IP.
   static Future<Map<String, dynamic>> syncVodsToServer({
     List<String>? selectedCategoryIds,
-    void Function(String categoryName, int importedThisCategory, int totalAccumulated)? onProgress,
+    void Function(String categoryName, int currentPage, int totalPages, int totalAccumulated)? onProgress,
   }) async {
     try {
       final settings = await _getSettings();
@@ -806,41 +806,60 @@ class StalkerResolver {
         final catId = cat['id']!;
         final catTitle = cat['title']!;
         final List<Map<String, dynamic>> categoryPayload = [];
+        int totalPagesVal = 1;
         
         // Notify start of category
-        onProgress?.call(catTitle, 0, totalImported);
+        onProgress?.call(catTitle, 1, 1, totalImported);
         
         try {
           // Pacing delay between categories to prevent HTTP 429
-          await Future.delayed(const Duration(milliseconds: 600));
+          await Future.delayed(const Duration(milliseconds: 200));
           
           final Set<String> seenIdsThisCategory = {};
           int currentPage = 1;
           bool hasMore = true;
+          int consecutiveFailures = 0;
           
           while (hasMore && currentPage <= 3000) { // Limit to 3000 pages to prevent infinite loops
-            var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=$currentPage';
-            moviesUrl = _appendDeviceParams(moviesUrl, deviceId);
+            dynamic moviesData;
+            dynamic rawMoviesList;
             
-            final moviesResponse = await getWithRetry(moviesUrl);
-            final responseBody = moviesResponse.body;
-            final moviesData = json.decode(responseBody);
-            dynamic rawMoviesList = [];
-            
-            if (moviesData is Map) {
-              rawMoviesList = moviesData['result'] ?? [];
-              if (rawMoviesList is! List && moviesData['result'] is Map) {
-                rawMoviesList = moviesData['result']['data'] ?? [];
-              }
-              if (rawMoviesList is! List || rawMoviesList.isEmpty) {
-                if (moviesData['js'] is Map) {
-                  rawMoviesList = moviesData['js']['data'] ?? [];
-                } else if (moviesData['js'] is List) {
-                  rawMoviesList = moviesData['js'];
+            try {
+              var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=$currentPage';
+              moviesUrl = _appendDeviceParams(moviesUrl, deviceId);
+              
+              final moviesResponse = await getWithRetry(moviesUrl);
+              final responseBody = moviesResponse.body;
+              moviesData = json.decode(responseBody);
+              rawMoviesList = [];
+              
+              if (moviesData is Map) {
+                rawMoviesList = moviesData['result'] ?? [];
+                if (rawMoviesList is! List && moviesData['result'] is Map) {
+                  rawMoviesList = moviesData['result']['data'] ?? [];
                 }
+                if (rawMoviesList is! List || rawMoviesList.isEmpty) {
+                  if (moviesData['js'] is Map) {
+                    rawMoviesList = moviesData['js']['data'] ?? [];
+                  } else if (moviesData['js'] is List) {
+                    rawMoviesList = moviesData['js'];
+                  }
+                }
+              } else if (moviesData is List) {
+                rawMoviesList = moviesData;
               }
-            } else if (moviesData is List) {
-              rawMoviesList = moviesData;
+              consecutiveFailures = 0; // Reset count on success
+            } catch (pageError) {
+              consecutiveFailures++;
+              debugPrint('Error syncing page $currentPage of category $catTitle: $pageError. Consecutive failures: $consecutiveFailures');
+              if (consecutiveFailures >= 3) {
+                debugPrint('Too many consecutive failures on page $currentPage. Skipping page.');
+                currentPage++;
+                consecutiveFailures = 0;
+              } else {
+                await Future.delayed(const Duration(seconds: 1));
+              }
+              continue;
             }
             
             if (rawMoviesList is! List || rawMoviesList.isEmpty) {
@@ -898,8 +917,8 @@ class StalkerResolver {
               }
               if (totalItems != null) {
                 final totalCount = int.tryParse(totalItems.toString()) ?? 0;
-                final totalPages = (totalCount / 14).ceil();
-                if (currentPage >= totalPages) {
+                totalPagesVal = (totalCount / 14).ceil();
+                if (currentPage >= totalPagesVal) {
                   hasMore = false;
                 }
               }
@@ -909,14 +928,37 @@ class StalkerResolver {
               hasMore = false;
             }
             
+            // Notify page progress
+            onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
+
+            // Incremental Upload in chunks of 300 to prevent OOM
+            if (categoryPayload.isNotEmpty && categoryPayload.length >= 300) {
+              final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client';
+              final uploadResponse = await http.post(
+                Uri.parse(uploadUrl),
+                headers: {'Content-Type': 'application/json'},
+                body: json.encode(categoryPayload),
+              ).timeout(const Duration(seconds: 25));
+
+              if (uploadResponse.statusCode == 200) {
+                final uploadResult = json.decode(uploadResponse.body);
+                if (uploadResult is Map && uploadResult['success'] == true) {
+                  final importedThisBatch = (uploadResult['imported'] as num?)?.toInt() ?? categoryPayload.length;
+                  totalImported += importedThisBatch;
+                  onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
+                }
+              }
+              categoryPayload.clear();
+            }
+            
             if (hasMore) {
               currentPage++;
-              // Pause slightly between requests
-              await Future.delayed(const Duration(milliseconds: 600));
+              // Pause slightly between requests (200ms is safe and fast)
+              await Future.delayed(const Duration(milliseconds: 200));
             }
           }
 
-          // Upload this category's movies immediately to backend to ensure incremental sync progress
+          // Upload remaining VOD movies for this category
           if (categoryPayload.isNotEmpty) {
             final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client';
             final uploadResponse = await http.post(
@@ -930,17 +972,9 @@ class StalkerResolver {
               if (uploadResult is Map && uploadResult['success'] == true) {
                 final importedThisCat = (uploadResult['imported'] as num?)?.toInt() ?? categoryPayload.length;
                 totalImported += importedThisCat;
-                debugPrint('Successfully synced category $catTitle: ${categoryPayload.length} movies');
-                onProgress?.call(catTitle, importedThisCat, totalImported);
-              } else {
-                onProgress?.call(catTitle, 0, totalImported);
+                onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
               }
-            } else {
-              onProgress?.call(catTitle, 0, totalImported);
             }
-          } else {
-            // Category has no new movies
-            onProgress?.call(catTitle, 0, totalImported);
           }
         } catch (e) {
           debugPrint('Error syncing category $catTitle (ID: $catId): $e. Skipping.');
