@@ -391,7 +391,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // 4. Get VOD Movie
               results.add('--- Fetching Sample VOD Movie ---');
               final catId = firstCategory != null ? (firstCategory['id']?.toString() ?? '') : '';
-              var moviesUrl = '$portalUrl?type=vod&action=get_objects&category=$catId&p=1';
+              var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=1';
               if (firstCategory != null) {
                 // If B or C succeeded, construct url and cookies accordingly
                 moviesUrl = '$moviesUrl&token=$token';
