@@ -357,7 +357,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 results.add('Trying Variation C (Raw MAC cookie)...');
                 try {
                   final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-                  final rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
+                  var rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
+                  if (deviceId.isNotEmpty) {
+                    rawCookies += '; device_id=$deviceId; device_id2=$deviceId';
+                  }
                   final mergedCatsCookies = getCookieHeader(rawCookies);
                   catsReq.headers.set('Cookie', mergedCatsCookies);
                   catsReq.headers.set('Authorization', 'Bearer $token');
@@ -395,8 +398,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
 
               final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
-              final rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
-              moviesReq.headers.set('Cookie', getCookieHeader(rawCookies));
+              moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
               moviesReq.headers.set('Authorization', 'Bearer $token');
               moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
