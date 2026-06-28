@@ -829,12 +829,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         color: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         onSelected: (track) {
-          _player.setSubtitleTrack(track);
+          if (track.id == 'import_online') {
+            _showOnlineSubtitleImportDialog();
+          } else {
+            _player.setSubtitleTrack(track);
+          }
         },
         itemBuilder: (context) {
           final tracks = _player.state.tracks.subtitle;
           final current = _player.state.track.subtitle;
-          return tracks.map((track) {
+          final List<PopupMenuEntry<SubtitleTrack>> items = [];
+          
+          items.addAll(tracks.map((track) {
             String name = track.title ?? track.language ?? 'Track ${track.id}';
             if (track.id == 'auto') name = 'Auto';
             if (track.id == 'no') name = 'Off';
@@ -859,7 +865,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 ],
               ),
             );
-          }).toList();
+          }));
+
+          items.add(const PopupMenuDivider());
+          items.add(
+            const PopupMenuItem<SubtitleTrack>(
+              value: SubtitleTrack('import_online', 'Import Online Subtitle...', 'en'),
+              child: Row(
+                children: [
+                  Icon(Icons.add_link_rounded, color: AppColors.accentBright, size: 18),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Import Online Subtitle...',
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          );
+
+          return items;
         },
       ),
     );
@@ -911,6 +936,74 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             );
           }).toList();
         },
+      ),
+    );
+  }
+
+  void _showOnlineSubtitleImportDialog() {
+    final textController = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Import Online Subtitle',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Enter a direct URL to a WebVTT (.vtt) or SubRip (.srt) subtitle file:',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: textController,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'https://example.com/subtitles.srt',
+                hintStyle: const TextStyle(color: Colors.white30),
+                filled: true,
+                fillColor: Colors.black26,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final url = textController.text.trim();
+              if (url.isNotEmpty && url.startsWith('http')) {
+                _player.setSubtitleTrack(SubtitleTrack.uri(url, title: 'Imported Subtitle', language: 'Imported'));
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(content: Text('Online subtitle imported successfully.')),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid HTTP/HTTPS URL.')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.accentBright,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Import', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
       ),
     );
   }
@@ -1427,7 +1520,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   child: Container(
                     width: 5,
                     decoration: BoxDecoration(
-                      color: Colors.white24,
+                      color: Colors.white.withOpacity(0.18),
                       borderRadius: BorderRadius.circular(2.5),
                     ),
                     child: Stack(

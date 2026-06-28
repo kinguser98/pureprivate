@@ -243,7 +243,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                       ),
               initialData: widget.embedUrl.startsWith('magnet:')
                   ? InAppWebViewInitialData(
-                      baseUrl: WebUri('https://webtor.io'),
+                      baseUrl: WebUri('about:blank'),
                       data: """
 <!DOCTYPE html>
 <html>
@@ -552,15 +552,15 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 // Ad-blocking: Prevents popups and tab redirects from opening
                 javaScriptCanOpenWindowsAutomatically: false,
                 supportMultipleWindows: false,
-                contentBlockers: widget.embedUrl.contains('youtube') || widget.embedUrl.contains('youtu.be')
-                    ? []
-                    : [
+                contentBlockers: (Platform.isAndroid && !(widget.embedUrl.contains('youtube') || widget.embedUrl.contains('youtu.be')))
+                    ? [
                         // Block common ad servers and popup redirects
                         ContentBlocker(
                           trigger: ContentBlockerTrigger(urlFilter: ".*(doubleclick|googleads|googlesyndication|popads|adsterra|exoclick|propellerads|onclickads|popcash|juicyads|exdynsrv|yepads|adbackgate|adbrau|addthis|adrta|adzerk|coinad|content-ad|histats|adrun|adservice|leadgeneration|mgid|outbrain|taboola|a.orola.net|clickadu|admaven|hilltopads).*"),
                           action: ContentBlockerAction(type: ContentBlockerActionType.BLOCK),
                         ),
-                      ],
+                      ]
+                    : [],
               ),
               onWebViewCreated: (controller) {
                 _webViewController = controller;
@@ -596,7 +596,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 }
               },
               shouldOverrideUrlLoading: (controller, navigationAction) async {
-                if (widget.embedUrl.startsWith('magnet:')) {
+                final url = navigationAction.request.url?.toString() ?? '';
+                if (url == widget.embedUrl || widget.embedUrl.startsWith('magnet:')) {
                   return NavigationActionPolicy.ALLOW;
                 }
                 // Allow sub-frame navigation (like inside player iframes) to prevent "Network error - All servers failed"
