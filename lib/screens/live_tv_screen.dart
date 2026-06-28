@@ -164,9 +164,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
         
         for (final ch in channels) {
           final cat = ch['category_name']?.toString() ?? 'General';
-          final portal = ch['portal_name']?.toString() ?? 'Portal';
-          final displayCat = '$portal | $cat';
-          grouped.putIfAbsent(displayCat, () => []).add(ch);
+          grouped.putIfAbsent(cat, () => []).add(ch);
         }
 
         final sortedCategories = grouped.keys.toList()..sort();
@@ -217,8 +215,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> with SingleTickerProviderSt
     final results = _allChannels.where((ch) {
       final name = (ch['name']?.toString() ?? '').toLowerCase();
       final cat = (ch['category_name']?.toString() ?? '').toLowerCase();
-      final portal = (ch['portal_name']?.toString() ?? '').toLowerCase();
-      return name.contains(query) || cat.contains(query) || portal.contains(query);
+      return name.contains(query) || cat.contains(query);
     }).toList();
 
     setState(() {
