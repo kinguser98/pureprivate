@@ -287,29 +287,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 results.add('❌ Profile failed: ${profileBody.substring(0, profileBody.length > 100 ? 100 : profileBody.length)}');
               }
 
-              // 3. Get VOD Categories (Try variations)
+              // 3. Get VOD Categories
               results.add('--- Fetching VOD Categories ---');
-              
-              dynamic firstCategory;
               var catsUrl = '$portalUrl?type=vod&action=get_categories';
               if (deviceId.isNotEmpty) {
                 catsUrl += '&device_id=$deviceId&device_id2=$deviceId';
               }
 
-              // Variation A: Standard
-              results.add('Trying Variation A (Standard)...');
-              try {
-                final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-                final mergedCatsCookies = getCookieHeader(profileCookies);
-                catsReq.headers.set('Cookie', mergedCatsCookies);
-                catsReq.headers.set('Authorization', 'Bearer $token');
-                catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+              final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
+              final mergedCatsCookies = getCookieHeader(profileCookies);
+              catsReq.headers.set('Cookie', mergedCatsCookies);
+              catsReq.headers.set('Authorization', 'Bearer $token');
+              catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
-                final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
-                final catsBody = await catsRes.transform(utf8.decoder).join();
-                extractCookies(catsRes);
+              final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
+              final catsBody = await catsRes.transform(utf8.decoder).join();
+              extractCookies(catsRes);
 
-                if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
+              results.add('VOD Categories Status: ${catsRes.statusCode}');
+              dynamic firstCategory;
+              if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
+                try {
                   final catsData = json.decode(catsBody);
                   final rawList = catsData['js'] ?? catsData['result'] ?? [];
                   if (rawList is List && rawList.isNotEmpty) {
@@ -317,150 +315,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       (c) => c['id']?.toString() != 'All' && c['id']?.toString() != '*' && c['title']?.toString().toLowerCase() != 'all' && c['name']?.toString().toLowerCase() != 'all',
                       orElse: () => rawList.first,
                     );
-                    results.add('✅ A Succeeded: Found ${rawList.length} categories. Selected category data: $firstCategory');
-                  }
-                } else {
-                  results.add('❌ A Failed: $catsBody');
-                }
-              } catch (e) {
-                results.add('❌ A Error: $e');
-              }
-
-              // Variation B: Token in query parameter
-              if (firstCategory == null) {
-                results.add('Trying Variation B (Token in query param)...');
-                try {
-                  final catsReq = await ioClient.getUrl(Uri.parse('$catsUrl&token=$token'));
-                  final mergedCatsCookies = getCookieHeader(profileCookies);
-                  catsReq.headers.set('Cookie', mergedCatsCookies);
-                  catsReq.headers.set('Authorization', 'Bearer $token');
-                  catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
-
-                  final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
-                  final catsBody = await catsRes.transform(utf8.decoder).join();
-                  extractCookies(catsRes);
-
-                  if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
-                    final catsData = json.decode(catsBody);
-                    final rawList = catsData['js'] ?? catsData['result'] ?? [];
-                    if (rawList is List && rawList.isNotEmpty) {
-                      firstCategory = rawList.first;
-                      results.add('✅ B Succeeded: Found ${rawList.length} categories');
-                    }
+                    results.add('✅ Found ${rawList.length} categories (First Selected: ${firstCategory['title'] ?? firstCategory['name']})');
                   } else {
-                    results.add('❌ B Failed: $catsBody');
+                    results.add('⚠️ No categories returned or empty.');
                   }
                 } catch (e) {
-                  results.add('❌ B Error: $e');
+                  results.add('⚠️ VOD Categories parse failed. Error: $e. Body: ${catsBody.substring(0, catsBody.length > 250 ? 250 : catsBody.length)}');
                 }
-              }
-
-              // Variation C: Raw MAC cookie (no URL encoding)
-              if (firstCategory == null) {
-                results.add('Trying Variation C (Raw MAC cookie)...');
-                try {
-                  final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-                  var rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
-                  if (deviceId.isNotEmpty) {
-                    rawCookies += '; device_id=$deviceId; device_id2=$deviceId';
-                  }
-                  final mergedCatsCookies = getCookieHeader(rawCookies);
-                  catsReq.headers.set('Cookie', mergedCatsCookies);
-                  catsReq.headers.set('Authorization', 'Bearer $token');
-                  catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
-
-                  final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
-                  final catsBody = await catsRes.transform(utf8.decoder).join();
-                  extractCookies(catsRes);
-
-                  if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
-                    final catsData = json.decode(catsBody);
-                    final rawList = catsData['js'] ?? catsData['result'] ?? [];
-                    if (rawList is List && rawList.isNotEmpty) {
-                      firstCategory = rawList.first;
-                      results.add('✅ C Succeeded: Found ${rawList.length} categories');
-                    }
-                  } else {
-                    results.add('❌ C Failed: $catsBody');
-                  }
-                } catch (e) {
-                  results.add('❌ C Error: $e');
-                }
+              } else {
+                results.add('❌ Fetching categories failed. Body: $catsBody');
               }
 
               // 4. Get VOD Movie
               results.add('--- Fetching Sample VOD Movie ---');
               final catId = firstCategory != null ? (firstCategory['id']?.toString() ?? '') : '';
-              var moviesUrlStandard = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=1';
+              var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=1';
               if (deviceId.isNotEmpty) {
-                moviesUrlStandard += '&device_id=$deviceId&device_id2=$deviceId';
+                moviesUrl += '&device_id=$deviceId&device_id2=$deviceId';
               }
 
+              final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
+              moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
+              moviesReq.headers.set('Authorization', 'Bearer $token');
+              moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+              final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
+              final moviesBody = await moviesRes.transform(utf8.decoder).join();
+              extractCookies(moviesRes);
+              
+              results.add('Movies List Status: ${moviesRes.statusCode}');
               String cmd = '';
               String movieName = '';
-
-              // Try Variation A (No query token)
-              results.add('Trying VOD Movies (No query token)...');
-              try {
-                final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrlStandard));
-                moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
-                moviesReq.headers.set('Authorization', 'Bearer $token');
-                moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
-
-                final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
-                final moviesBody = await moviesRes.transform(utf8.decoder).join();
-                extractCookies(moviesRes);
-
-                results.add('Movies Status: ${moviesRes.statusCode}');
-                if (moviesRes.statusCode == 200 && !moviesBody.contains('Authorization failed')) {
+              if (moviesRes.statusCode == 200 && !moviesBody.contains('Authorization failed')) {
+                try {
                   final moviesData = json.decode(moviesBody);
                   final rawMovies = moviesData['js']?['data'] ?? moviesData['result']?['data'] ?? moviesData['js'] ?? moviesData['result'] ?? [];
                   if (rawMovies is List && rawMovies.isNotEmpty) {
                     final firstMovie = rawMovies.first;
                     cmd = firstMovie['cmd']?.toString() ?? '';
                     movieName = firstMovie['name']?.toString() ?? '';
-                    results.add('✅ Movies Succeeded (No query token): "$movieName", CMD: "$cmd"');
+                    results.add('✅ Movie: "$movieName", CMD: "$cmd"');
                   } else {
-                    results.add('⚠️ No movies returned.');
-                  }
-                } else {
-                  results.add('❌ Movies Standard Failed: $moviesBody');
-                }
-              } catch (e) {
-                results.add('❌ Movies Standard Error: $e');
-              }
-
-              // Try Variation B (Query token)
-              if (cmd.isEmpty) {
-                results.add('Trying VOD Movies (With query token)...');
-                try {
-                  final moviesReq = await ioClient.getUrl(Uri.parse('$moviesUrlStandard&token=$token'));
-                  moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
-                  moviesReq.headers.set('Authorization', 'Bearer $token');
-                  moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
-
-                  final moviesRes = await moviesReq.close().timeout(const Duration(seconds: 8));
-                  final moviesBody = await moviesRes.transform(utf8.decoder).join();
-                  extractCookies(moviesRes);
-
-                  results.add('Movies Status: ${moviesRes.statusCode}');
-                  if (moviesRes.statusCode == 200 && !moviesBody.contains('Authorization failed')) {
-                    final moviesData = json.decode(moviesBody);
-                    final rawMovies = moviesData['js']?['data'] ?? moviesData['result']?['data'] ?? moviesData['js'] ?? moviesData['result'] ?? [];
-                    if (rawMovies is List && rawMovies.isNotEmpty) {
-                      final firstMovie = rawMovies.first;
-                      cmd = firstMovie['cmd']?.toString() ?? '';
-                      movieName = firstMovie['name']?.toString() ?? '';
-                      results.add('✅ Movies Succeeded (With query token): "$movieName", CMD: "$cmd"');
-                    } else {
-                      results.add('⚠️ No movies returned.');
-                    }
-                  } else {
-                    results.add('❌ Movies Query Token Failed: $moviesBody');
+                    results.add('⚠️ No movies found.');
                   }
                 } catch (e) {
-                  results.add('❌ Movies Query Token Error: $e');
+                  results.add('⚠️ Movies response not JSON. Error: $e. Body: ${moviesBody.substring(0, moviesBody.length > 250 ? 250 : moviesBody.length)}');
                 }
+              } else {
+                results.add('❌ Fetching movies failed. Body: $moviesBody');
               }
 
               // 5. Try Create Link
