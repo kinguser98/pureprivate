@@ -869,13 +869,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
           items.add(const PopupMenuDivider());
           items.add(
-            const PopupMenuItem<SubtitleTrack>(
-              value: SubtitleTrack('import_online', 'Import Online Subtitle...', 'en'),
+            PopupMenuItem<SubtitleTrack>(
+              value: const SubtitleTrack('import_online', 'Import Online Subtitle...', 'en'),
               child: Row(
                 children: [
                   Icon(Icons.add_link_rounded, color: AppColors.accentBright, size: 18),
                   const SizedBox(width: 10),
-                  Text(
+                  const Text(
                     'Import Online Subtitle...',
                     style: TextStyle(color: Colors.white70, fontSize: 14),
                   ),

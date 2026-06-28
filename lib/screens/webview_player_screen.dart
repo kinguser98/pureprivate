@@ -610,7 +610,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                   return NavigationActionPolicy.ALLOW;
                 }
 
-                final url = navigationAction.request.url?.toString() ?? '';
                 final host = navigationAction.request.url?.host ?? '';
                 
                 final originalUri = WebUri(widget.embedUrl);
