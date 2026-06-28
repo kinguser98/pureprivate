@@ -2122,6 +2122,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               onTap: _shareMovie,
                             ),
                           ],
+                        ),
                         const SizedBox(height: 16),
 
                         // Synopsis / Description

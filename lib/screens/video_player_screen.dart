@@ -1212,13 +1212,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     required void Function(dynamic track, String displayLang) onTrackSelected,
   }) {
     if (loading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(color: AppColors.accentBright),
-            SizedBox(height: 12),
-            Text('Searching OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
+            const CircularProgressIndicator(color: AppColors.accentBright),
+            const SizedBox(height: 12),
+            const Text('Searching OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
           ],
         ),
       );
@@ -1233,7 +1233,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             const SizedBox(height: 10),
             TextButton(
               onPressed: onRetry,
-              child: const Text('Retry Search', style: TextStyle(color: AppColors.accentBright, fontSize: 13)),
+              child: Text('Retry Search', style: TextStyle(color: AppColors.accentBright, fontSize: 13)),
             ),
           ],
         ),
