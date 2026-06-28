@@ -286,40 +286,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 results.add('❌ Profile failed: ${profileBody.substring(0, profileBody.length > 100 ? 100 : profileBody.length)}');
               }
 
-              // 3. Get VOD Categories
+              // 3. Get VOD Categories (Try variations)
               results.add('--- Fetching VOD Categories ---');
+              
+              dynamic firstCategory;
               var catsUrl = '$portalUrl?type=vod&action=get_categories';
               if (deviceId.isNotEmpty) {
                 catsUrl += '&device_id=$deviceId&device_id2=$deviceId';
               }
 
-              final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
-              final mergedCatsCookies = getCookieHeader(profileCookies);
-              catsReq.headers.set('Cookie', mergedCatsCookies);
-              catsReq.headers.set('Authorization', 'Bearer $token');
-              catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+              // Variation A: Standard
+              results.add('Trying Variation A (Standard)...');
+              try {
+                final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
+                final mergedCatsCookies = getCookieHeader(profileCookies);
+                catsReq.headers.set('Cookie', mergedCatsCookies);
+                catsReq.headers.set('Authorization', 'Bearer $token');
+                catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
-              results.add('Cats Cookies Sent: $mergedCatsCookies');
+                final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
+                final catsBody = await catsRes.transform(utf8.decoder).join();
+                extractCookies(catsRes);
 
-              final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
-              final catsBody = await catsRes.transform(utf8.decoder).join();
-              extractCookies(catsRes);
-              
-              results.add('VOD Categories Status: ${catsRes.statusCode}');
-
-              dynamic firstCategory;
-              if (catsRes.statusCode == 200) {
-                try {
+                if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
                   final catsData = json.decode(catsBody);
                   final rawList = catsData['js'] ?? catsData['result'] ?? [];
                   if (rawList is List && rawList.isNotEmpty) {
                     firstCategory = rawList.first;
-                    results.add('✅ Found ${rawList.length} categories (First: ${firstCategory['title'] ?? firstCategory['name']})');
+                    results.add('✅ A Succeeded: Found ${rawList.length} categories (First: ${firstCategory['title'] ?? firstCategory['name']})');
+                  }
+                } else {
+                  results.add('❌ A Failed: $catsBody');
+                }
+              } catch (e) {
+                results.add('❌ A Error: $e');
+              }
+
+              // Variation B: Token in query parameter
+              if (firstCategory == null) {
+                results.add('Trying Variation B (Token in query param)...');
+                try {
+                  final catsReq = await ioClient.getUrl(Uri.parse('$catsUrl&token=$token'));
+                  final mergedCatsCookies = getCookieHeader(profileCookies);
+                  catsReq.headers.set('Cookie', mergedCatsCookies);
+                  catsReq.headers.set('Authorization', 'Bearer $token');
+                  catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+                  final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
+                  final catsBody = await catsRes.transform(utf8.decoder).join();
+                  extractCookies(catsRes);
+
+                  if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
+                    final catsData = json.decode(catsBody);
+                    final rawList = catsData['js'] ?? catsData['result'] ?? [];
+                    if (rawList is List && rawList.isNotEmpty) {
+                      firstCategory = rawList.first;
+                      results.add('✅ B Succeeded: Found ${rawList.length} categories');
+                    }
                   } else {
-                    results.add('⚠️ No categories returned or empty.');
+                    results.add('❌ B Failed: $catsBody');
                   }
                 } catch (e) {
-                  results.add('⚠️ VOD Categories not JSON. Error: $e. Body: ${catsBody.substring(0, catsBody.length > 250 ? 250 : catsBody.length)}');
+                  results.add('❌ B Error: $e');
+                }
+              }
+
+              // Variation C: Raw MAC cookie (no URL encoding)
+              if (firstCategory == null) {
+                results.add('Trying Variation C (Raw MAC cookie)...');
+                try {
+                  final catsReq = await ioClient.getUrl(Uri.parse(catsUrl));
+                  final rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
+                  final mergedCatsCookies = getCookieHeader(rawCookies);
+                  catsReq.headers.set('Cookie', mergedCatsCookies);
+                  catsReq.headers.set('Authorization', 'Bearer $token');
+                  catsReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
+
+                  final catsRes = await catsReq.close().timeout(const Duration(seconds: 8));
+                  final catsBody = await catsRes.transform(utf8.decoder).join();
+                  extractCookies(catsRes);
+
+                  if (catsRes.statusCode == 200 && !catsBody.contains('Authorization failed')) {
+                    final catsData = json.decode(catsBody);
+                    final rawList = catsData['js'] ?? catsData['result'] ?? [];
+                    if (rawList is List && rawList.isNotEmpty) {
+                      firstCategory = rawList.first;
+                      results.add('✅ C Succeeded: Found ${rawList.length} categories');
+                    }
+                  } else {
+                    results.add('❌ C Failed: $catsBody');
+                  }
+                } catch (e) {
+                  results.add('❌ C Error: $e');
                 }
               }
 
@@ -327,12 +385,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               results.add('--- Fetching Sample VOD Movie ---');
               final catId = firstCategory != null ? (firstCategory['id']?.toString() ?? '') : '';
               var moviesUrl = '$portalUrl?type=vod&action=get_objects&category=$catId&p=1';
+              if (firstCategory != null) {
+                // If B or C succeeded, construct url and cookies accordingly
+                moviesUrl = '$moviesUrl&token=$token';
+              }
               if (deviceId.isNotEmpty) {
                 moviesUrl += '&device_id=$deviceId&device_id2=$deviceId';
               }
 
               final moviesReq = await ioClient.getUrl(Uri.parse(moviesUrl));
-              moviesReq.headers.set('Cookie', getCookieHeader(profileCookies));
+              final rawCookies = 'mac=$mac; stb_lang=en; timezone=GMT; token=$token; Bearer=$token';
+              moviesReq.headers.set('Cookie', getCookieHeader(rawCookies));
               moviesReq.headers.set('Authorization', 'Bearer $token');
               moviesReq.headers.set('X-User-Agent', 'Model: MAG250; Link: Ethernet');
 
