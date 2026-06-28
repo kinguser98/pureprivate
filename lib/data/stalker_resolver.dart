@@ -308,6 +308,13 @@ class StalkerResolver {
       deviceId = deviceId.split(' ').last.trim();
     }
 
+    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+    String hostBase = '';
+    try {
+      final uri = Uri.parse(portalUrl);
+      hostBase = '${uri.scheme}://${uri.host}${uri.hasPort ? ":${uri.port}" : ""}';
+    } catch (_) {}
+
     for (final cmdVar in cmdVariations) {
       var urlToCheck = cmdVar;
       if (urlToCheck.startsWith('ffmpeg ')) {
@@ -317,6 +324,11 @@ class StalkerResolver {
         urlToCheck = urlToCheck.substring(5);
       }
       urlToCheck = urlToCheck.trim();
+      
+      if (urlToCheck.startsWith('/')) {
+        urlToCheck = '$hostBase$urlToCheck';
+      }
+
       if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
         debugPrint('Stalker VOD resolution failed via create_link, falling back to direct HTTP link: $urlToCheck');
         var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
@@ -436,6 +448,16 @@ class StalkerResolver {
     // Strip ffmpeg prefix if present
     if (streamUrl.startsWith('ffmpeg ')) {
       streamUrl = streamUrl.substring(7);
+    }
+
+    // Resolve localhost / 127.0.0.1 loopbacks back to portal host
+    if (streamUrl.contains('://localhost') || streamUrl.contains('://127.0.0.1')) {
+      try {
+        final uri = Uri.parse(portalUrl);
+        streamUrl = streamUrl
+            .replaceAll('://localhost', '://${uri.host}')
+            .replaceAll('://127.0.0.1', '://${uri.host}');
+      } catch (_) {}
     }
 
     var playerCookies = 'mac=${Uri.encodeComponent(macAddress)}';
