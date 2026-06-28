@@ -969,46 +969,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final isScraper = source.contains('movie-scraper-beige.vercel.app') || 
                       source.contains('movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app');
     if (isScraper) {
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext context) {
-          return Center(
-            child: CircularProgressIndicator(color: AppColors.accentBright),
-          );
-        },
-      );
+      final vidlinkTmdbId = (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null')
+          ? movie.tmdbId
+          : movie.imdbId;
+      final targetEmbedUrl = 'https://vidlink.pro/embed/movie/$vidlinkTmdbId';
       
       try {
-        final targetUrl = source.replaceAll('movie-scraper-beige.vercel.app', 'movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app');
-        debugPrint('Fetching scraper stream from: $targetUrl');
-        final response = await http.get(Uri.parse(targetUrl)).timeout(const Duration(seconds: 10));
-        if (mounted) Navigator.of(context).pop(); // Dismiss progress
+        debugPrint('Resolving VidLink stream in background from: $targetEmbedUrl');
+        final resolvedUrl = await EmbedResolver.resolve(context, targetEmbedUrl);
         
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final rawUrl = data['url'] as String?;
-          if (rawUrl != null && rawUrl.isNotEmpty) {
-            // VidLink CDN tokens are IP-locked to the server that requested them.
-            // We must play through the scraper's HLS proxy which fetches segments
-            // server-side with its authorized IP and correct headers.
-            final scraperBase = targetUrl.split('/api')[0];
-            final proxyUrl = '$scraperBase/api?url=${Uri.encodeComponent(rawUrl)}';
-            debugPrint('VidLink: Playing via scraper proxy: $proxyUrl');
-            _play(proxyUrl, resumeDirectly: resumeDirectly);
-          } else {
-            throw Exception('Empty stream URL returned');
-          }
+        if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+          final headers = {
+            'Referer': 'https://vidlink.pro/',
+            'Origin': 'https://vidlink.pro',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          };
+          debugPrint('VidLink: Resolved stream natively: $resolvedUrl');
+          _play(resolvedUrl, resumeDirectly: resumeDirectly, headers: headers, originalEmbedUrl: targetEmbedUrl);
         } else {
-          throw Exception('Server returned status code ${response.statusCode}');
+          throw Exception('Failed to resolve stream in background');
         }
       } catch (e) {
-        if (mounted) Navigator.of(context).pop(); // Dismiss progress
-        debugPrint('Vercel proxy failed: $e. Falling back to WebView Player via VidSrc...');
+        debugPrint('VidLink native resolution failed: $e. Falling back to on-screen Web Player...');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('VidLink scraper is currently offline. Launching Web Player...'),
+              content: Text('VidLink native resolver failed. Launching Web Player...'),
               duration: Duration(seconds: 3),
             ),
           );
