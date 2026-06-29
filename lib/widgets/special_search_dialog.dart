@@ -450,7 +450,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           );
         }
       }
-    } else if (source.url.startsWith('magnet:')) {
+    } else if (source.url.startsWith('magnet:') ||
+               source.url.contains('vidsrc') ||
+               source.url.contains('embed') ||
+               source.url.contains('player') ||
+               source.url.contains('woof.video') ||
+               source.url.contains('streamtape') ||
+               source.url.contains('dood') ||
+               source.url.contains('mixdrop')) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => WebViewPlayerScreen(
