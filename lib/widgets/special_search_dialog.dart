@@ -230,7 +230,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       
       // regex matches: <h2 ...> <a href="..."> TITLE </a> </h2>
       final searchRegex = RegExp(
-        r'<h2[^>]*>\s*<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([^<]+)</a>\s*</h2>',
+        r'<h2[^>]*>\s*<a\s+[^>]*href="([^"]+)"[^>]*>([^<]+)</a>\s*</h2>',
         caseSensitive: false,
         multiLine: true,
       );
@@ -267,7 +267,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       
       final detailHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
       
-      final iframeRegex = RegExp(r'<iframe\s+[^>]*src=["\']([^"\']+)["\']', caseSensitive: false);
+      final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
       final iframeMatches = iframeRegex.allMatches(detailHtml);
       
       final List<String> embeds = [];
@@ -324,52 +324,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  Future<void> _resolveVercelCustomScrapers(String title, String? imdbId, String year) async {
-    try {
-      final Map<String, String> queryParams = {
-        'title': title,
-      };
-      if (imdbId != null && imdbId.isNotEmpty) {
-        queryParams['imdbId'] = imdbId;
-      }
-      if (year.isNotEmpty) {
-        queryParams['year'] = year;
-      }
 
-      final uri = Uri.parse('https://movie-scraper-beige.vercel.app/api').replace(queryParameters: queryParams);
-      final response = await http.get(uri).timeout(const Duration(seconds: 12));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        if (data is Map && data['success'] == true) {
-          final results = data['results'] as List<dynamic>? ?? [];
-          final List<StreamSourceInfo> sources = [];
-
-          for (final item in results) {
-            final name = item['name']?.toString() ?? 'Alternative Link';
-            final url = item['url']?.toString() ?? '';
-            if (url.isNotEmpty) {
-              final isDup = _resolvedSources.any((s) => s.url == url) || sources.any((s) => s.url == url);
-              if (!isDup) {
-                sources.add(StreamSourceInfo(
-                  name: name,
-                  url: url,
-                  type: StreamSourceType.vidsrc,
-                ));
-              }
-            }
-          }
-          if (mounted && sources.isNotEmpty) {
-            setState(() {
-              _resolvedSources.addAll(sources);
-            });
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('Vercel Custom Scrapers failed: $e');
-    }
-  }
 
   Future<void> _resolveVidLink(String activeId) async {
     try {
