@@ -70,7 +70,7 @@ class EmbedResolver {
       return false;
     }
     
-    // 3. Match video stream patterns
+    // 3. Match video stream patterns (includes master.txt from CloudStream's StreamHG extractor)
     return lower.contains('.m3u8') ||
            lower.contains('.mp4') ||
            lower.contains('.mpd') ||
@@ -81,6 +81,7 @@ class EmbedResolver {
            lower.contains('.avi') ||
            lower.contains('/playlist') ||
            lower.contains('/manifest') ||
+           lower.contains('master.txt') ||
            lower.contains('get_video') ||
            lower.contains('streamtape') ||
            lower.contains('strcloud.club') ||
@@ -461,6 +462,9 @@ class EmbedResolver {
                       host.contains('hgcloud') ||
                       host.contains('cavanhabg') ||
                       host.contains('cavanha') ||
+                      host.contains('tryzendm') ||
+                      host.contains('vidhidepro') ||
+                      host.contains('filemoon') ||
                       url.startsWith('data:')) {
                     return NavigationActionPolicy.ALLOW;
                   }
@@ -498,9 +502,9 @@ class EmbedResolver {
       }
     });
 
-    // Enforce a 15-second timeout
+    // Enforce a 25-second timeout (HGCloud pages need more time to load m3u8)
     return completer.future.timeout(
-      const Duration(seconds: 15),
+      const Duration(seconds: 25),
       onTimeout: () {
         if (!completer.isCompleted) {
           completer.complete(null);

@@ -5,12 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/screens/video_player_screen.dart';
-import 'package:private_cinema_ios/screens/webview_player_screen.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
@@ -316,16 +316,29 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             .replaceAll(RegExp(r'\s+-\s+700MB.*$', caseSensitive: false), '')
             .trim();
             
-        for (final url in pageEmbeds) {
+        for (var url in pageEmbeds) {
           String hostName = 'Embed';
-          if (url.contains('cavanhabg.com') || url.contains('hgcloud') || url.contains('hglink') || url.contains('hg')) {
+          
+          // CloudStream domain replacement: swap hgcloud.to/hglink.to → cavanhabg.com
+          // This is the critical fix from CloudStream's TamilblastersProvider.kt
+          final urlLower = url.toLowerCase();
+          if (urlLower.contains('hgcloud') || urlLower.contains('hglink') || urlLower.contains('cavanhabg')) {
             hostName = 'HG Cloud';
-          } else if (url.contains('streamtape')) {
+            // Extract the /e/... path and rebuild with cavanhabg.com
+            final eIndex = url.indexOf('/e/');
+            if (eIndex != -1) {
+              final pathPart = url.substring(eIndex); // e.g. /e/ABC123
+              url = 'https://cavanhabg.com$pathPart';
+              debugPrint('TamilBlasters ClientScraper: HG domain swap → $url');
+            }
+          } else if (urlLower.contains('streamtape')) {
             hostName = 'Streamtape';
-          } else if (url.contains('filemoon')) {
+          } else if (urlLower.contains('filemoon')) {
             hostName = 'Filemoon';
-          } else if (url.contains('vidplay')) {
+          } else if (urlLower.contains('vidplay')) {
             hostName = 'Vidplay';
+          } else if (urlLower.contains('vidhide') || urlLower.contains('tryzendm')) {
+            hostName = 'VidHide';
           }
           
           final serverName = '$hostName - $displayTitle';
