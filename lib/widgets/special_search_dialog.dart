@@ -168,12 +168,65 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // 4. Resolve Stalker Synced VOD Database (requires movie title)
     tasks.add(_resolveStalkerVodDatabase(title));
 
+    // 5. Resolve Vercel Custom Scrapers (Goojara, VidSrc, etc.)
+    final year = _selectedMovie != null && _selectedMovie['release_date'] != null
+        ? _selectedMovie['release_date'].toString().split('-').first
+        : '';
+    tasks.add(_resolveVercelCustomScrapers(title, imdbId, year));
+
     await Future.wait(tasks);
 
     if (mounted) {
       setState(() {
         _resolvingStreams = false;
       });
+    }
+  }
+
+  Future<void> _resolveVercelCustomScrapers(String title, String? imdbId, String year) async {
+    try {
+      final Map<String, String> queryParams = {
+        'title': title,
+      };
+      if (imdbId != null && imdbId.isNotEmpty) {
+        queryParams['imdbId'] = imdbId;
+      }
+      if (year.isNotEmpty) {
+        queryParams['year'] = year;
+      }
+
+      final uri = Uri.parse('https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api').replace(queryParameters: queryParams);
+      final response = await http.get(uri).timeout(const Duration(seconds: 12));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        if (data is Map && data['success'] == true) {
+          final results = data['results'] as List<dynamic>? ?? [];
+          final List<StreamSourceInfo> sources = [];
+
+          for (final item in results) {
+            final name = item['name']?.toString() ?? 'Alternative Link';
+            final url = item['url']?.toString() ?? '';
+            if (url.isNotEmpty) {
+              final isDup = _resolvedSources.any((s) => s.url == url) || sources.any((s) => s.url == url);
+              if (!isDup) {
+                sources.add(StreamSourceInfo(
+                  name: name,
+                  url: url,
+                  type: StreamSourceType.vidsrc,
+                ));
+              }
+            }
+          }
+          if (mounted && sources.isNotEmpty) {
+            setState(() {
+              _resolvedSources.addAll(sources);
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Vercel Custom Scrapers failed: $e');
     }
   }
 
@@ -833,6 +886,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final vidlinkStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidlink).toList();
     final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
     final stalkerStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stalker).toList();
+    final vidsrcStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidsrc).toList();
 
     if (_activeGroupType == null) {
       // 1. Server groups main list
@@ -889,19 +943,38 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 ? null 
                 : () => setState(() => _activeGroupType = StreamSourceType.stalker),
           ),
+
+          // Multi-Source Scrapers (Goojara, VidSrc, etc.)
+          _buildServerGroupCard(
+            title: '5. Multi-Source Server',
+            subtitle: _resolvingStreams && vidsrcStreams.isEmpty 
+                ? 'Searching web providers...' 
+                : (vidsrcStreams.isNotEmpty ? '${vidsrcStreams.length} links available' : 'Not available'),
+            icon: Icons.language_rounded,
+            accentColor: Colors.tealAccent,
+            onTap: vidsrcStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.vidsrc),
+          ),
         ],
       );
     } else {
       // 2. Expanded group sub-links list
       final activeList = _activeGroupType == StreamSourceType.stravo 
           ? stravoStreams 
-          : (_activeGroupType == StreamSourceType.torrent ? torrentStreams : stalkerStreams);
+          : (_activeGroupType == StreamSourceType.torrent 
+              ? torrentStreams 
+              : (_activeGroupType == StreamSourceType.stalker ? stalkerStreams : vidsrcStreams));
       final accentColor = _activeGroupType == StreamSourceType.stravo 
           ? Colors.cyan 
-          : (_activeGroupType == StreamSourceType.torrent ? Colors.amber : Colors.purpleAccent);
+          : (_activeGroupType == StreamSourceType.torrent 
+              ? Colors.amber 
+              : (_activeGroupType == StreamSourceType.stalker ? Colors.purpleAccent : Colors.tealAccent));
       final iconData = _activeGroupType == StreamSourceType.stravo 
           ? Icons.rocket_launch_rounded 
-          : (_activeGroupType == StreamSourceType.torrent ? Icons.cloud_circle_rounded : Icons.movie_filter_rounded);
+          : (_activeGroupType == StreamSourceType.torrent 
+              ? Icons.cloud_circle_rounded 
+              : (_activeGroupType == StreamSourceType.stalker ? Icons.movie_filter_rounded : Icons.language_rounded));
 
       if (activeList.isEmpty) {
         return Center(
@@ -983,7 +1056,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 }
 
-enum StreamSourceType { vidlink, stravo, torrent, stalker }
+enum StreamSourceType { vidlink, stravo, torrent, stalker, vidsrc }
 
 class StreamSourceInfo {
   final String name;
