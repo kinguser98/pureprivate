@@ -11,6 +11,7 @@ import 'package:private_cinema_ios/screens/webview_player_screen.dart';
 import 'package:private_cinema_ios/data/stalker_resolver.dart';
 import 'package:private_cinema_ios/data/api_service.dart';
 import 'package:private_cinema_ios/data/embed_resolver.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
   const SpecialSearchDialog({super.key});
