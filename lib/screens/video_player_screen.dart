@@ -392,9 +392,35 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
 
       var resolvedSource = widget.videoSource;
-      if (widget.videoSource.startsWith('http')) {
+      
+      // Strip the inline 'headers' query parameter from the URL before sending to CDN.
+      // CDN servers validate signed query parameters and reject requests with unknown params.
+      // The headers have already been extracted into playHeaders above.
+      if (resolvedSource.startsWith('http')) {
         try {
-          final uri = Uri.parse(widget.videoSource);
+          final sourceUri = Uri.parse(resolvedSource);
+          if (sourceUri.queryParameters.containsKey('headers')) {
+            final cleanParams = Map<String, String>.from(sourceUri.queryParameters);
+            cleanParams.remove('headers');
+            if (cleanParams.isEmpty) {
+              resolvedSource = sourceUri.replace(query: '').toString();
+              // Uri.replace with empty query still adds '?', so strip trailing '?'
+              if (resolvedSource.endsWith('?')) {
+                resolvedSource = resolvedSource.substring(0, resolvedSource.length - 1);
+              }
+            } else {
+              resolvedSource = sourceUri.replace(queryParameters: cleanParams).toString();
+            }
+            debugPrint('VideoPlayerScreen: Stripped headers param from URL: $resolvedSource');
+          }
+        } catch (e) {
+          debugPrint('VideoPlayerScreen: Error stripping headers param: $e');
+        }
+      }
+      
+      if (resolvedSource.startsWith('http')) {
+        try {
+          final uri = Uri.parse(resolvedSource);
           final host = uri.host;
           final lowerHost = host.toLowerCase();
           bool shouldProxy = false;
