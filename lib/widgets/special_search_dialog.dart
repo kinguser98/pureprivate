@@ -174,13 +174,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // 4. Resolve Stalker Synced VOD Database (requires movie title)
     tasks.add(_resolveStalkerVodDatabase(title));
 
-    // 5. Resolve Vercel Custom Scrapers (Goojara, VidSrc, etc.)
+    // 5. Resolve TamilBlasters Client-side Scraper
     final year = _selectedMovie != null && _selectedMovie['release_date'] != null
         ? _selectedMovie['release_date'].toString().split('-').first
         : '';
-    tasks.add(_resolveVercelCustomScrapers(title, imdbId, year));
-
-    // 6. Resolve TamilBlasters Client-side Scraper
     tasks.add(_resolveTamilBlastersClientSide(title, year));
 
     await Future.wait(tasks);
@@ -231,8 +228,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       
       final searchHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
       
-      // regex matches: <h2><a href="LINK">TITLE</a></h2>
-      final searchRegex = RegExp(r'<h2><a\s+href="([^"]+)"[^>]*>([^<]+)</a></h2>', caseSensitive: false);
+      // regex matches: <h2 ...> <a href="..."> TITLE </a> </h2>
+      final searchRegex = RegExp(
+        r'<h2[^>]*>\s*<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([^<]+)</a>\s*</h2>',
+        caseSensitive: false,
+        multiLine: true,
+      );
       final matches = searchRegex.allMatches(searchHtml).toList();
       
       String? matchedPageUrl;
@@ -266,7 +267,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       
       final detailHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
       
-      final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
+      final iframeRegex = RegExp(r'<iframe\s+[^>]*src=["\']([^"\']+)["\']', caseSensitive: false);
       final iframeMatches = iframeRegex.allMatches(detailHtml);
       
       final List<String> embeds = [];
@@ -308,7 +309,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           localSources.add(StreamSourceInfo(
             name: serverName,
             url: url,
-            type: StreamSourceType.vidsrc,
+            type: StreamSourceType.tamilblasters,
           ));
         }
       }
@@ -1100,7 +1101,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final vidlinkStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidlink).toList();
     final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
     final stalkerStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stalker).toList();
-    final vidsrcStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidsrc).toList();
+    final tamilblastersStreams = _resolvedSources.where((s) => s.type == StreamSourceType.tamilblasters).toList();
 
     if (_activeGroupType == null) {
       // 1. Server groups main list
@@ -1158,17 +1159,17 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.stalker),
           ),
 
-          // Multi-Source Scrapers (Goojara, VidSrc, etc.)
+          // TamilBlasters Server Group
           _buildServerGroupCard(
-            title: '5. Multi-Source Server',
-            subtitle: _resolvingStreams && vidsrcStreams.isEmpty 
-                ? 'Searching web providers...' 
-                : (vidsrcStreams.isNotEmpty ? '${vidsrcStreams.length} links available' : 'Not available'),
+            title: '5. TamilBlasters Server',
+            subtitle: _resolvingStreams && tamilblastersStreams.isEmpty 
+                ? 'Searching TamilBlasters...' 
+                : (tamilblastersStreams.isNotEmpty ? '${tamilblastersStreams.length} links available' : 'Not available'),
             icon: Icons.language_rounded,
             accentColor: Colors.tealAccent,
-            onTap: vidsrcStreams.isEmpty 
+            onTap: tamilblastersStreams.isEmpty 
                 ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.vidsrc),
+                : () => setState(() => _activeGroupType = StreamSourceType.tamilblasters),
           ),
         ],
       );
@@ -1178,7 +1179,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           ? stravoStreams 
           : (_activeGroupType == StreamSourceType.torrent 
               ? torrentStreams 
-              : (_activeGroupType == StreamSourceType.stalker ? stalkerStreams : vidsrcStreams));
+              : (_activeGroupType == StreamSourceType.stalker ? stalkerStreams : tamilblastersStreams));
       final accentColor = _activeGroupType == StreamSourceType.stravo 
           ? Colors.cyan 
           : (_activeGroupType == StreamSourceType.torrent 
@@ -1270,7 +1271,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 }
 
-enum StreamSourceType { vidlink, stravo, torrent, stalker, vidsrc }
+enum StreamSourceType { vidlink, stravo, torrent, stalker, tamilblasters }
 
 class StreamSourceInfo {
   final String name;
