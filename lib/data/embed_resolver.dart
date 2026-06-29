@@ -330,11 +330,94 @@ class EmbedResolver {
                 ]),
                 initialSettings: InAppWebViewSettings(
                   javaScriptEnabled: true,
+                  domStorageEnabled: true,
+                  databaseEnabled: true,
                   mediaPlaybackRequiresUserGesture: false,
                   allowsInlineMediaPlayback: true,
                   javaScriptCanOpenWindowsAutomatically: false,
                   supportMultipleWindows: false,
+                  mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
                 ),
+                onLoadStop: (controller, url) async {
+                  debugPrint('EmbedResolver: Frame loaded: $url');
+                  // Re-inject JS script execution to guarantee clicker runs on dynamic page modifications
+                  await controller.evaluateJavascript(source: """
+                    (function() {
+                      console.log("EmbedResolver onLoadStop injected manually.");
+                      
+                      function simulateClick(el) {
+                        try {
+                          el.focus();
+                          var eventTypes = ['mousedown', 'mouseup', 'click'];
+                          eventTypes.forEach(function(type) {
+                            var e = new MouseEvent(type, {
+                              bubbles: true,
+                              cancelable: true,
+                              view: window,
+                              clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
+                              clientY: el.getBoundingClientRect().top + el.clientHeight / 2
+                            });
+                            el.dispatchEvent(e);
+                          });
+                        } catch(e) {}
+                      }
+
+                      // Remove overlay ads
+                      function removeAdOverlays() {
+                        try {
+                          var divs = document.querySelectorAll('div');
+                          divs.forEach(function(div) {
+                            var style = window.getComputedStyle(div);
+                            if (style.position === 'absolute' || style.position === 'fixed') {
+                              var zIndex = parseInt(style.zIndex);
+                              if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
+                                div.style.display = 'none';
+                              }
+                            }
+                          });
+                        } catch(e) {}
+                      }
+
+                      removeAdOverlays();
+
+                      // Click common play selectors
+                      var selectors = [
+                        '.vjs-big-play-button',
+                        '.jw-display-icon-container',
+                        '.play-button',
+                        '.play-icon',
+                        '#play-button',
+                        '#play',
+                        '.play',
+                        '.watch-btn',
+                        '.click-to-play',
+                        '[class*="play"]',
+                        '[id*="play"]',
+                        '.vjs-tech',
+                        'button',
+                        'svg'
+                      ];
+                      selectors.forEach(function(sel) {
+                        try {
+                          var els = document.querySelectorAll(sel);
+                          els.forEach(function(el) {
+                            simulateClick(el);
+                          });
+                        } catch(e) {}
+                      });
+
+                      // Click center
+                      try {
+                        var x = window.innerWidth / 2;
+                        var y = window.innerHeight / 2;
+                        var el = document.elementFromPoint(x, y);
+                        if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
+                          simulateClick(el);
+                        }
+                      } catch(e) {}
+                    })();
+                  """);
+                },
                 shouldOverrideUrlLoading: (controller, navigationAction) async {
                   // Allow sub-frame navigation (like inside player iframes) to prevent "Network error - All servers failed"
                   if (!navigationAction.isForMainFrame) {
