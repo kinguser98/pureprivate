@@ -175,12 +175,130 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         : '';
     tasks.add(_resolveVercelCustomScrapers(title, imdbId, year));
 
+    // 6. Resolve TamilBlasters Client-side Scraper
+    tasks.add(_resolveTamilBlastersClientSide(title, year));
+
     await Future.wait(tasks);
 
     if (mounted) {
       setState(() {
         _resolvingStreams = false;
       });
+    }
+  }
+
+  Future<void> _resolveTamilBlastersClientSide(String title, String year) async {
+    try {
+      debugPrint('TamilBlasters ClientScraper: Resolving client-side for $title ($year)...');
+      
+      // 1. Fetch active domains dynamically to handle domain hopping
+      final domainsRes = await http.get(Uri.parse('https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json')).timeout(const Duration(seconds: 5));
+      if (domainsRes.statusCode != 200) return;
+      
+      final domainsJson = json.decode(domainsRes.body);
+      final mainUrl = domainsJson['tamilblasters']?.toString() ?? 'https://www.1tamilblasters.republican';
+      
+      // 2. Query search
+      final searchUrl = '$mainUrl/?s=${Uri.encodeComponent(title)}';
+      debugPrint('TamilBlasters ClientScraper: Querying search URL: $searchUrl');
+      
+      final searchRes = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 10));
+      if (searchRes.statusCode != 200) {
+        debugPrint('TamilBlasters ClientScraper: Search failed with code ${searchRes.statusCode}');
+        return;
+      }
+      
+      final searchHtml = searchRes.body;
+      
+      // regex matches: <h2><a href="LINK">TITLE</a></h2>
+      final searchRegex = RegExp(r'<h2><a\s+href="([^"]+)"[^>]*>([^<]+)</a></h2>', caseSensitive: false);
+      final matches = searchRegex.allMatches(searchHtml).toList();
+      
+      String? matchedPageUrl;
+      final cleanedSearchTitle = title.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').trim();
+      
+      for (final match in matches) {
+        final href = match.group(1);
+        final name = match.group(2)?.toLowerCase() ?? '';
+        final cleanedName = name.replaceAll(RegExp(r'[^\w\s]'), '').trim();
+        
+        if (href != null && (name.contains(cleanedSearchTitle) || cleanedName.contains(cleanedSearchTitle))) {
+          if (year.isEmpty || name.contains(year)) {
+            matchedPageUrl = href;
+            break;
+          }
+        }
+      }
+      
+      // Fallback to first result if no strict match
+      if (matchedPageUrl == null && matches.isNotEmpty) {
+        matchedPageUrl = matches.first.group(1);
+      }
+      
+      if (matchedPageUrl == null) {
+        debugPrint('TamilBlasters ClientScraper: No matched page found.');
+        return;
+      }
+      
+      debugPrint('TamilBlasters ClientScraper: Loading detail page: $matchedPageUrl');
+      final detailRes = await http.get(Uri.parse(matchedPageUrl)).timeout(const Duration(seconds: 10));
+      if (detailRes.statusCode != 200) return;
+      
+      final detailHtml = detailRes.body;
+      final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
+      final iframeMatches = iframeRegex.allMatches(detailHtml);
+      
+      final List<String> embeds = [];
+      for (final match in iframeMatches) {
+        var src = match.group(1);
+        if (src != null) {
+          if (src.startsWith('//')) {
+            src = 'https:$src';
+          }
+          if (!src.contains('youtube') && 
+              !src.contains('facebook') && 
+              !src.contains('twitter') && 
+              !src.contains('instagram') && 
+              !embeds.contains(src)) {
+            embeds.add(src);
+          }
+        }
+      }
+      
+      debugPrint('TamilBlasters ClientScraper: Found ${embeds.length} embeds.');
+      final List<StreamSourceInfo> localSources = [];
+      
+      for (final url in embeds) {
+        String serverName = 'TamilBlasters';
+        if (url.contains('cavanhabg.com') || url.contains('hgcloud') || url.contains('hg')) {
+          serverName += ' (HGCloud)';
+        } else if (url.contains('streamtape')) {
+          serverName += ' (Streamtape)';
+        } else if (url.contains('filemoon')) {
+          serverName += ' (Filemoon)';
+        } else if (url.contains('vidplay')) {
+          serverName += ' (Vidplay)';
+        } else {
+          serverName += ' (Embed)';
+        }
+        
+        final isDup = _resolvedSources.any((s) => s.url == url) || localSources.any((s) => s.url == url);
+        if (!isDup) {
+          localSources.add(StreamSourceInfo(
+            name: serverName,
+            url: url,
+            type: StreamSourceType.vidsrc,
+          ));
+        }
+      }
+      
+      if (mounted && localSources.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(localSources);
+        });
+      }
+    } catch (e) {
+      debugPrint('TamilBlasters ClientScraper error: $e');
     }
   }
 
