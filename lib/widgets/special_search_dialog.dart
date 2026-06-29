@@ -239,13 +239,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         final data = json.decode(response.body);
         final rawUrl = data['url'] as String?;
         if (rawUrl != null && rawUrl.isNotEmpty) {
-          // Wrap in proxy URL to bypass CDN IP-locking
-          final proxyUrl = 'https://movie-scraper-beige.vercel.app/api?url=${Uri.encodeComponent(rawUrl)}';
           if (mounted) {
             setState(() {
               _resolvedSources.add(StreamSourceInfo(
                 name: 'VidLink (Native Proxy)',
-                url: proxyUrl,
+                url: rawUrl,
                 type: StreamSourceType.vidlink,
               ));
             });
@@ -472,17 +470,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                          source.url.contains('mixdrop');
 
       if (isWebEmbed) {
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => const Center(
-            child: CircularProgressIndicator(color: Colors.pinkAccent),
-          ),
-        );
         try {
           final resolvedUrl = await EmbedResolver.resolve(context, source.url);
           if (mounted) {
-            Navigator.of(context).pop(); // Dismiss loading spinner
             if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
               final headers = EmbedResolver.getHeadersForUrl(resolvedUrl);
               Navigator.of(context).push(
@@ -505,7 +495,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           }
         } catch (e) {
           if (mounted) {
-            Navigator.of(context).pop(); // Dismiss loading spinner
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Error resolving stream: $e'), backgroundColor: Colors.redAccent),
             );
