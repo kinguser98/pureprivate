@@ -400,8 +400,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final host = uri.host;
           final lowerHost = host.toLowerCase();
           
-          // Force proxy if URL has custom headers or is in the blocklist
-          bool shouldProxy = uri.queryParameters.containsKey('headers');
+          // Force proxy if URL has custom headers, if playHeaders is not empty, or if host is in blocklist
+          bool shouldProxy = uri.queryParameters.containsKey('headers') || playHeaders.isNotEmpty;
           if (!shouldProxy) {
             for (final pattern in MyHttpOverrides.blocklist) {
               if (lowerHost.contains(pattern)) {
@@ -414,8 +414,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           if (shouldProxy) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {
-              final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
-              resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
+              var cleanUri = uri;
+              if (!uri.queryParameters.containsKey('headers') && playHeaders.isNotEmpty) {
+                // Encode the playHeaders into the URL parameter so the proxy can extract it
+                final newParams = Map<String, String>.from(uri.queryParameters);
+                newParams['headers'] = jsonEncode(playHeaders);
+                cleanUri = uri.replace(queryParameters: newParams);
+              }
+              
+              final hostWithPort = cleanUri.hasPort ? '${cleanUri.host}:${cleanUri.port}' : cleanUri.host;
+              resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
               debugPrint('VideoPlayerScreen: Rewrote source to proxy relay: $resolvedSource');
               isProxied = true;
             }
