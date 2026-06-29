@@ -198,70 +198,130 @@ class EmbedResolver {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                   },
                 ),
+                onWebViewCreated: (controller) {
+                  controller.addJavaScriptHandler(
+                    handlerName: 'videoFound',
+                    callback: (args) {
+                      if (args.isNotEmpty) {
+                        final String urlStr = args[0].toString();
+                        debugPrint('EmbedResolver: Video URL reported by JS handler: $urlStr');
+                        if (!completer.isCompleted) {
+                          completer.complete(urlStr);
+                          if (!dismissed) {
+                            Navigator.of(dialogContext).pop(); // Close dialog
+                            dismissed = true;
+                          }
+                        }
+                      }
+                    },
+                  );
+                },
                 initialUserScripts: UnmodifiableListView<UserScript>([
                   UserScript(
                     source: """
                       (function() {
                         console.log("EmbedResolver JS Injected into: " + window.location.href);
-                        var count = 0;
-                        var interval = setInterval(function() {
-                          count++;
-                          if (count > 30) {
-                            clearInterval(interval);
-                            return;
-                          }
-                          
-                          // 1. Try playing raw video elements
+                        
+                        function simulateClick(el) {
                           try {
-                            var vids = document.querySelectorAll('video');
-                            vids.forEach(function(v) {
-                              if (v.paused) {
-                                v.muted = true;
-                                v.play().catch(function(e) {});
+                            el.focus();
+                            var eventTypes = ['mousedown', 'mouseup', 'click'];
+                            eventTypes.forEach(function(type) {
+                              var e = new MouseEvent(type, {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window,
+                                clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
+                                clientY: el.getBoundingClientRect().top + el.clientHeight / 2
+                              });
+                              el.dispatchEvent(e);
+                            });
+                          } catch(e) {}
+                        }
+
+                        // Remove overlay ads
+                        function removeAdOverlays() {
+                          try {
+                            var divs = document.querySelectorAll('div');
+                            divs.forEach(function(div) {
+                              var style = window.getComputedStyle(div);
+                              if (style.position === 'absolute' || style.position === 'fixed') {
+                                var zIndex = parseInt(style.zIndex);
+                                if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
+                                  div.style.display = 'none';
+                                }
                               }
                             });
                           } catch(e) {}
+                        }
 
-                          // 2. Click common play button class/ID selectors
+                        // DOM checker for video tags
+                        var checkVideo = setInterval(function() {
+                          try {
+                            var vids = document.querySelectorAll('video');
+                            vids.forEach(function(v) {
+                              var src = v.src;
+                              if (src && src.startsWith('http') && !src.startsWith('blob:')) {
+                                clearInterval(checkVideo);
+                                window.flutter_inappwebview.callHandler('videoFound', src);
+                              }
+                              var sources = v.querySelectorAll('source');
+                              sources.forEach(function(srcEl) {
+                                if (srcEl.src && srcEl.src.startsWith('http') && !srcEl.src.startsWith('blob:')) {
+                                  clearInterval(checkVideo);
+                                  window.flutter_inappwebview.callHandler('videoFound', srcEl.src);
+                                }
+                              });
+                            });
+                          } catch(e) {}
+                        }, 500);
+
+                        var count = 0;
+                        var interval = setInterval(function() {
+                          count++;
+                          if (count > 40) {
+                            clearInterval(interval);
+                            return;
+                          }
+
+                          removeAdOverlays();
+
+                          // 1. Click common play selectors
                           var selectors = [
                             '.vjs-big-play-button',
                             '.jw-display-icon-container',
                             '.play-button',
                             '.play-icon',
+                            '#play-button',
                             '#play',
                             '.play',
                             '.watch-btn',
                             '.click-to-play',
                             '[class*="play"]',
                             '[id*="play"]',
-                            '.vjs-tech'
+                            '.vjs-tech',
+                            'button',
+                            'svg'
                           ];
                           selectors.forEach(function(sel) {
                             try {
                               var els = document.querySelectorAll(sel);
                               els.forEach(function(el) {
-                                el.click();
-                                var evt = new MouseEvent('click', {bubbles: true, cancelable: true});
-                                el.dispatchEvent(evt);
+                                simulateClick(el);
                               });
                             } catch(e) {}
                           });
 
-                          // 3. Click the exact center of the page viewport
+                          // 2. Click the center of the page
                           try {
-                            var el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+                            var x = window.innerWidth / 2;
+                            var y = window.innerHeight / 2;
+                            var el = document.elementFromPoint(x, y);
                             if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                              el.click();
-                              var evt = new MouseEvent('click', {
-                                clientX: window.innerWidth / 2,
-                                clientY: window.innerHeight / 2,
-                                bubbles: true,
-                                cancelable: true
-                              });
-                              el.dispatchEvent(evt);
+                              simulateClick(el);
                             }
                           } catch(e) {}
-                        }, 500);
+                        }, 400);
                       })();
                     """,
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
