@@ -5,12 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/screens/video_player_screen.dart';
-import 'package:private_cinema_ios/screens/webview_player_screen.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
@@ -170,12 +170,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     // 4. Resolve Stalker Synced VOD Database (requires movie title)
     tasks.add(_resolveStalkerVodDatabase(title));
-
-    // 5. Resolve TamilBlasters Client-side Scraper
-    final year = _selectedMovie != null && _selectedMovie['release_date'] != null
-        ? _selectedMovie['release_date'].toString().split('-').first
-        : '';
-    tasks.add(_resolveTamilBlastersClientSide(title, year));
 
     await Future.wait(tasks);
 
@@ -1155,18 +1149,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.stalker),
           ),
 
-          // TamilBlasters Server Group
-          _buildServerGroupCard(
-            title: '5. TamilBlasters Server',
-            subtitle: _resolvingStreams && tamilblastersStreams.isEmpty 
-                ? 'Searching TamilBlasters...' 
-                : (tamilblastersStreams.isNotEmpty ? '${tamilblastersStreams.length} links available' : 'Not available'),
-            icon: Icons.language_rounded,
-            accentColor: Colors.tealAccent,
-            onTap: tamilblastersStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.tamilblasters),
-          ),
         ],
       );
     } else {
@@ -1175,17 +1157,17 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           ? stravoStreams 
           : (_activeGroupType == StreamSourceType.torrent 
               ? torrentStreams 
-              : (_activeGroupType == StreamSourceType.stalker ? stalkerStreams : tamilblastersStreams));
+              : stalkerStreams);
       final accentColor = _activeGroupType == StreamSourceType.stravo 
           ? Colors.cyan 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Colors.amber 
-              : (_activeGroupType == StreamSourceType.stalker ? Colors.purpleAccent : Colors.tealAccent));
+              : Colors.purpleAccent);
       final iconData = _activeGroupType == StreamSourceType.stravo 
           ? Icons.rocket_launch_rounded 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Icons.cloud_circle_rounded 
-              : (_activeGroupType == StreamSourceType.stalker ? Icons.movie_filter_rounded : Icons.language_rounded));
+              : Icons.movie_filter_rounded);
 
       if (activeList.isEmpty) {
         return Center(
