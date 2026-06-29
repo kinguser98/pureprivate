@@ -236,81 +236,108 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       );
       final matches = searchRegex.allMatches(searchHtml).toList();
       
-      String? matchedPageUrl;
+      final List<Map<String, String>> matchedPages = [];
       final cleanedSearchTitle = title.toLowerCase().replaceAll(RegExp(r'[^\w\s]'), '').trim();
       
       for (final match in matches) {
         final href = match.group(1);
-        final name = match.group(2)?.toLowerCase() ?? '';
-        final cleanedName = name.replaceAll(RegExp(r'[^\w\s]'), '').trim();
+        final name = match.group(2) ?? '';
+        final nameLower = name.toLowerCase();
+        final cleanedName = nameLower.replaceAll(RegExp(r'[^\w\s]'), '').trim();
         
-        if (href != null && (name.contains(cleanedSearchTitle) || cleanedName.contains(cleanedSearchTitle))) {
-          if (year.isEmpty || name.contains(year)) {
-            matchedPageUrl = href;
-            break;
+        if (href != null && (nameLower.contains(cleanedSearchTitle) || cleanedName.contains(cleanedSearchTitle))) {
+          if (year.isEmpty || nameLower.contains(year)) {
+            matchedPages.add({
+              'url': href,
+              'title': name,
+            });
           }
         }
       }
       
-      // Fallback to first result if no strict match
-      if (matchedPageUrl == null && matches.isNotEmpty) {
-        matchedPageUrl = matches.first.group(1);
+      // Fallback if no matching page found but matches are not empty
+      if (matchedPages.isEmpty && matches.isNotEmpty) {
+        final fallbackHref = matches.first.group(1);
+        final fallbackTitle = matches.first.group(2) ?? 'TamilBlasters';
+        if (fallbackHref != null) {
+          matchedPages.add({
+            'url': fallbackHref,
+            'title': fallbackTitle,
+          });
+        }
       }
       
-      if (matchedPageUrl == null) {
-        debugPrint('TamilBlasters ClientScraper: No matching search page found.');
+      if (matchedPages.isEmpty) {
+        debugPrint('TamilBlasters ClientScraper: No matched search page found.');
         return;
       }
       
-      debugPrint('TamilBlasters ClientScraper: Loading detail page: $matchedPageUrl');
-      await _loadUrlAndWait(matchedPageUrl);
-      
-      final detailHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
-      
-      final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
-      final iframeMatches = iframeRegex.allMatches(detailHtml);
-      
-      final List<String> embeds = [];
-      for (final match in iframeMatches) {
-        var src = match.group(1);
-        if (src != null) {
-          if (src.startsWith('//')) {
-            src = 'https:$src';
-          }
-          if (!src.contains('youtube') && 
-              !src.contains('facebook') && 
-              !src.contains('twitter') && 
-              !src.contains('instagram') && 
-              !embeds.contains(src)) {
-            embeds.add(src);
-          }
-        }
-      }
-      
-      debugPrint('TamilBlasters ClientScraper: Found ${embeds.length} embeds.');
       final List<StreamSourceInfo> localSources = [];
       
-      for (final url in embeds) {
-        String serverName = 'TamilBlasters';
-        if (url.contains('cavanhabg.com') || url.contains('hgcloud') || url.contains('hg')) {
-          serverName += ' (HGCloud)';
-        } else if (url.contains('streamtape')) {
-          serverName += ' (Streamtape)';
-        } else if (url.contains('filemoon')) {
-          serverName += ' (Filemoon)';
-        } else if (url.contains('vidplay')) {
-          serverName += ' (Vidplay)';
-        } else {
-          serverName += ' (Embed)';
+      // Scrape up to 4 top matched pages
+      for (final page in matchedPages.take(4)) {
+        final pageUrl = page['url']!;
+        final pageTitle = page['title']!;
+        
+        debugPrint('TamilBlasters ClientScraper: WebView loading detail page: $pageUrl');
+        await _loadUrlAndWait(pageUrl);
+        
+        final detailHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
+        
+        final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
+        final iframeMatches = iframeRegex.allMatches(detailHtml);
+        
+        final List<String> pageEmbeds = [];
+        for (final match in iframeMatches) {
+          var src = match.group(1);
+          if (src != null) {
+            if (src.startsWith('//')) {
+              src = 'https:$src';
+            }
+            if (!src.contains('youtube') && 
+                !src.contains('facebook') && 
+                !src.contains('twitter') && 
+                !src.contains('instagram') && 
+                !pageEmbeds.contains(src)) {
+              pageEmbeds.add(src);
+            }
+          }
         }
         
-        final isDup = _resolvedSources.any((s) => s.url == url) || localSources.any((s) => s.url == url);
-        if (!isDup) {
-          localSources.add(StreamSourceInfo(
-            name: serverName,
-            url: url,
-            type: StreamSourceType.tamilblasters,
-          ));
+        debugPrint('TamilBlasters ClientScraper: Found ${pageEmbeds.length} embeds on page: $pageTitle');
+        
+        // Format page title to remove tags, domain names, file sizes, and trailing codecs
+        String displayTitle = pageTitle;
+        displayTitle = displayTitle
+            .replaceAll(RegExp(r'\(TamilBlasters\)', caseSensitive: false), '')
+            .replaceAll(RegExp(r'www\.1TamilBlasters\.\w+', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\[\s*1\s*tamilblasters\s*\]', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\s+-\s+x264.*$', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\s+-\s+700MB.*$', caseSensitive: false), '')
+            .trim();
+            
+        for (final url in pageEmbeds) {
+          String hostName = 'Embed';
+          if (url.contains('cavanhabg.com') || url.contains('hgcloud') || url.contains('hglink') || url.contains('hg')) {
+            hostName = 'HG Cloud';
+          } else if (url.contains('streamtape')) {
+            hostName = 'Streamtape';
+          } else if (url.contains('filemoon')) {
+            hostName = 'Filemoon';
+          } else if (url.contains('vidplay')) {
+            hostName = 'Vidplay';
+          }
+          
+          final serverName = '$hostName - $displayTitle';
+          
+          final isDup = _resolvedSources.any((s) => s.url == url) || localSources.any((s) => s.url == url);
+          if (!isDup) {
+            localSources.add(StreamSourceInfo(
+              name: serverName,
+              url: url,
+              type: StreamSourceType.tamilblasters,
+            ));
+          }
         }
       }
       

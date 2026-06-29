@@ -457,6 +457,10 @@ class EmbedResolver {
                       host.contains('streamtape') ||
                       host.contains('strcloud.club') ||
                       host.contains('tpead.net') ||
+                      host.contains('hglink') ||
+                      host.contains('hgcloud') ||
+                      host.contains('cavanhabg') ||
+                      host.contains('cavanha') ||
                       url.startsWith('data:')) {
                     return NavigationActionPolicy.ALLOW;
                   }
