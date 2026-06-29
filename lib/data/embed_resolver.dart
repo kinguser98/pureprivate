@@ -436,7 +436,6 @@ class EmbedResolver {
           }
 
           final url = navigationAction.request.url?.toString() ?? '';
-          final host = navigationAction.request.url?.host ?? '';
           final lower = url.toLowerCase();
           
           if (lower.contains('adserver') || 
@@ -451,43 +450,37 @@ class EmbedResolver {
             return NavigationActionPolicy.CANCEL;
           }
           
-          final originalUri = WebUri(embedUrl);
-          final originalHost = originalUri.host;
-          
-          if (host == originalHost || 
-              host.isEmpty || 
-              host.contains('vidsrc') || 
-              host.contains('vidsrcme') ||
-              host.contains('orchestranova') ||
-              host.contains('vaplayer') ||
-              host.contains('vidplay') ||
-              host.contains('mcloud') ||
-              host.contains('rcpcdn') ||
-              host.contains('streamimdb') ||
-              host.contains('playimdb') ||
-              host.contains('streamtape') ||
-              host.contains('strcloud.club') ||
-              host.contains('tpead.net') ||
-              host.contains('hglink') ||
-              host.contains('hgcloud') ||
-              host.contains('cavanhabg') ||
-              host.contains('cavanha') ||
-              host.contains('tryzendm') ||
-              host.contains('vidhidepro') ||
-              host.contains('filemoon') ||
-              url.startsWith('data:')) {
-            return NavigationActionPolicy.ALLOW;
-          }
-          
-          debugPrint('EmbedResolver: Blocked ad redirect to $url');
-          return NavigationActionPolicy.CANCEL;
+          // Allow all other redirections and player frames in background HeadlessWebView
+          return NavigationActionPolicy.ALLOW;
         },
         onLoadResource: (controller, resource) {
           final urlStr = resource.url?.toString() ?? '';
           if (_isValidVideoResource(resource.url)) {
             debugPrint('EmbedResolver: Found direct video URL in background: $urlStr');
             if (!completer.isCompleted) {
-              completer.complete(urlStr);
+              // Construct headers Map to prevent HTTP 403 Forbidden errors in VideoPlayerScreen
+              try {
+                final embedUri = Uri.parse(embedUrl);
+                final refererHost = '${embedUri.scheme}://${embedUri.host}/';
+                final originHost = '${embedUri.scheme}://${embedUri.host}';
+                
+                final headersMap = {
+                  'Referer': refererHost,
+                  'Origin': originHost,
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                };
+                
+                final videoUri = Uri.parse(urlStr);
+                final queryParams = Map<String, String>.from(videoUri.queryParameters);
+                queryParams['headers'] = jsonEncode(headersMap);
+                
+                final resolvedWithHeaders = videoUri.replace(queryParameters: queryParams).toString();
+                completer.complete(resolvedWithHeaders);
+              } catch (e) {
+                debugPrint('EmbedResolver: Error building headers query: $e');
+                completer.complete(urlStr);
+              }
+              
               if (!dismissed) {
                 Navigator.of(context).pop(); // Close dialog
                 dismissed = true;
