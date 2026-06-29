@@ -439,6 +439,9 @@ class CustomDnsProxy {
           
           var bodyStr = utf8.decode(decodedBytes);
           
+          // Propagate incoming request's 'headers' query parameter to all rewritten absolute links
+          final incomingHeadersParam = request.uri.queryParameters['headers'];
+          
           final urlRegExp = RegExp(r'(https?://[^\s"\r\n]+)');
           bodyStr = bodyStr.replaceAllMapped(urlRegExp, (match) {
             final absoluteUrl = match.group(1)!;
@@ -448,7 +451,15 @@ class CustomDnsProxy {
             try {
               final absUri = Uri.parse(absoluteUrl);
               final hostWithPort = absUri.hasPort ? '${absUri.host}:${absUri.port}' : absUri.host;
-              return 'http://127.0.0.1:$port/proxy/${absUri.scheme}/$hostWithPort${absUri.path}${absUri.hasQuery ? "?" + absUri.query : ""}';
+              
+              var rewrittenUri = absUri;
+              if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
+                final newParams = Map<String, String>.from(absUri.queryParameters);
+                newParams['headers'] = incomingHeadersParam;
+                rewrittenUri = absUri.replace(queryParameters: newParams);
+              }
+              
+              return 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
             } catch (_) {
               return absoluteUrl;
             }
