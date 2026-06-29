@@ -1019,7 +1019,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     final isScraper = source.contains('movie-scraper-beige.vercel.app') || 
-                      source.contains('movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app');
+                      source.contains('movie-scraper-beige.vercel.app');
     if (isScraper) {
       final vidlinkTmdbId = (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null')
           ? movie.tmdbId

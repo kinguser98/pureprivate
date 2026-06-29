@@ -65,7 +65,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     try {
       const apiKey = '3a73619bbb8fc6d47742d1b5b2b707b5';
       final targetUrl = 'https://api.themoviedb.org/3/search/movie?api_key=$apiKey&query=${Uri.encodeComponent(query)}';
-      final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
+      final proxyUrl = 'https://movie-scraper-beige.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
       
       debugPrint('TMDB Search via Proxy: $proxyUrl');
       final response = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 10));
@@ -114,7 +114,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     try {
       const apiKey = '3a73619bbb8fc6d47742d1b5b2b707b5';
       final targetUrl = 'https://api.themoviedb.org/3/movie/$tmdbId?api_key=$apiKey';
-      final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
+      final proxyUrl = 'https://movie-scraper-beige.vercel.app/api?url=${Uri.encodeComponent(targetUrl)}';
       
       debugPrint('TMDB Details via Proxy: $proxyUrl');
       final detailsResponse = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 10));
@@ -195,7 +195,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         queryParams['year'] = year;
       }
 
-      final uri = Uri.parse('https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api').replace(queryParameters: queryParams);
+      final uri = Uri.parse('https://movie-scraper-beige.vercel.app/api').replace(queryParameters: queryParams);
       final response = await http.get(uri).timeout(const Duration(seconds: 12));
 
       if (response.statusCode == 200) {
@@ -232,14 +232,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveVidLink(String activeId) async {
     try {
-      final url = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?id=$activeId';
+      final url = 'https://movie-scraper-beige.vercel.app/api?id=$activeId';
       final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final rawUrl = data['url'] as String?;
         if (rawUrl != null && rawUrl.isNotEmpty) {
           // Wrap in proxy URL to bypass CDN IP-locking
-          final proxyUrl = 'https://movie-scraper-j6k1jkfy1-kinguser98s-projects.vercel.app/api?url=${Uri.encodeComponent(rawUrl)}';
+          final proxyUrl = 'https://movie-scraper-beige.vercel.app/api?url=${Uri.encodeComponent(rawUrl)}';
           if (mounted) {
             setState(() {
               _resolvedSources.add(StreamSourceInfo(
