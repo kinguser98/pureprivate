@@ -307,13 +307,43 @@ class CustomDnsProxy {
         final query = request.uri.hasQuery ? '?' + request.uri.query : '';
         final targetUrl = '$targetScheme://$targetHostRaw$remainingPath$query';
         
-        debugPrint('CustomDnsProxy HTTP Relay: Fetching $targetUrl with retry loop');
+        // Construct a clean target URL without the 'headers' query parameter
+        String cleanTargetUrl = targetUrl;
+        final Map<String, String> extraHeaders = {};
+        try {
+          final targetUri = Uri.parse(targetUrl);
+          if (targetUri.queryParameters.containsKey('headers')) {
+            final headersParam = targetUri.queryParameters['headers'];
+            if (headersParam != null && headersParam.isNotEmpty) {
+              final decodedJson = jsonDecode(headersParam);
+              if (decodedJson is Map) {
+                decodedJson.forEach((key, value) {
+                  extraHeaders[key.toString()] = value.toString();
+                });
+              }
+            }
+            final cleanParams = Map<String, String>.from(targetUri.queryParameters);
+            cleanParams.remove('headers');
+            if (cleanParams.isEmpty) {
+              cleanTargetUrl = targetUri.replace(query: '').toString();
+              if (cleanTargetUrl.endsWith('?')) {
+                cleanTargetUrl = cleanTargetUrl.substring(0, cleanTargetUrl.length - 1);
+              }
+            } else {
+              cleanTargetUrl = targetUri.replace(queryParameters: cleanParams).toString();
+            }
+          }
+        } catch (e) {
+          debugPrint('CustomDnsProxy: Error extracting query headers: $e');
+        }
+        
+        debugPrint('CustomDnsProxy HTTP Relay: Fetching $cleanTargetUrl with retry loop');
         
         HttpClientResponse? resp;
         Object? lastError;
         for (int attempt = 0; attempt < 3; attempt++) {
           try {
-            final req = await client.openUrl(request.method, Uri.parse(targetUrl))
+            final req = await client.openUrl(request.method, Uri.parse(cleanTargetUrl))
                 .timeout(const Duration(seconds: 8));
             req.followRedirects = false;
             
@@ -330,29 +360,17 @@ class CustomDnsProxy {
             req.headers.set('Connection', 'close');
             req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-            // Dynamically extract security headers encoded in the URL query parameter
-            try {
-              final targetUri = Uri.parse(targetUrl);
-              final headersParam = targetUri.queryParameters['headers'];
-              if (headersParam != null && headersParam.isNotEmpty) {
-                final decodedJson = jsonDecode(headersParam);
-                if (decodedJson is Map) {
-                  decodedJson.forEach((key, value) {
-                    final keyStr = key.toString();
-                    final valStr = value.toString();
-                    if (keyStr.toLowerCase() == 'referer') {
-                      req.headers.set('Referer', valStr);
-                    } else if (keyStr.toLowerCase() == 'origin') {
-                      req.headers.set('Origin', valStr);
-                    } else {
-                      req.headers.set(keyStr, valStr);
-                    }
-                  });
-                }
+            // Apply extracted query parameter headers
+            extraHeaders.forEach((key, value) {
+              final keyLower = key.toLowerCase();
+              if (keyLower == 'referer') {
+                req.headers.set('Referer', value);
+              } else if (keyLower == 'origin') {
+                req.headers.set('Origin', value);
+              } else {
+                req.headers.set(key, value);
               }
-            } catch (e) {
-              debugPrint('CustomDnsProxy: Error extracting query headers: $e');
-            }
+            });
 
             // Auto-inject VidLink headers for VidLink CDNs (applies to both playlists and absolute segment chunks)
             final targetHostLower = targetHost.toLowerCase();
@@ -366,16 +384,16 @@ class CustomDnsProxy {
             }
             
             resp = await req.close().timeout(const Duration(seconds: 8));
-            debugPrint('CustomDnsProxy HTTP Relay: Target returned status ${resp.statusCode} for $targetUrl');
+            debugPrint('CustomDnsProxy HTTP Relay: Target returned status ${resp.statusCode} for $cleanTargetUrl');
             break;
           } catch (e) {
             lastError = e;
-            debugPrint('CustomDnsProxy: Fetch attempt ${attempt + 1} failed for $targetUrl: $e');
+            debugPrint('CustomDnsProxy: Fetch attempt ${attempt + 1} failed for $cleanTargetUrl: $e');
             if (attempt < 2) {
               await Future.delayed(const Duration(milliseconds: 300));
             }
           }
-        }
+        } }
         
         if (resp == null) {
           throw lastError ?? Exception('Failed to fetch after retries');

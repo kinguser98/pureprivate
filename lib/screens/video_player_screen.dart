@@ -392,11 +392,42 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
 
       var resolvedSource = widget.videoSource;
+      bool isProxied = false;
       
-      // Strip the inline 'headers' query parameter from the URL before sending to CDN.
-      // CDN servers validate signed query parameters and reject requests with unknown params.
-      // The headers have already been extracted into playHeaders above.
       if (resolvedSource.startsWith('http')) {
+        try {
+          final uri = Uri.parse(resolvedSource);
+          final host = uri.host;
+          final lowerHost = host.toLowerCase();
+          
+          // Force proxy if URL has custom headers or is in the blocklist
+          bool shouldProxy = uri.queryParameters.containsKey('headers');
+          if (!shouldProxy) {
+            for (final pattern in MyHttpOverrides.blocklist) {
+              if (lowerHost.contains(pattern)) {
+                shouldProxy = true;
+                break;
+              }
+            }
+          }
+          
+          if (shouldProxy) {
+            final dnsProxy = CustomDnsProxy();
+            if (dnsProxy.port != null) {
+              final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+              resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
+              debugPrint('VideoPlayerScreen: Rewrote source to proxy relay: $resolvedSource');
+              isProxied = true;
+            }
+          }
+        } catch (e) {
+          debugPrint('VideoPlayerScreen error rewriting proxy URL: $e');
+        }
+      }
+
+      // If we are NOT routing through the local proxy, we must strip the 'headers' query parameter
+      // here so the player directly requests the clean URL without corrupting CDN signatures.
+      if (!isProxied && resolvedSource.startsWith('http')) {
         try {
           final sourceUri = Uri.parse(resolvedSource);
           if (sourceUri.queryParameters.containsKey('headers')) {
@@ -404,42 +435,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             cleanParams.remove('headers');
             if (cleanParams.isEmpty) {
               resolvedSource = sourceUri.replace(query: '').toString();
-              // Uri.replace with empty query still adds '?', so strip trailing '?'
               if (resolvedSource.endsWith('?')) {
                 resolvedSource = resolvedSource.substring(0, resolvedSource.length - 1);
               }
             } else {
               resolvedSource = sourceUri.replace(queryParameters: cleanParams).toString();
             }
-            debugPrint('VideoPlayerScreen: Stripped headers param from URL: $resolvedSource');
+            debugPrint('VideoPlayerScreen: Direct playback, stripped headers param: $resolvedSource');
           }
         } catch (e) {
           debugPrint('VideoPlayerScreen: Error stripping headers param: $e');
-        }
-      }
-      
-      if (resolvedSource.startsWith('http')) {
-        try {
-          final uri = Uri.parse(resolvedSource);
-          final host = uri.host;
-          final lowerHost = host.toLowerCase();
-          bool shouldProxy = false;
-          for (final pattern in MyHttpOverrides.blocklist) {
-            if (lowerHost.contains(pattern)) {
-              shouldProxy = true;
-              break;
-            }
-          }
-          if (shouldProxy) {
-            final dnsProxy = CustomDnsProxy();
-            if (dnsProxy.port != null) {
-              final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
-              resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${uri.scheme}/$hostWithPort${uri.path}${uri.hasQuery ? "?" + uri.query : ""}';
-              debugPrint('VideoPlayerScreen: Rewrote blocked source to proxy relay: $resolvedSource');
-            }
-          }
-        } catch (e) {
-          debugPrint('VideoPlayerScreen error rewriting proxy URL: $e');
         }
       }
       await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: false);
