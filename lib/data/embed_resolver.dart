@@ -143,199 +143,203 @@ class EmbedResolver {
             return true;
           },
           child: AlertDialog(
-            backgroundColor: const Color(0xFF1E1E24),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            content: SizedBox(
-              width: 280,
-              height: 160,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  // Positioned off-screen so the native platform view overlay is not visible to the user
-                  Positioned(
-                    left: -2000,
-                    top: -2000,
-                    width: 320,
-                    height: 240,
-                    child: InAppWebView(
-                      initialUrlRequest: URLRequest(
-                        url: WebUri(embedUrl),
-                        headers: {
-                          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        },
+            backgroundColor: const Color(0xFF16161A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            title: Row(
+              children: [
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    color: Color(0xFFFF2E93),
+                    strokeWidth: 2,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Text(
+                        'RESOLVING STREAM LINK',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
+                        ),
                       ),
-                      initialUserScripts: UnmodifiableListView<UserScript>([
-                        UserScript(
-                          source: """
-                            (function() {
-                              console.log("EmbedResolver JS Injected into: " + window.location.href);
-                              var count = 0;
-                              var interval = setInterval(function() {
-                                count++;
-                                if (count > 30) {
-                                  clearInterval(interval);
-                                  return;
-                                }
-                                
-                                // 1. Try playing raw video elements
-                                try {
-                                  var vids = document.querySelectorAll('video');
-                                  vids.forEach(function(v) {
-                                    if (v.paused) {
-                                      v.muted = true;
-                                      v.play().catch(function(e) {});
-                                    }
-                                  });
-                                } catch(e) {}
-
-                                // 2. Click common play button class/ID selectors
-                                var selectors = [
-                                  '.vjs-big-play-button',
-                                  '.jw-display-icon-container',
-                                  '.play-button',
-                                  '.play-icon',
-                                  '#play',
-                                  '.play',
-                                  '.watch-btn',
-                                  '.click-to-play',
-                                  '[class*="play"]',
-                                  '[id*="play"]',
-                                  '.vjs-tech'
-                                ];
-                                selectors.forEach(function(sel) {
-                                  try {
-                                    var els = document.querySelectorAll(sel);
-                                    els.forEach(function(el) {
-                                      el.click();
-                                      var evt = new MouseEvent('click', {bubbles: true, cancelable: true});
-                                      el.dispatchEvent(evt);
-                                    });
-                                  } catch(e) {}
-                                });
-
-                                // 3. Click the exact center of the page viewport
-                                try {
-                                  var el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
-                                  if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                                    el.click();
-                                    var evt = new MouseEvent('click', {
-                                      clientX: window.innerWidth / 2,
-                                      clientY: window.innerHeight / 2,
-                                      bubbles: true,
-                                      cancelable: true
-                                    });
-                                    el.dispatchEvent(evt);
-                                  }
-                                } catch(e) {}
-                              }, 500);
-                            })();
-                          """,
-                          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
-                          forMainFrameOnly: false,
-                        )
-                      ]),
-                      initialSettings: InAppWebViewSettings(
-                        javaScriptEnabled: true,
-                        mediaPlaybackRequiresUserGesture: false,
-                        allowsInlineMediaPlayback: true,
-                        javaScriptCanOpenWindowsAutomatically: false,
-                        supportMultipleWindows: false,
+                      SizedBox(height: 4),
+                      Text(
+                        'Solve Cloudflare challenge if prompted...',
+                        style: TextStyle(color: Colors.white38, fontSize: 10.5),
                       ),
-                      shouldOverrideUrlLoading: (controller, navigationAction) async {
-                        // Allow sub-frame navigation (like inside player iframes) to prevent "Network error - All servers failed"
-                        if (!navigationAction.isForMainFrame) {
-                          return NavigationActionPolicy.ALLOW;
-                        }
-
-                        final url = navigationAction.request.url?.toString() ?? '';
-                        final host = navigationAction.request.url?.host ?? '';
-                        
-                        final originalUri = WebUri(embedUrl);
-                        final originalHost = originalUri.host;
-                        
-                        final lower = url.toLowerCase();
-                        if (lower.contains('adserver') || 
-                            lower.contains('adsystem') || 
-                            lower.contains('popads') || 
-                            lower.contains('onclick') || 
-                            lower.contains('exoclick') || 
-                            lower.contains('adsterra') ||
-                            lower.contains('/ads/') ||
-                            lower.contains('redirect')) {
-                          debugPrint('EmbedResolver: Blocked ad URL in navigation: $url');
-                          return NavigationActionPolicy.CANCEL;
-                        }
-                        
-                        if (host == originalHost || 
-                            host.isEmpty || 
-                            host.contains('vidsrc') || 
-                            host.contains('vidsrcme') ||
-                            host.contains('orchestranova') ||
-                            host.contains('vaplayer') ||
-                            host.contains('vidplay') ||
-                            host.contains('mcloud') ||
-                            host.contains('rcpcdn') ||
-                            host.contains('streamimdb') ||
-                            host.contains('playimdb') ||
-                            host.contains('streamtape') ||
-                            host.contains('strcloud.club') ||
-                            host.contains('tpead.net') ||
-                            url.startsWith('data:')) {
-                          return NavigationActionPolicy.ALLOW;
-                        }
-                        
-                        debugPrint('EmbedResolver: Blocked ad redirect to $url');
-                        return NavigationActionPolicy.CANCEL;
-                      },
-                      onCreateWindow: (controller, createWindowAction) async {
-                        debugPrint('EmbedResolver: Blocked popup window');
-                        return true;
-                      },
-                      onLoadResource: (controller, resource) {
-                        final urlStr = resource.url?.toString() ?? '';
-                        debugPrint('EmbedResolver Intercepted: $urlStr');
-                        
-                        if (_isValidVideoResource(resource.url)) {
-                          debugPrint('EmbedResolver: Found direct video URL: $urlStr');
-                          if (!completer.isCompleted) {
-                            completer.complete(urlStr);
-                            if (!dismissed) {
-                              Navigator.of(dialogContext).pop(); // Close dialog
-                              dismissed = true;
-                            }
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: Container(
+              width: 320,
+              height: 260,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white12, width: 1.5),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InAppWebView(
+                initialUrlRequest: URLRequest(
+                  url: WebUri(embedUrl),
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  },
+                ),
+                initialUserScripts: UnmodifiableListView<UserScript>([
+                  UserScript(
+                    source: """
+                      (function() {
+                        console.log("EmbedResolver JS Injected into: " + window.location.href);
+                        var count = 0;
+                        var interval = setInterval(function() {
+                          count++;
+                          if (count > 30) {
+                            clearInterval(interval);
+                            return;
                           }
-                        }
-                      },
-                    ),
-                  ),
-                  // Foreground Loading Spinner and Text
-                  Positioned.fill(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(
-                          color: Color(0xFFFF2E93), // Match GoXio pink/neon accent
-                        ),
-                        const SizedBox(height: 24),
-                        const Text(
-                          'RESOLVING SERVER LINK',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Extracting direct video stream...',
-                          style: TextStyle(color: Colors.white38, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                          
+                          // 1. Try playing raw video elements
+                          try {
+                            var vids = document.querySelectorAll('video');
+                            vids.forEach(function(v) {
+                              if (v.paused) {
+                                v.muted = true;
+                                v.play().catch(function(e) {});
+                              }
+                            });
+                          } catch(e) {}
+
+                          // 2. Click common play button class/ID selectors
+                          var selectors = [
+                            '.vjs-big-play-button',
+                            '.jw-display-icon-container',
+                            '.play-button',
+                            '.play-icon',
+                            '#play',
+                            '.play',
+                            '.watch-btn',
+                            '.click-to-play',
+                            '[class*="play"]',
+                            '[id*="play"]',
+                            '.vjs-tech'
+                          ];
+                          selectors.forEach(function(sel) {
+                            try {
+                              var els = document.querySelectorAll(sel);
+                              els.forEach(function(el) {
+                                el.click();
+                                var evt = new MouseEvent('click', {bubbles: true, cancelable: true});
+                                el.dispatchEvent(evt);
+                              });
+                            } catch(e) {}
+                          });
+
+                          // 3. Click the exact center of the page viewport
+                          try {
+                            var el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+                            if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
+                              el.click();
+                              var evt = new MouseEvent('click', {
+                                clientX: window.innerWidth / 2,
+                                clientY: window.innerHeight / 2,
+                                bubbles: true,
+                                cancelable: true
+                              });
+                              el.dispatchEvent(evt);
+                            }
+                          } catch(e) {}
+                        }, 500);
+                      })();
+                    """,
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+                    forMainFrameOnly: false,
+                  )
+                ]),
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  mediaPlaybackRequiresUserGesture: false,
+                  allowsInlineMediaPlayback: true,
+                  javaScriptCanOpenWindowsAutomatically: false,
+                  supportMultipleWindows: false,
+                ),
+                shouldOverrideUrlLoading: (controller, navigationAction) async {
+                  // Allow sub-frame navigation (like inside player iframes) to prevent "Network error - All servers failed"
+                  if (!navigationAction.isForMainFrame) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+
+                  final url = navigationAction.request.url?.toString() ?? '';
+                  final host = navigationAction.request.url?.host ?? '';
+                  
+                  final originalUri = WebUri(embedUrl);
+                  final originalHost = originalUri.host;
+                  
+                  final lower = url.toLowerCase();
+                  if (lower.contains('adserver') || 
+                      lower.contains('adsystem') || 
+                      lower.contains('popads') || 
+                      lower.contains('onclick') || 
+                      lower.contains('exoclick') || 
+                      lower.contains('adsterra') ||
+                      lower.contains('/ads/') ||
+                      lower.contains('redirect')) {
+                    debugPrint('EmbedResolver: Blocked ad URL in navigation: $url');
+                    return NavigationActionPolicy.CANCEL;
+                  }
+                  
+                  if (host == originalHost || 
+                      host.isEmpty || 
+                      host.contains('vidsrc') || 
+                      host.contains('vidsrcme') ||
+                      host.contains('orchestranova') ||
+                      host.contains('vaplayer') ||
+                      host.contains('vidplay') ||
+                      host.contains('mcloud') ||
+                      host.contains('rcpcdn') ||
+                      host.contains('streamimdb') ||
+                      host.contains('playimdb') ||
+                      host.contains('streamtape') ||
+                      host.contains('strcloud.club') ||
+                      host.contains('tpead.net') ||
+                      url.startsWith('data:')) {
+                    return NavigationActionPolicy.ALLOW;
+                  }
+                  
+                  debugPrint('EmbedResolver: Blocked ad redirect to $url');
+                  return NavigationActionPolicy.CANCEL;
+                },
+                onCreateWindow: (controller, createWindowAction) async {
+                  debugPrint('EmbedResolver: Blocked popup window');
+                  return true;
+                },
+                onLoadResource: (controller, resource) {
+                  final urlStr = resource.url?.toString() ?? '';
+                  debugPrint('EmbedResolver Intercepted: $urlStr');
+                  
+                  if (_isValidVideoResource(resource.url)) {
+                    debugPrint('EmbedResolver: Found direct video URL: $urlStr');
+                    if (!completer.isCompleted) {
+                      completer.complete(urlStr);
+                      if (!dismissed) {
+                        Navigator.of(dialogContext).pop(); // Close dialog
+                        dismissed = true;
+                      }
+                    }
+                  }
+                },
               ),
             ),
           ),
