@@ -5,12 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/screens/video_player_screen.dart';
-import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/data/embed_resolver.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/screens/video_player_screen.dart';
+import 'package:private_cinema_ios/screens/webview_player_screen.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/embed_resolver.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
@@ -36,9 +36,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   List<StreamSourceInfo> _resolvedSources = [];
   StreamSourceType? _activeGroupType; // server grouping selection
 
-  // Hidden WebView scraping state
-  InAppWebViewController? _scrapingWebViewController;
-  Completer<void>? _scrapingLoadCompleter;
 
   @override
   void dispose() {
@@ -189,30 +186,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  Future<void> _loadUrlAndWait(String url) async {
-    _scrapingLoadCompleter = Completer<void>();
-    await _scrapingWebViewController?.loadUrl(
-      urlRequest: URLRequest(
-        url: WebUri(url),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      ),
-    );
-    // Bounded wait of 12 seconds for page loads
-    await _scrapingLoadCompleter!.future.timeout(const Duration(seconds: 12)).catchError((e) {
-      debugPrint('TamilBlasters ClientScraper: Page loading timed out');
-    });
-  }
-
   Future<void> _resolveTamilBlastersClientSide(String title, String year) async {
-    if (_scrapingWebViewController == null) {
-      debugPrint('TamilBlasters ClientScraper: Background WebView controller not ready yet.');
-      return;
-    }
-    
+    HeadlessInAppWebView? headlessWebView;
+    InAppWebViewController? headlessController;
+    Function(InAppWebViewController, WebUri?)? currentOnLoadStop;
+
     try {
-      debugPrint('TamilBlasters ClientScraper: Resolving client-side via background WebView for $title ($year)...');
+      debugPrint('TamilBlasters ClientScraper: Resolving client-side via HeadlessWebView for $title ($year)...');
       
       // 1. Fetch active domains dynamically to handle domain hopping
       final domainsRes = await http.get(Uri.parse('https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json')).timeout(const Duration(seconds: 5));
@@ -221,12 +201,50 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final domainsJson = json.decode(domainsRes.body);
       final mainUrl = domainsJson['tamilblasters']?.toString() ?? 'https://www.1tamilblasters.republican';
       
-      // 2. Load search page
+      // 2. Load search page in background
       final searchUrl = '$mainUrl/?s=${Uri.encodeComponent(title)}';
-      debugPrint('TamilBlasters ClientScraper: Loading search page: $searchUrl');
-      await _loadUrlAndWait(searchUrl);
+      debugPrint('TamilBlasters ClientScraper: Loading search page in background: $searchUrl');
       
-      final searchHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
+      var pageLoadCompleter = Completer<void>();
+      currentOnLoadStop = (controller, url) {
+        if (!pageLoadCompleter.isCompleted) {
+          pageLoadCompleter.complete();
+        }
+      };
+
+      headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest: URLRequest(
+          url: WebUri(searchUrl),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        ),
+        initialSettings: InAppWebViewSettings(
+          javaScriptEnabled: true,
+          domStorageEnabled: true,
+          databaseEnabled: true,
+        ),
+        onWebViewCreated: (controller) {
+          headlessController = controller;
+        },
+        onLoadStop: (controller, url) {
+          if (currentOnLoadStop != null) {
+            currentOnLoadStop!(controller, url);
+          }
+        },
+      );
+
+      await headlessWebView.run();
+
+      await pageLoadCompleter.future.timeout(const Duration(seconds: 12)).catchError((e) {
+        debugPrint('TamilBlasters ClientScraper: Search page loading timed out');
+      });
+
+      if (headlessController == null) {
+        return;
+      }
+      
+      final searchHtml = await headlessController!.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
       
       // regex matches: <h2 ...> <a href="..."> TITLE </a> </h2>
       final searchRegex = RegExp(
@@ -279,10 +297,28 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         final pageUrl = page['url']!;
         final pageTitle = page['title']!;
         
-        debugPrint('TamilBlasters ClientScraper: WebView loading detail page: $pageUrl');
-        await _loadUrlAndWait(pageUrl);
+        debugPrint('TamilBlasters ClientScraper: Loading detail page: $pageUrl');
+        var detailLoadCompleter = Completer<void>();
+        currentOnLoadStop = (controller, url) {
+          if (!detailLoadCompleter.isCompleted) {
+            detailLoadCompleter.complete();
+          }
+        };
+
+        await headlessController!.loadUrl(
+          urlRequest: URLRequest(
+            url: WebUri(pageUrl),
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          ),
+        );
         
-        final detailHtml = await _scrapingWebViewController?.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
+        await detailLoadCompleter.future.timeout(const Duration(seconds: 12)).catchError((e) {
+          debugPrint('TamilBlasters ClientScraper: Detail page loading timed out');
+        });
+        
+        final detailHtml = await headlessController!.evaluateJavascript(source: "document.documentElement.outerHTML") as String? ?? '';
         
         final iframeRegex = RegExp(r'<iframe\s+[^>]*src="([^"]+)"', caseSensitive: false);
         final iframeMatches = iframeRegex.allMatches(detailHtml);
@@ -318,19 +354,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             
         for (var url in pageEmbeds) {
           String hostName = 'Embed';
-          
-          // CloudStream domain replacement: swap hgcloud.to/hglink.to → cavanhabg.com
-          // This is the critical fix from CloudStream's TamilblastersProvider.kt
           final urlLower = url.toLowerCase();
           if (urlLower.contains('hgcloud') || urlLower.contains('hglink') || urlLower.contains('cavanhabg')) {
             hostName = 'HG Cloud';
-            // Extract the /e/... path and rebuild with cavanhabg.com
-            final eIndex = url.indexOf('/e/');
-            if (eIndex != -1) {
-              final pathPart = url.substring(eIndex); // e.g. /e/ABC123
-              url = 'https://cavanhabg.com$pathPart';
-              debugPrint('TamilBlasters ClientScraper: HG domain swap → $url');
-            }
+            // Do not swap domains to dead cavanhabg.com anymore. 
+            // Keep original domains like hglink.to which resolve properly on device connection.
           } else if (urlLower.contains('streamtape')) {
             hostName = 'Streamtape';
           } else if (urlLower.contains('filemoon')) {
@@ -339,6 +367,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             hostName = 'Vidplay';
           } else if (urlLower.contains('vidhide') || urlLower.contains('tryzendm')) {
             hostName = 'VidHide';
+          } else if (urlLower.contains('lulu') || urlLower.contains('lulustream') || urlLower.contains('lulupwr')) {
+            hostName = 'LuluStream';
           }
           
           final serverName = '$hostName - $displayTitle';
@@ -361,6 +391,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('TamilBlasters ClientScraper error: $e');
+    } finally {
+      await headlessWebView?.dispose();
     }
   }
 
@@ -658,85 +690,54 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     
-    return Stack(
-      children: [
-        // Main Search Dialog UI
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Center(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-                child: Dialog(
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  child: Container(
-                    width: double.infinity,
-                    constraints: const BoxConstraints(maxWidth: 480, maxHeight: 650),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface.withValues(alpha: 0.82),
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.accentBright.withValues(alpha: 0.25),
-                          blurRadius: 40,
-                          spreadRadius: -10,
-                          offset: const Offset(0, 4),
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxWidth: 480, maxHeight: 650),
+                decoration: BoxDecoration(
+                  color: AppColors.surface.withValues(alpha: 0.82),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.accentBright.withValues(alpha: 0.25),
+                      blurRadius: 40,
+                      spreadRadius: -10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: Column(
+                    children: [
+                      // Header bar
+                      _buildHeader(),
+                      // Body content
+                      Expanded(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 300),
+                          child: _selectedMovie != null 
+                              ? _buildMovieDetailsView() 
+                              : _buildSearchView(),
                         ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(28),
-                      child: Column(
-                        children: [
-                          // Header bar
-                          _buildHeader(),
-                          // Body content
-                          Expanded(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 300),
-                              child: _selectedMovie != null 
-                                  ? _buildMovieDetailsView() 
-                                  : _buildSearchView(),
-                            ),
-                          ),
-                        ],
                       ),
-                    ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
         ),
-        
-        // Hidden InAppWebView for Background Client-Side Scrapers
-        Positioned(
-          left: -100,
-          top: -100,
-          child: SizedBox(
-            width: 1,
-            height: 1,
-            child: InAppWebView(
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                domStorageEnabled: true,
-                databaseEnabled: true,
-                mediaPlaybackRequiresUserGesture: true,
-              ),
-              onWebViewCreated: (controller) {
-                _scrapingWebViewController = controller;
-              },
-              onLoadStop: (controller, url) {
-                if (_scrapingLoadCompleter != null && !_scrapingLoadCompleter!.isCompleted) {
-                  _scrapingLoadCompleter!.complete();
-                }
-              },
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 

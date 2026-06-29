@@ -125,29 +125,30 @@ class EmbedResolver {
   }
 
   /// Resolves an embed page URL to its direct media streaming URL (.m3u8 or .mp4)
-  /// using a background InAppWebView to intercept network requests.
+  /// using a background HeadlessInAppWebView to intercept network requests.
   static Future<String?> resolve(BuildContext context, String embedUrl) async {
     final completer = Completer<String?>();
     bool dismissed = false;
+    HeadlessInAppWebView? headlessWebView;
 
-    // Show a loading dialog during link resolution
+    // Show a clean loading dialog during background link resolution
     showDialog<void>(
       context: context,
       barrierDismissible: true, // Allow user to tap outside to cancel
       builder: (dialogContext) {
-        return WillPopScope(
-          onWillPop: () async {
+        return PopScope(
+          canPop: true,
+          onPopInvokedWithResult: (didPop, result) {
             if (!completer.isCompleted) {
               completer.complete(null);
             }
             dismissed = true;
-            return true;
           },
           child: AlertDialog(
             backgroundColor: const Color(0xFF16161A),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
             title: Row(
               children: [
                 const SizedBox(
@@ -175,7 +176,7 @@ class EmbedResolver {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        'Solve Cloudflare challenge if prompted...',
+                        'Resolving stream in the background...',
                         style: TextStyle(color: Colors.white38, fontSize: 10.5),
                       ),
                     ],
@@ -183,314 +184,13 @@ class EmbedResolver {
                 ),
               ],
             ),
-            content: Container(
-              width: 320,
-              height: 260,
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12, width: 1.5),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: InAppWebView(
-                initialUrlRequest: URLRequest(
-                  url: WebUri(embedUrl),
-                  headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                  },
+            content: const SizedBox(
+              height: 24,
+              child: Center(
+                child: Text(
+                  'Please wait while the direct link is resolved.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12.5),
                 ),
-                onWebViewCreated: (controller) {
-                  controller.addJavaScriptHandler(
-                    handlerName: 'videoFound',
-                    callback: (args) {
-                      if (args.isNotEmpty) {
-                        final String urlStr = args[0].toString();
-                        debugPrint('EmbedResolver: Video URL reported by JS handler: $urlStr');
-                        if (!completer.isCompleted) {
-                          completer.complete(urlStr);
-                          if (!dismissed) {
-                            Navigator.of(dialogContext).pop(); // Close dialog
-                            dismissed = true;
-                          }
-                        }
-                      }
-                    },
-                  );
-                },
-                initialUserScripts: UnmodifiableListView<UserScript>([
-                  UserScript(
-                    source: """
-                      (function() {
-                        console.log("EmbedResolver JS Injected into: " + window.location.href);
-                        
-                        function simulateClick(el) {
-                          try {
-                            el.focus();
-                            var eventTypes = ['mousedown', 'mouseup', 'click'];
-                            eventTypes.forEach(function(type) {
-                              var e = new MouseEvent(type, {
-                                bubbles: true,
-                                cancelable: true,
-                                view: window,
-                                clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
-                                clientY: el.getBoundingClientRect().top + el.clientHeight / 2
-                              });
-                              el.dispatchEvent(e);
-                            });
-                          } catch(e) {}
-                        }
-
-                        // Remove overlay ads
-                        function removeAdOverlays() {
-                          try {
-                            var divs = document.querySelectorAll('div');
-                            divs.forEach(function(div) {
-                              var style = window.getComputedStyle(div);
-                              if (style.position === 'absolute' || style.position === 'fixed') {
-                                var zIndex = parseInt(style.zIndex);
-                                if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
-                                  div.style.display = 'none';
-                                }
-                              }
-                            });
-                          } catch(e) {}
-                        }
-
-                        // DOM checker for video tags
-                        var checkVideo = setInterval(function() {
-                          try {
-                            var vids = document.querySelectorAll('video');
-                            vids.forEach(function(v) {
-                              var src = v.src;
-                              if (src && src.startsWith('http') && !src.startsWith('blob:')) {
-                                clearInterval(checkVideo);
-                                window.flutter_inappwebview.callHandler('videoFound', src);
-                              }
-                              var sources = v.querySelectorAll('source');
-                              sources.forEach(function(srcEl) {
-                                if (srcEl.src && srcEl.src.startsWith('http') && !srcEl.src.startsWith('blob:')) {
-                                  clearInterval(checkVideo);
-                                  window.flutter_inappwebview.callHandler('videoFound', srcEl.src);
-                                }
-                              });
-                            });
-                          } catch(e) {}
-                        }, 500);
-
-                        var count = 0;
-                        var interval = setInterval(function() {
-                          count++;
-                          if (count > 40) {
-                            clearInterval(interval);
-                            return;
-                          }
-
-                          removeAdOverlays();
-
-                          // 1. Click common play selectors
-                          var selectors = [
-                            '.vjs-big-play-button',
-                            '.jw-display-icon-container',
-                            '.play-button',
-                            '.play-icon',
-                            '#play-button',
-                            '#play',
-                            '.play',
-                            '.watch-btn',
-                            '.click-to-play',
-                            '[class*="play"]',
-                            '[id*="play"]',
-                            '.vjs-tech',
-                            'button',
-                            'svg'
-                          ];
-                          selectors.forEach(function(sel) {
-                            try {
-                              var els = document.querySelectorAll(sel);
-                              els.forEach(function(el) {
-                                simulateClick(el);
-                              });
-                            } catch(e) {}
-                          });
-
-                          // 2. Click the center of the page
-                          try {
-                            var x = window.innerWidth / 2;
-                            var y = window.innerHeight / 2;
-                            var el = document.elementFromPoint(x, y);
-                            if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                              simulateClick(el);
-                            }
-                          } catch(e) {}
-                        }, 400);
-                      })();
-                    """,
-                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
-                    forMainFrameOnly: false,
-                  )
-                ]),
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  domStorageEnabled: true,
-                  databaseEnabled: true,
-                  mediaPlaybackRequiresUserGesture: false,
-                  allowsInlineMediaPlayback: true,
-                  javaScriptCanOpenWindowsAutomatically: false,
-                  supportMultipleWindows: false,
-                  mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                ),
-                onLoadStop: (controller, url) async {
-                  debugPrint('EmbedResolver: Frame loaded: $url');
-                  // Re-inject JS script execution to guarantee clicker runs on dynamic page modifications
-                  await controller.evaluateJavascript(source: """
-                    (function() {
-                      console.log("EmbedResolver onLoadStop injected manually.");
-                      
-                      function simulateClick(el) {
-                        try {
-                          el.focus();
-                          var eventTypes = ['mousedown', 'mouseup', 'click'];
-                          eventTypes.forEach(function(type) {
-                            var e = new MouseEvent(type, {
-                              bubbles: true,
-                              cancelable: true,
-                              view: window,
-                              clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
-                              clientY: el.getBoundingClientRect().top + el.clientHeight / 2
-                            });
-                            el.dispatchEvent(e);
-                          });
-                        } catch(e) {}
-                      }
-
-                      // Remove overlay ads
-                      function removeAdOverlays() {
-                        try {
-                          var divs = document.querySelectorAll('div');
-                          divs.forEach(function(div) {
-                            var style = window.getComputedStyle(div);
-                            if (style.position === 'absolute' || style.position === 'fixed') {
-                              var zIndex = parseInt(style.zIndex);
-                              if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
-                                div.style.display = 'none';
-                              }
-                            }
-                          });
-                        } catch(e) {}
-                      }
-
-                      removeAdOverlays();
-
-                      // Click common play selectors
-                      var selectors = [
-                        '.vjs-big-play-button',
-                        '.jw-display-icon-container',
-                        '.play-button',
-                        '.play-icon',
-                        '#play-button',
-                        '#play',
-                        '.play',
-                        '.watch-btn',
-                        '.click-to-play',
-                        '[class*="play"]',
-                        '[id*="play"]',
-                        '.vjs-tech',
-                        'button',
-                        'svg'
-                      ];
-                      selectors.forEach(function(sel) {
-                        try {
-                          var els = document.querySelectorAll(sel);
-                          els.forEach(function(el) {
-                            simulateClick(el);
-                          });
-                        } catch(e) {}
-                      });
-
-                      // Click center
-                      try {
-                        var x = window.innerWidth / 2;
-                        var y = window.innerHeight / 2;
-                        var el = document.elementFromPoint(x, y);
-                        if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                          simulateClick(el);
-                        }
-                      } catch(e) {}
-                    })();
-                  """);
-                },
-                shouldOverrideUrlLoading: (controller, navigationAction) async {
-                  // Allow sub-frame navigation (like inside player iframes) to prevent "Network error - All servers failed"
-                  if (!navigationAction.isForMainFrame) {
-                    return NavigationActionPolicy.ALLOW;
-                  }
-
-                  final url = navigationAction.request.url?.toString() ?? '';
-                  final host = navigationAction.request.url?.host ?? '';
-                  
-                  final originalUri = WebUri(embedUrl);
-                  final originalHost = originalUri.host;
-                  
-                  final lower = url.toLowerCase();
-                  if (lower.contains('adserver') || 
-                      lower.contains('adsystem') || 
-                      lower.contains('popads') || 
-                      lower.contains('onclick') || 
-                      lower.contains('exoclick') || 
-                      lower.contains('adsterra') ||
-                      lower.contains('/ads/') ||
-                      lower.contains('redirect')) {
-                    debugPrint('EmbedResolver: Blocked ad URL in navigation: $url');
-                    return NavigationActionPolicy.CANCEL;
-                  }
-                  
-                  if (host == originalHost || 
-                      host.isEmpty || 
-                      host.contains('vidsrc') || 
-                      host.contains('vidsrcme') ||
-                      host.contains('orchestranova') ||
-                      host.contains('vaplayer') ||
-                      host.contains('vidplay') ||
-                      host.contains('mcloud') ||
-                      host.contains('rcpcdn') ||
-                      host.contains('streamimdb') ||
-                      host.contains('playimdb') ||
-                      host.contains('streamtape') ||
-                      host.contains('strcloud.club') ||
-                      host.contains('tpead.net') ||
-                      host.contains('hglink') ||
-                      host.contains('hgcloud') ||
-                      host.contains('cavanhabg') ||
-                      host.contains('cavanha') ||
-                      host.contains('tryzendm') ||
-                      host.contains('vidhidepro') ||
-                      host.contains('filemoon') ||
-                      url.startsWith('data:')) {
-                    return NavigationActionPolicy.ALLOW;
-                  }
-                  
-                  debugPrint('EmbedResolver: Blocked ad redirect to $url');
-                  return NavigationActionPolicy.CANCEL;
-                },
-                onCreateWindow: (controller, createWindowAction) async {
-                  debugPrint('EmbedResolver: Blocked popup window');
-                  return true;
-                },
-                onLoadResource: (controller, resource) {
-                  final urlStr = resource.url?.toString() ?? '';
-                  debugPrint('EmbedResolver Intercepted: $urlStr');
-                  
-                  if (_isValidVideoResource(resource.url)) {
-                    debugPrint('EmbedResolver: Found direct video URL: $urlStr');
-                    if (!completer.isCompleted) {
-                      completer.complete(urlStr);
-                      if (!dismissed) {
-                        Navigator.of(dialogContext).pop(); // Close dialog
-                        dismissed = true;
-                      }
-                    }
-                  }
-                },
               ),
             ),
           ),
@@ -502,16 +202,315 @@ class EmbedResolver {
       }
     });
 
-    // Enforce a 25-second timeout (HGCloud pages need more time to load m3u8)
-    return completer.future.timeout(
-      const Duration(seconds: 25),
-      onTimeout: () {
-        if (!completer.isCompleted) {
-          completer.complete(null);
-        }
-        return null;
-      },
-    );
+    try {
+      headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest: URLRequest(
+          url: WebUri(embedUrl),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        ),
+        initialUserScripts: UnmodifiableListView<UserScript>([
+          UserScript(
+            source: """
+              (function() {
+                console.log("HeadlessResolver JS Injected into: " + window.location.href);
+                
+                function simulateClick(el) {
+                  try {
+                    el.focus();
+                    var eventTypes = ['mousedown', 'mouseup', 'click'];
+                    eventTypes.forEach(function(type) {
+                      var e = new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
+                        clientY: el.getBoundingClientRect().top + el.clientHeight / 2
+                      });
+                      el.dispatchEvent(e);
+                    });
+                  } catch(e) {}
+                }
+
+                // Remove overlay ads
+                function removeAdOverlays() {
+                  try {
+                    var divs = document.querySelectorAll('div');
+                    divs.forEach(function(div) {
+                      var style = window.getComputedStyle(div);
+                      if (style.position === 'absolute' || style.position === 'fixed') {
+                        var zIndex = parseInt(style.zIndex);
+                        if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
+                          div.style.display = 'none';
+                        }
+                      }
+                    });
+                  } catch(e) {}
+                }
+
+                // DOM checker for video tags
+                var checkVideo = setInterval(function() {
+                  try {
+                    var vids = document.querySelectorAll('video');
+                    vids.forEach(function(v) {
+                      var src = v.src;
+                      if (src && src.startsWith('http') && !src.startsWith('blob:')) {
+                        clearInterval(checkVideo);
+                        window.flutter_inappwebview.callHandler('videoFound', src);
+                      }
+                      var sources = v.querySelectorAll('source');
+                      sources.forEach(function(srcEl) {
+                        if (srcEl.src && srcEl.src.startsWith('http') && !srcEl.src.startsWith('blob:')) {
+                          clearInterval(checkVideo);
+                          window.flutter_inappwebview.callHandler('videoFound', srcEl.src);
+                        }
+                      });
+                    });
+                  } catch(e) {}
+                }, 500);
+
+                var count = 0;
+                var interval = setInterval(function() {
+                  count++;
+                  if (count > 40) {
+                    clearInterval(interval);
+                    return;
+                  }
+
+                  removeAdOverlays();
+
+                  // Click common play selectors
+                  var selectors = [
+                    '.vjs-big-play-button',
+                    '.jw-display-icon-container',
+                    '.play-button',
+                    '.play-icon',
+                    '#play-button',
+                    '#play',
+                    '.play',
+                    '.watch-btn',
+                    '.click-to-play',
+                    '[class*="play"]',
+                    '[id*="play"]',
+                    '.vjs-tech',
+                    'button',
+                    'svg'
+                  ];
+                  selectors.forEach(function(sel) {
+                    try {
+                      var els = document.querySelectorAll(sel);
+                      els.forEach(function(el) {
+                        simulateClick(el);
+                      });
+                    } catch(e) {}
+                  });
+
+                  // Click the center of the page
+                  try {
+                    var x = window.innerWidth / 2;
+                    var y = window.innerHeight / 2;
+                    var el = document.elementFromPoint(x, y);
+                    if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
+                      simulateClick(el);
+                    }
+                  } catch(e) {}
+                }, 400);
+              })();
+            """,
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
+            forMainFrameOnly: false,
+          )
+        ]),
+        initialSettings: InAppWebViewSettings(
+          javaScriptEnabled: true,
+          domStorageEnabled: true,
+          databaseEnabled: true,
+          mediaPlaybackRequiresUserGesture: false,
+          allowsInlineMediaPlayback: true,
+          javaScriptCanOpenWindowsAutomatically: false,
+          supportMultipleWindows: false,
+          mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+        ),
+        onWebViewCreated: (controller) {
+          controller.addJavaScriptHandler(
+            handlerName: 'videoFound',
+            callback: (args) {
+              if (args.isNotEmpty) {
+                final String urlStr = args[0].toString();
+                debugPrint('EmbedResolver: Video URL found: $urlStr');
+                if (!completer.isCompleted) {
+                  completer.complete(urlStr);
+                  if (!dismissed) {
+                    Navigator.of(context).pop(); // Close dialog
+                    dismissed = true;
+                  }
+                }
+              }
+            },
+          );
+        },
+        onLoadStop: (controller, url) async {
+          debugPrint('EmbedResolver: Headless frame loaded: $url');
+          // Re-inject JS script execution to guarantee clicker runs on dynamic page modifications
+          await controller.evaluateJavascript(source: """
+            (function() {
+              console.log("EmbedResolver onLoadStop injected manually.");
+              
+              function simulateClick(el) {
+                try {
+                  el.focus();
+                  var eventTypes = ['mousedown', 'mouseup', 'click'];
+                  eventTypes.forEach(function(type) {
+                    var e = new MouseEvent(type, {
+                      bubbles: true,
+                      cancelable: true,
+                      view: window,
+                      clientX: el.getBoundingClientRect().left + el.clientWidth / 2,
+                      clientY: el.getBoundingClientRect().top + el.clientHeight / 2
+                    });
+                    el.dispatchEvent(e);
+                  });
+                } catch(e) {}
+              }
+
+              // Remove overlay ads
+              function removeAdOverlays() {
+                try {
+                  var divs = document.querySelectorAll('div');
+                  divs.forEach(function(div) {
+                    var style = window.getComputedStyle(div);
+                    if (style.position === 'absolute' || style.position === 'fixed') {
+                      var zIndex = parseInt(style.zIndex);
+                      if (zIndex > 100 && (style.width === '100%' || div.clientWidth > window.innerWidth * 0.9)) {
+                        div.style.display = 'none';
+                      }
+                    }
+                  });
+                } catch(e) {}
+              }
+
+              removeAdOverlays();
+
+              // Click common play selectors
+              var selectors = [
+                '.vjs-big-play-button',
+                '.jw-display-icon-container',
+                '.play-button',
+                '.play-icon',
+                '#play-button',
+                '#play',
+                '.play',
+                '.watch-btn',
+                '.click-to-play',
+                '[class*="play"]',
+                '[id*="play"]',
+                '.vjs-tech',
+                'button',
+                'svg'
+              ];
+              selectors.forEach(function(sel) {
+                try {
+                  var els = document.querySelectorAll(sel);
+                  els.forEach(function(el) {
+                    simulateClick(el);
+                  });
+                } catch(e) {}
+              });
+
+              // Click center
+              try {
+                var x = window.innerWidth / 2;
+                var y = window.innerHeight / 2;
+                var el = document.elementFromPoint(x, y);
+                if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
+                  simulateClick(el);
+                }
+              } catch(e) {}
+            })();
+          """);
+        },
+        shouldOverrideUrlLoading: (controller, navigationAction) async {
+          if (!navigationAction.isForMainFrame) {
+            return NavigationActionPolicy.ALLOW;
+          }
+
+          final url = navigationAction.request.url?.toString() ?? '';
+          final host = navigationAction.request.url?.host ?? '';
+          final lower = url.toLowerCase();
+          
+          if (lower.contains('adserver') || 
+              lower.contains('adsystem') || 
+              lower.contains('popads') || 
+              lower.contains('onclick') || 
+              lower.contains('exoclick') || 
+              lower.contains('adsterra') ||
+              lower.contains('/ads/') ||
+              lower.contains('redirect')) {
+            debugPrint('EmbedResolver: Blocked ad URL in navigation: $url');
+            return NavigationActionPolicy.CANCEL;
+          }
+          
+          final originalUri = WebUri(embedUrl);
+          final originalHost = originalUri.host;
+          
+          if (host == originalHost || 
+              host.isEmpty || 
+              host.contains('vidsrc') || 
+              host.contains('vidsrcme') ||
+              host.contains('orchestranova') ||
+              host.contains('vaplayer') ||
+              host.contains('vidplay') ||
+              host.contains('mcloud') ||
+              host.contains('rcpcdn') ||
+              host.contains('streamimdb') ||
+              host.contains('playimdb') ||
+              host.contains('streamtape') ||
+              host.contains('strcloud.club') ||
+              host.contains('tpead.net') ||
+              host.contains('hglink') ||
+              host.contains('hgcloud') ||
+              host.contains('cavanhabg') ||
+              host.contains('cavanha') ||
+              host.contains('tryzendm') ||
+              host.contains('vidhidepro') ||
+              host.contains('filemoon') ||
+              url.startsWith('data:')) {
+            return NavigationActionPolicy.ALLOW;
+          }
+          
+          debugPrint('EmbedResolver: Blocked ad redirect to $url');
+          return NavigationActionPolicy.CANCEL;
+        },
+        onLoadResource: (controller, resource) {
+          final urlStr = resource.url?.toString() ?? '';
+          if (_isValidVideoResource(resource.url)) {
+            debugPrint('EmbedResolver: Found direct video URL in background: $urlStr');
+            if (!completer.isCompleted) {
+              completer.complete(urlStr);
+              if (!dismissed) {
+                Navigator.of(context).pop(); // Close dialog
+                dismissed = true;
+              }
+            }
+          }
+        },
+      );
+
+      await headlessWebView.run();
+
+      final result = await completer.future.timeout(
+        const Duration(seconds: 25),
+        onTimeout: () => null,
+      );
+
+      return result;
+    } catch (e) {
+      debugPrint('EmbedResolver background resolution error: $e');
+      return null;
+    } finally {
+      await headlessWebView?.dispose();
+    }
   }
 }
 
