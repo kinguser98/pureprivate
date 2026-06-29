@@ -393,7 +393,7 @@ class CustomDnsProxy {
               await Future.delayed(const Duration(milliseconds: 300));
             }
           }
-        } }
+        }
         
         if (resp == null) {
           throw lastError ?? Exception('Failed to fetch after retries');
