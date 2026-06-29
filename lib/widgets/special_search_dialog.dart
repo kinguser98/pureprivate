@@ -5,11 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/screens/video_player_screen.dart';
-import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/screens/video_player_screen.dart';
+import 'package:private_cinema_ios/screens/webview_player_screen.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/embed_resolver.dart';
 
 class SpecialSearchDialog extends StatefulWidget {
   const SpecialSearchDialog({super.key});
@@ -461,17 +462,69 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ),
       );
     } else {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => VideoPlayerScreen(
-            videoSource: source.url,
-            title: movieTitle,
-            subtitle: 'Direct Online Source',
-            movieId: 'special_search_${_selectedMovie['id']}',
-            resumeDirectly: false,
+      final isWebEmbed = source.url.contains('vidsrc') ||
+                         source.url.contains('embed') ||
+                         source.url.contains('player') ||
+                         source.url.contains('vidlink.pro') ||
+                         source.url.contains('woof.video') ||
+                         source.url.contains('streamtape') ||
+                         source.url.contains('dood') ||
+                         source.url.contains('mixdrop');
+
+      if (isWebEmbed) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(color: Colors.pinkAccent),
           ),
-        ),
-      );
+        );
+        try {
+          final resolvedUrl = await EmbedResolver.resolve(context, source.url);
+          if (mounted) {
+            Navigator.of(context).pop(); // Dismiss loading spinner
+            if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+              final headers = EmbedResolver.getHeadersForUrl(resolvedUrl);
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => VideoPlayerScreen(
+                    videoSource: resolvedUrl,
+                    title: movieTitle,
+                    subtitle: 'Resolved Stream',
+                    movieId: 'special_search_${_selectedMovie['id']}',
+                    resumeDirectly: false,
+                    headers: headers,
+                  ),
+                ),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Failed to resolve direct streaming link.'), backgroundColor: Colors.redAccent),
+              );
+            }
+          }
+        } catch (e) {
+          if (mounted) {
+            Navigator.of(context).pop(); // Dismiss loading spinner
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error resolving stream: $e'), backgroundColor: Colors.redAccent),
+            );
+          }
+        }
+      } else {
+        // It is already a direct stream (Stravo, Stalker resolved url, etc.)
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => VideoPlayerScreen(
+              videoSource: source.url,
+              title: movieTitle,
+              subtitle: 'Direct Online Source',
+              movieId: 'special_search_${_selectedMovie['id']}',
+              resumeDirectly: false,
+            ),
+          ),
+        );
+      }
     }
   }
 
