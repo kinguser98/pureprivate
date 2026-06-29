@@ -421,7 +421,7 @@ class CustomDnsProxy {
           }
         });
         
-        // If it's HLS playlist, rewrite absolute stream URLs to go through our proxy
+        // If it's HLS playlist, rewrite absolute and relative stream URLs to go through our proxy
         if (targetUrl.contains('.m3u8')) {
           final bodyBytes = await resp.fold<List<int>>([], (p, e) => p..addAll(e));
           final contentEncoding = resp.headers.value('content-encoding')?.toLowerCase() ?? '';
@@ -438,32 +438,61 @@ class CustomDnsProxy {
           }
           
           var bodyStr = utf8.decode(decodedBytes);
-          
-          // Propagate incoming request's 'headers' query parameter to all rewritten absolute links
           final incomingHeadersParam = request.uri.queryParameters['headers'];
           
-          final urlRegExp = RegExp(r'(https?://[^\s"\r\n]+)');
-          bodyStr = bodyStr.replaceAllMapped(urlRegExp, (match) {
-            final absoluteUrl = match.group(1)!;
-            if (absoluteUrl.contains('127.0.0.1') || absoluteUrl.contains('localhost')) {
-              return absoluteUrl;
-            }
-            try {
-              final absUri = Uri.parse(absoluteUrl);
-              final hostWithPort = absUri.hasPort ? '${absUri.host}:${absUri.port}' : absUri.host;
-              
-              var rewrittenUri = absUri;
-              if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
-                final newParams = Map<String, String>.from(absUri.queryParameters);
-                newParams['headers'] = incomingHeadersParam;
-                rewrittenUri = absUri.replace(queryParameters: newParams);
+          // Parse and rewrite HLS playlist line by line to resolve and proxy all links (including relative ones)
+          final lines = bodyStr.split('\n');
+          final baseUri = Uri.parse(cleanTargetUrl);
+          
+          for (int i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (line.isEmpty) continue;
+            
+            if (line.startsWith('#')) {
+              // Parse URI attribute if present (e.g. URI="...")
+              if (line.contains('URI="')) {
+                final uriMatch = RegExp(r'URI="([^"]+)"').firstMatch(line);
+                if (uriMatch != null) {
+                  final relativeUrl = uriMatch.group(1)!;
+                  if (!relativeUrl.contains('127.0.0.1') && !relativeUrl.contains('localhost')) {
+                    try {
+                      final resolvedUri = baseUri.resolve(relativeUrl);
+                      final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
+                      
+                      var rewrittenUri = resolvedUri;
+                      if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
+                        final newParams = Map<String, String>.from(resolvedUri.queryParameters);
+                        newParams['headers'] = incomingHeadersParam;
+                        rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                      }
+                      
+                      final proxyUrl = 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
+                      lines[i] = line.replaceFirst('URI="$relativeUrl"', 'URI="$proxyUrl"');
+                    } catch (_) {}
+                  }
+                }
               }
-              
-              return 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
-            } catch (_) {
-              return absoluteUrl;
+            } else {
+              // Line is a direct playlist or segment URL
+              if (!line.contains('127.0.0.1') && !line.contains('localhost')) {
+                try {
+                  final resolvedUri = baseUri.resolve(line);
+                  final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
+                  
+                  var rewrittenUri = resolvedUri;
+                  if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
+                    final newParams = Map<String, String>.from(resolvedUri.queryParameters);
+                    newParams['headers'] = incomingHeadersParam;
+                    rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                  }
+                  
+                  final proxyUrl = 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
+                  lines[i] = proxyUrl;
+                } catch (_) {}
+              }
             }
-          });
+          }
+          bodyStr = lines.join('\n');
           
           request.response.headers.removeAll('content-encoding');
           final rewrittenBytes = utf8.encode(bodyStr);

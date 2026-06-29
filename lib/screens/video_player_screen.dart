@@ -363,7 +363,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           }
         }
         // Enable hardware decoding
-        await nativePlayer.setProperty('hwdec', 'mediacodec-copy');
+        await nativePlayer.setProperty('hwdec', 'auto');
         
         if (widget.isLive) {
           // Disable cache completely or use minimum readahead buffer for instantaneous live playback
