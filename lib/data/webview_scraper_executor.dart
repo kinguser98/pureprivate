@@ -27,7 +27,8 @@ class WebViewScraperExecutor {
         javaScriptEnabled: true,
         domStorageEnabled: true,
         databaseEnabled: true,
-        webSecurityEnabled: false, // Bypasses CORS!
+        allowFileAccessFromFileURLs: true,
+        allowUniversalAccessFromFileURLs: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
       ),
       onWebViewCreated: (controller) {

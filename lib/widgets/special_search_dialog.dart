@@ -1479,57 +1479,47 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       );
     } else {
       // 2. Expanded group sub-links list
-      final activeList = _activeGroupType == StreamSourceType.stravo 
-          ? stravoStreams 
-          : (_activeGroupType == StreamSourceType.torrent 
-              ? torrentStreams 
-              : (_activeGroupType == StreamSourceType.stalker 
-                  ? stalkerStreams 
-                  : (_activeGroupType == StreamSourceType.netmirror 
-                      ? netmirrorStreams 
-                      : (_activeGroupType == StreamSourceType.dvdplay 
-                          ? dvdplayStreams 
-                          : (_activeGroupType == StreamSourceType.mallumv 
-                              ? mallumvStreams 
-                              : (_activeGroupType == StreamSourceType.vidnest 
-                                  ? vidnestStreams 
-                                  : (_activeGroupType == StreamSourceType.hdhub4u 
-                                      ? hdhub4uStreams 
-                                      : castleStreams))))))));
-      final accentColor = _activeGroupType == StreamSourceType.stravo 
-          ? Colors.cyan 
-          : (_activeGroupType == StreamSourceType.torrent 
-              ? Colors.amber 
-              : (_activeGroupType == StreamSourceType.stalker 
-                  ? Colors.purpleAccent 
-                  : (_activeGroupType == StreamSourceType.netmirror 
-                      ? Colors.tealAccent 
-                      : (_activeGroupType == StreamSourceType.dvdplay 
-                          ? Colors.deepOrangeAccent 
-                          : (_activeGroupType == StreamSourceType.mallumv 
-                              ? Colors.pinkAccent 
-                              : (_activeGroupType == StreamSourceType.vidnest 
-                                  ? Colors.indigoAccent 
-                                  : (_activeGroupType == StreamSourceType.hdhub4u 
-                                      ? Colors.lightGreenAccent 
-                                      : Colors.amberAccent))))))));
-      final iconData = _activeGroupType == StreamSourceType.stravo 
-          ? Icons.rocket_launch_rounded 
-          : (_activeGroupType == StreamSourceType.torrent 
-              ? Icons.cloud_circle_rounded 
-              : (_activeGroupType == StreamSourceType.stalker 
-                  ? Icons.movie_filter_rounded 
-                  : (_activeGroupType == StreamSourceType.netmirror 
-                      ? Icons.language_rounded 
-                      : (_activeGroupType == StreamSourceType.dvdplay 
-                          ? Icons.disc_full_rounded 
-                          : (_activeGroupType == StreamSourceType.mallumv 
-                              ? Icons.music_video_rounded 
-                              : (_activeGroupType == StreamSourceType.vidnest 
-                                  ? Icons.video_library_rounded 
-                                  : (_activeGroupType == StreamSourceType.hdhub4u 
-                                      ? Icons.hd_rounded 
-                                      : Icons.castle_rounded))))))));
+      final List<StreamSourceInfo> activeList;
+      final Color accentColor;
+      final IconData iconData;
+
+      if (_activeGroupType == StreamSourceType.stravo) {
+        activeList = stravoStreams;
+        accentColor = Colors.cyan;
+        iconData = Icons.rocket_launch_rounded;
+      } else if (_activeGroupType == StreamSourceType.torrent) {
+        activeList = torrentStreams;
+        accentColor = Colors.amber;
+        iconData = Icons.cloud_circle_rounded;
+      } else if (_activeGroupType == StreamSourceType.stalker) {
+        activeList = stalkerStreams;
+        accentColor = Colors.purpleAccent;
+        iconData = Icons.movie_filter_rounded;
+      } else if (_activeGroupType == StreamSourceType.netmirror) {
+        activeList = netmirrorStreams;
+        accentColor = Colors.tealAccent;
+        iconData = Icons.language_rounded;
+      } else if (_activeGroupType == StreamSourceType.dvdplay) {
+        activeList = dvdplayStreams;
+        accentColor = Colors.deepOrangeAccent;
+        iconData = Icons.disc_full_rounded;
+      } else if (_activeGroupType == StreamSourceType.mallumv) {
+        activeList = mallumvStreams;
+        accentColor = Colors.pinkAccent;
+        iconData = Icons.music_video_rounded;
+      } else if (_activeGroupType == StreamSourceType.vidnest) {
+        activeList = vidnestStreams;
+        accentColor = Colors.indigoAccent;
+        iconData = Icons.video_library_rounded;
+      } else if (_activeGroupType == StreamSourceType.hdhub4u) {
+        activeList = hdhub4uStreams;
+        accentColor = Colors.lightGreenAccent;
+        iconData = Icons.hd_rounded;
+      } else {
+        activeList = castleStreams;
+        accentColor = Colors.amberAccent;
+        iconData = Icons.castle_rounded;
+      }
 
       if (activeList.isEmpty) {
         return Center(
