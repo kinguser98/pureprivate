@@ -378,11 +378,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           
           // Buffering/Streaming optimizations for low latency and memory safety
           await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('demuxer-max-bytes', '52428800'); // 50MB buffer (safe for low RAM)
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '10485760'); // 10MB backward seek cache
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache duration
-          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer 2 seconds before resuming
+          await nativePlayer.setProperty('cache-on-disk', 'no'); // Prevent file cache errors, use memory
+          await nativePlayer.setProperty('demuxer-max-bytes', '157286400'); // 150MB memory buffer
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '20971520'); // 20MB backward seek cache
+          await nativePlayer.setProperty('demuxer-readahead-secs', '300'); // 300 seconds readahead
+          await nativePlayer.setProperty('cache-secs', '300'); // 300 seconds cache duration
+          await nativePlayer.setProperty('cache-pause-wait', '3'); // Buffer 3 seconds before resuming
         }
         
         // Explicit Audio/Video Synchronization and drift correction

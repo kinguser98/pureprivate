@@ -108,16 +108,20 @@ class CustomDnsProxy {
     
     final List<String> ips = [];
     
+    final isTmdb = host.contains('themoviedb.org');
+    
     // 1. Try standard system DNS resolution first to ensure CDN edge geo-routing speed
-    try {
-      final list = await InternetAddress.lookup(host).timeout(const Duration(seconds: 2));
-      for (final addr in list) {
-        final ip = addr.address;
-        if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
-          ips.add(ip);
+    if (!isTmdb) {
+      try {
+        final list = await InternetAddress.lookup(host).timeout(const Duration(seconds: 2));
+        for (final addr in list) {
+          final ip = addr.address;
+          if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
+            ips.add(ip);
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     // 2. Fallback to Cloudflare DNS over HTTPS (DoH) JSON API if blocked/failed
     if (ips.isEmpty) {
@@ -417,7 +421,14 @@ class CustomDnsProxy {
               try {
                 final locUri = Uri.parse(value);
                 final hostWithPort = locUri.hasPort ? '${locUri.host}:${locUri.port}' : locUri.host;
-                final proxyRedirect = 'http://127.0.0.1:$port/proxy/${locUri.scheme}/$hostWithPort${locUri.path}${locUri.hasQuery ? "?" + locUri.query : ""}';
+                final proxyRedirectUri = Uri(
+                  scheme: 'http',
+                  host: '127.0.0.1',
+                  port: port,
+                  path: '/proxy/${locUri.scheme}/$hostWithPort${locUri.path}',
+                  queryParameters: locUri.queryParameters.isNotEmpty ? locUri.queryParameters : null,
+                );
+                final proxyRedirect = proxyRedirectUri.toString();
                 request.response.headers.set('location', proxyRedirect);
                 debugPrint('CustomDnsProxy: Rewrote redirect location: $proxyRedirect');
               } catch (_) {
@@ -495,7 +506,14 @@ class CustomDnsProxy {
                         rewrittenUri = resolvedUri.replace(queryParameters: newParams);
                       }
                       
-                      final proxyUrl = 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
+                      final proxyUri = Uri(
+                        scheme: 'http',
+                        host: '127.0.0.1',
+                        port: port,
+                        path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
+                        queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
+                      );
+                      final proxyUrl = proxyUri.toString();
                       lines[i] = line.replaceFirst('URI="$relativeUrl"', 'URI="$proxyUrl"');
                     } catch (_) {}
                   }
@@ -515,7 +533,14 @@ class CustomDnsProxy {
                     rewrittenUri = resolvedUri.replace(queryParameters: newParams);
                   }
                   
-                  final proxyUrl = 'http://127.0.0.1:$port/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}${rewrittenUri.hasQuery ? "?" + rewrittenUri.query : ""}';
+                  final proxyUri = Uri(
+                    scheme: 'http',
+                    host: '127.0.0.1',
+                    port: port,
+                    path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
+                    queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
+                  );
+                  final proxyUrl = proxyUri.toString();
                   lines[i] = proxyUrl;
                 } catch (_) {}
               }
