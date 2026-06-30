@@ -459,7 +459,8 @@ class CustomDnsProxy {
             if (line.isEmpty) continue;
             
             if (line.startsWith('#')) {
-              // Handle EXT-X-MEDIA audio track preference rewritin               if (selectedAudio != null && selectedAudio.isNotEmpty && line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
+              // Handle EXT-X-MEDIA audio track preference rewriting
+              if (selectedAudio != null && selectedAudio.isNotEmpty && line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
                 final isSelected = line.contains('NAME="$selectedAudio"') || 
                                    line.contains('LANGUAGE="${selectedAudio.toLowerCase()}"') ||
                                    line.contains('LANGUAGE="$selectedAudio"');
