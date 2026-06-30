@@ -21,9 +21,6 @@ class WebViewScraperExecutor {
 
     final completer = Completer<void>();
     _headlessWebView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(
-        url: WebUri("about:blank"),
-      ),
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         domStorageEnabled: true,
@@ -32,7 +29,7 @@ class WebViewScraperExecutor {
         allowUniversalAccessFromFileURLs: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
       ),
-      onWebViewCreated: (controller) {
+      onWebViewCreated: (controller) async {
         _webViewController = controller;
         
         // Scraper result callback
@@ -69,6 +66,9 @@ class WebViewScraperExecutor {
             }
           },
         );
+
+        // Load dummy HTML document to trigger injection of window.flutter_inappwebview
+        await controller.loadData(data: "<html><head><script></script></head><body></body></html>");
       },
       onLoadStop: (controller, url) {
         if (!completer.isCompleted) {

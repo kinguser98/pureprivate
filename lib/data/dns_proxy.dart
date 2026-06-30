@@ -459,35 +459,23 @@ class CustomDnsProxy {
             if (line.isEmpty) continue;
             
             if (line.startsWith('#')) {
-              // Handle EXT-X-MEDIA audio track preference rewriting
-              if (selectedAudio != null && selectedAudio.isNotEmpty && line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
+              // Handle EXT-X-MEDIA audio track preference rewritin               if (selectedAudio != null && selectedAudio.isNotEmpty && line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
                 final isSelected = line.contains('NAME="$selectedAudio"') || 
                                    line.contains('LANGUAGE="${selectedAudio.toLowerCase()}"') ||
                                    line.contains('LANGUAGE="$selectedAudio"');
+                
+                // Clean existing DEFAULT/AUTOSELECT attributes first to avoid duplicates
+                line = line
+                    .replaceAll(RegExp(r',?DEFAULT=(YES|NO)', caseSensitive: false), '')
+                    .replaceAll(RegExp(r',?AUTOSELECT=(YES|NO)', caseSensitive: false), '');
+                
                 if (isSelected) {
-                  line = line
-                      .replaceAll('DEFAULT=YES', 'DEFAULT=NO')
-                      .replaceAll('DEFAULT=NO', 'DEFAULT=YES')
-                      .replaceAll('AUTOSELECT=YES', 'AUTOSELECT=NO')
-                      .replaceAll('AUTOSELECT=NO', 'AUTOSELECT=YES');
-                  if (!line.contains('DEFAULT=')) {
-                    line += ',DEFAULT=YES';
-                  }
-                  if (!line.contains('AUTOSELECT=')) {
-                    line += ',AUTOSELECT=YES';
-                  }
+                  line += ',DEFAULT=YES,AUTOSELECT=YES';
                 } else {
-                  line = line
-                      .replaceAll('DEFAULT=YES', 'DEFAULT=NO')
-                      .replaceAll('AUTOSELECT=YES', 'AUTOSELECT=NO');
-                  if (!line.contains('DEFAULT=')) {
-                    line += ',DEFAULT=NO';
-                  }
-                  if (!line.contains('AUTOSELECT=')) {
-                    line += ',AUTOSELECT=NO';
-                  }
+                  line += ',DEFAULT=NO,AUTOSELECT=NO';
                 }
               }
+            }
               
               // Parse URI attribute if present (e.g. URI="...")
               if (line.contains('URI="')) {
