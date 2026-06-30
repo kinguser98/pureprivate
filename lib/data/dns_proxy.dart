@@ -439,6 +439,7 @@ class CustomDnsProxy {
           
           var bodyStr = utf8.decode(decodedBytes);
           final incomingHeadersParam = request.uri.queryParameters['headers'];
+          final selectedAudio = request.uri.queryParameters['selected_audio'];
           
           // Parse and rewrite HLS playlist line by line to resolve and proxy all links (playlists, keys, and segments)
           final lines = bodyStr.split('\n');
@@ -449,6 +450,36 @@ class CustomDnsProxy {
             if (line.isEmpty) continue;
             
             if (line.startsWith('#')) {
+              // Handle EXT-X-MEDIA audio track preference rewriting
+              if (selectedAudio != null && selectedAudio.isNotEmpty && line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
+                final isSelected = line.contains('NAME="$selectedAudio"') || 
+                                   line.contains('LANGUAGE="${selectedAudio.toLowerCase()}"') ||
+                                   line.contains('LANGUAGE="$selectedAudio"');
+                if (isSelected) {
+                  line = line
+                      .replaceAll('DEFAULT=YES', 'DEFAULT=NO')
+                      .replaceAll('DEFAULT=NO', 'DEFAULT=YES')
+                      .replaceAll('AUTOSELECT=YES', 'AUTOSELECT=NO')
+                      .replaceAll('AUTOSELECT=NO', 'AUTOSELECT=YES');
+                  if (!line.contains('DEFAULT=')) {
+                    line += ',DEFAULT=YES';
+                  }
+                  if (!line.contains('AUTOSELECT=')) {
+                    line += ',AUTOSELECT=YES';
+                  }
+                } else {
+                  line = line
+                      .replaceAll('DEFAULT=YES', 'DEFAULT=NO')
+                      .replaceAll('AUTOSELECT=YES', 'AUTOSELECT=NO');
+                  if (!line.contains('DEFAULT=')) {
+                    line += ',DEFAULT=NO';
+                  }
+                  if (!line.contains('AUTOSELECT=')) {
+                    line += ',AUTOSELECT=NO';
+                  }
+                }
+              }
+              
               // Parse URI attribute if present (e.g. URI="...")
               if (line.contains('URI="')) {
                 final uriMatch = RegExp(r'URI="([^"]+)"').firstMatch(line);

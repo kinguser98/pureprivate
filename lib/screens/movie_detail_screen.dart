@@ -177,9 +177,47 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         final List<StreamSource> torrentSources = [];
         
         for (final stream in streamsList) {
-          final title = stream['title']?.toString() ?? 'Torrent Stream';
           final infoHash = stream['infoHash']?.toString() ?? '';
-          if (infoHash.isNotEmpty) {
+          final directUrl = stream['url']?.toString() ?? '';
+          final title = stream['title']?.toString() ?? 'Stream';
+          final streamName = stream['name']?.toString() ?? 'Stremio';
+          
+          if (directUrl.isNotEmpty) {
+            final titleLines = title.split('\n');
+            final mainTitle = titleLines.isNotEmpty ? titleLines[0] : 'Direct Stream';
+            final peerInfo = titleLines.length > 1 ? titleLines[1] : '';
+            final sizeInfo = titleLines.length > 2 ? titleLines[2] : '';
+            
+            var sourceName = '$streamName: $mainTitle';
+            if (peerInfo.isNotEmpty || sizeInfo.isNotEmpty) {
+              sourceName += ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
+            }
+            sourceName = sourceName.replaceAll('\n', ' ').trim();
+            
+            // Extract custom headers
+            final Map<String, String> headers = {};
+            if (stream['behaviorHints']?['requestHeaders'] is Map) {
+              (stream['behaviorHints']['requestHeaders'] as Map).forEach((k, v) {
+                headers[k.toString()] = v.toString();
+              });
+            }
+            
+            var finalUrl = directUrl;
+            if (headers.isNotEmpty) {
+              finalUrl = Uri.parse(directUrl).replace(queryParameters: {
+                ...Uri.parse(directUrl).queryParameters,
+                'headers': jsonEncode(headers)
+              }).toString();
+            }
+            
+            final isDup = torrentSources.any((s) => s.url == finalUrl);
+            if (!isDup) {
+              torrentSources.add(StreamSource(
+                name: sourceName,
+                url: finalUrl,
+              ));
+            }
+          } else if (infoHash.isNotEmpty) {
             final trackers = [
               'udp://tracker.coppersurfer.tk:6969/announce',
               'udp://tracker.openbittorrent.com:6969/announce',

@@ -20,6 +20,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _deviceId = 'Loading...';
   late final TextEditingController _torrentioUrlController;
   late final TextEditingController _stravoUrlController;
+  late final TextEditingController _netmirrorDomainsController;
   bool _isSyncing = false;
   String _syncMessage = '';
 
@@ -28,15 +29,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _torrentioUrlController = TextEditingController();
     _stravoUrlController = TextEditingController();
+    _netmirrorDomainsController = TextEditingController();
     _loadDeviceId();
     _loadTorrentioUrl();
     _loadStravoUrl();
+    _loadNetmirrorDomains();
   }
 
   @override
   void dispose() {
     _torrentioUrlController.dispose();
     _stravoUrlController.dispose();
+    _netmirrorDomainsController.dispose();
     super.dispose();
   }
 
@@ -77,6 +81,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Stravo Addon URL saved successfully.')),
+      );
+    }
+  }
+
+  Future<void> _loadNetmirrorDomains() async {
+    final prefs = await SharedPreferences.getInstance();
+    final domains = prefs.getString('netmirror_domains') ?? '';
+    _netmirrorDomainsController.text = domains;
+  }
+
+  Future<void> _saveNetmirrorDomains(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('netmirror_domains', value.trim());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NetMirror domains saved successfully.')),
       );
     }
   }
@@ -853,6 +873,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(height: 8),
                         const Text(
                           'Customize Stravo stream provider base URL.',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Divider(color: Colors.white10),
+                        const SizedBox(height: 16),
+                        Text(
+                          'NetMirror Domains',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _netmirrorDomainsController,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontFamily: 'Consolas',
+                                ),
+                                decoration: const InputDecoration(
+                                  hintText: 'e.g. https://mobiledetects.com, https://mobiledetect.app',
+                                  hintStyle: TextStyle(color: Colors.white30),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                ),
+                                onSubmitted: _saveNetmirrorDomains,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.save_rounded, color: Colors.white70),
+                              onPressed: () => _saveNetmirrorDomains(_netmirrorDomainsController.text),
+                              tooltip: 'Save Domains',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Comma-separated list of active NetMirror search fallback domains (overrides default domains list).',
                           style: TextStyle(
                             color: Colors.white60,
                             fontSize: 12,

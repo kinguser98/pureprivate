@@ -9,9 +9,11 @@ import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'dart:io';
 
 class SpecialSearchDialog extends StatefulWidget {
   const SpecialSearchDialog({super.key});
@@ -170,6 +172,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     // 4. Resolve Stalker Synced VOD Database (requires movie title)
     tasks.add(_resolveStalkerVodDatabase(title));
+
+    // 5. Resolve NetMirror API Scraper (requires movie title)
+    tasks.add(_resolveNetmirror(title));
 
     await Future.wait(tasks);
 
@@ -455,6 +460,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  Future<void> _resolveNetmirror(String title) async {
+    try {
+      debugPrint('NetMirror Scraper: Resolving streams for $title...');
+      final streams = await NetmirrorResolver.resolveStreams(title);
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('NetMirror resolution failed: $e');
+    }
+  }
+
   Future<void> _resolveStravo(String imdbId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -613,6 +632,158 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 
   void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) async {
+    if (source.type == StreamSourceType.netmirror) {
+      // 1. Show pre-flight loading indicator
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: Colors.tealAccent),
+        ),
+      );
+
+      try {
+        final uri = Uri.parse(source.url);
+        
+        // Extract headers from URL parameters to fetch the playlist
+        final Map<String, String> headers = {};
+        if (uri.queryParameters.containsKey('headers')) {
+          final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
+          if (jsonHeaders is Map) {
+            jsonHeaders.forEach((k, v) {
+              headers[k.toString()] = v.toString();
+            });
+          }
+        }
+
+        // Fetch master playlist
+        final client = HttpClient();
+        client.connectionTimeout = const Duration(seconds: 8);
+        final req = await client.getUrl(uri);
+        headers.forEach((k, v) {
+          req.headers.set(k, v);
+        });
+        final res = await req.close();
+        
+        if (res.statusCode == 200) {
+          final body = await res.transform(utf8.decoder).join();
+          client.close();
+
+          // Parse audio tracks: #EXT-X-MEDIA:TYPE=AUDIO,...,NAME="LanguageName",...
+          final audioLines = body.split('\n').where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')).toList();
+          final List<String> audioLanguages = [];
+          
+          for (final line in audioLines) {
+            final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
+            if (nameMatch != null) {
+              final langName = nameMatch.group(1)!;
+              if (!audioLanguages.contains(langName)) {
+                audioLanguages.add(langName);
+              }
+            }
+          }
+
+          if (mounted) {
+            Navigator.of(context).pop(); // Dismiss loader
+          }
+
+          String? selectedLanguage;
+          if (audioLanguages.length > 1) {
+            // Show selection dialog
+            selectedLanguage = await showDialog<String>(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) {
+                return AlertDialog(
+                  backgroundColor: AppColors.surface,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  title: Text(
+                    'Select Audio Language',
+                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  content: Container(
+                    width: double.maxFinite,
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: audioLanguages.length,
+                      itemBuilder: (context, index) {
+                        final lang = audioLanguages[index];
+                        return ListTile(
+                          title: Text(lang, style: const TextStyle(color: Colors.white)),
+                          leading: const Icon(Icons.audiotrack_rounded, color: Colors.tealAccent),
+                          onTap: () => Navigator.of(context).pop(lang),
+                        );
+                      },
+                    ),
+                  ),
+                );
+              },
+            );
+          }
+
+          // Open player with selected language
+          if (mounted) {
+            var finalUrl = source.url;
+            if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
+              // Encode selected_audio into query parameters so proxy can rewrite HLS playlist
+              final sourceUri = Uri.parse(source.url);
+              finalUrl = sourceUri.replace(queryParameters: {
+                ...sourceUri.queryParameters,
+                'selected_audio': selectedLanguage
+              }).toString();
+            }
+
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => VideoPlayerScreen(
+                  videoSource: finalUrl,
+                  title: movieTitle,
+                  subtitle: 'NetMirror Server',
+                  movieId: 'special_search_${_selectedMovie['id']}',
+                  resumeDirectly: false,
+                  headers: headers,
+                ),
+              ),
+            );
+          }
+        } else {
+          client.close();
+          throw Exception('HLS Master playlist returned status ${res.statusCode}');
+        }
+      } catch (e) {
+        // Fallback: If pre-flight check fails or times out, launch the stream directly
+        debugPrint('Netmirror pre-flight check failed: $e. Launching stream directly.');
+        if (mounted) {
+          Navigator.of(context).pop(); // Dismiss loader if still open
+          
+          final uri = Uri.parse(source.url);
+          final Map<String, String> headers = {};
+          if (uri.queryParameters.containsKey('headers')) {
+            final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
+            if (jsonHeaders is Map) {
+              jsonHeaders.forEach((k, v) {
+                headers[k.toString()] = v.toString();
+              });
+            }
+          }
+
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => VideoPlayerScreen(
+                videoSource: source.url,
+                title: movieTitle,
+                subtitle: 'NetMirror Server',
+                movieId: 'special_search_${_selectedMovie['id']}',
+                resumeDirectly: false,
+                headers: headers,
+              ),
+            ),
+          );
+        }
+      }
+      return;
+    }
+
     if (source.url.startsWith('stalker://')) {
       showDialog<void>(
         context: context,
@@ -1130,7 +1301,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final vidlinkStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidlink).toList();
     final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
     final stalkerStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stalker).toList();
-    final tamilblastersStreams = _resolvedSources.where((s) => s.type == StreamSourceType.tamilblasters).toList();
+    final netmirrorStreams = _resolvedSources.where((s) => s.type == StreamSourceType.netmirror).toList();
 
     if (_activeGroupType == null) {
       // 1. Server groups main list
@@ -1188,6 +1359,19 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.stalker),
           ),
 
+          // NetMirror Server Group
+          _buildServerGroupCard(
+            title: '5. NetMirror Server (NF/PV/HS)',
+            subtitle: _resolvingStreams && netmirrorStreams.isEmpty 
+                ? 'Searching NetMirror...' 
+                : (netmirrorStreams.isNotEmpty ? '${netmirrorStreams.length} links available' : 'Not available'),
+            icon: Icons.language_rounded,
+            accentColor: Colors.tealAccent,
+            onTap: netmirrorStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.netmirror),
+          ),
+
         ],
       );
     } else {
@@ -1196,17 +1380,23 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           ? stravoStreams 
           : (_activeGroupType == StreamSourceType.torrent 
               ? torrentStreams 
-              : stalkerStreams);
+              : (_activeGroupType == StreamSourceType.stalker 
+                  ? stalkerStreams 
+                  : netmirrorStreams));
       final accentColor = _activeGroupType == StreamSourceType.stravo 
           ? Colors.cyan 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Colors.amber 
-              : Colors.purpleAccent);
+              : (_activeGroupType == StreamSourceType.stalker 
+                  ? Colors.purpleAccent 
+                  : Colors.tealAccent));
       final iconData = _activeGroupType == StreamSourceType.stravo 
           ? Icons.rocket_launch_rounded 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Icons.cloud_circle_rounded 
-              : Icons.movie_filter_rounded);
+              : (_activeGroupType == StreamSourceType.stalker 
+                  ? Icons.movie_filter_rounded 
+                  : Icons.language_rounded));
 
       if (activeList.isEmpty) {
         return Center(
@@ -1288,7 +1478,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 }
 
-enum StreamSourceType { vidlink, stravo, torrent, stalker, tamilblasters }
+enum StreamSourceType { vidlink, stravo, torrent, stalker, tamilblasters, netmirror }
 
 class StreamSourceInfo {
   final String name;
