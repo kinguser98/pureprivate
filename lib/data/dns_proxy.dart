@@ -20,6 +20,7 @@ class CustomDnsProxy {
       _httpClient = HttpClient();
       _httpClient!.connectionTimeout = const Duration(seconds: 10);
       _httpClient!.autoUncompress = false;
+      _httpClient!.maxConnectionsPerHost = 100;
       _httpClient!.findProxy = (uri) => 'DIRECT';
       _httpClient!.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
         final targetHost = uri.host;

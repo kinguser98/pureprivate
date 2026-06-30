@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'dns_proxy.dart';
 import '../widgets/special_search_dialog.dart';
 
 class WebViewScraperExecutor {
@@ -96,6 +97,22 @@ class WebViewScraperExecutor {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 15);
     client.badCertificateCallback = (cert, host, port) => true;
+    client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
+      final targetHost = uri.host;
+      final targetPort = uri.port;
+      final resolvedHost = await CustomDnsProxy().resolveHostForNative(targetHost);
+      final socket = await Socket.connect(resolvedHost, targetPort).timeout(const Duration(seconds: 10));
+      if (uri.scheme == 'https') {
+        final secureSocket = await SecureSocket.secure(
+          socket,
+          host: targetHost,
+          context: SecurityContext.defaultContext,
+          onBadCertificate: (cert) => true,
+        );
+        return ConnectionTask.fromSocket(Future.value(secureSocket), () {});
+      }
+      return ConnectionTask.fromSocket(Future.value(socket), () {});
+    };
 
     try {
       final method = options?['method']?.toString() ?? 'GET';
@@ -231,6 +248,7 @@ class WebViewScraperExecutor {
         (async function() {
           try {
             // Setup global module/exports compatibility mock for CommonJS
+            window.global = window;
             if (typeof module === 'undefined') {
               window.module = { exports: {} };
             }
