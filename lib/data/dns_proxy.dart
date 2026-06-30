@@ -13,6 +13,32 @@ class CustomDnsProxy {
   HttpServer? _server;
   int? port;
   final Map<String, String> _dnsCache = {};
+  HttpClient? _httpClient;
+
+  HttpClient _getHttpClient() {
+    if (_httpClient == null) {
+      _httpClient = HttpClient();
+      _httpClient!.connectionTimeout = const Duration(seconds: 10);
+      _httpClient!.autoUncompress = false;
+      _httpClient!.findProxy = (uri) => 'DIRECT';
+      _httpClient!.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
+        final targetHost = uri.host;
+        final targetPort = uri.port;
+        final socket = await _connectToHost(targetHost, targetPort);
+        if (uri.scheme == 'https') {
+          final secureSocket = await SecureSocket.secure(
+            socket,
+            host: targetHost,
+            context: SecurityContext.defaultContext,
+            onBadCertificate: (cert) => true,
+          );
+          return ConnectionTask.fromSocket(Future.value(secureSocket), () {});
+        }
+        return ConnectionTask.fromSocket(Future.value(socket), () {});
+      };
+    }
+    return _httpClient!;
+  }
 
   Future<void> start() async {
     if (_server != null) return;
@@ -42,6 +68,8 @@ class CustomDnsProxy {
     await _server?.close(force: true);
     _server = null;
     port = null;
+    _httpClient?.close(force: true);
+    _httpClient = null;
     debugPrint('CustomDnsProxy: Stopped');
   }
 
@@ -275,25 +303,7 @@ class CustomDnsProxy {
   }
 
   Future<void> _handleHttp(HttpRequest request) async {
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 10);
-    client.autoUncompress = false;
-    client.findProxy = (uri) => 'DIRECT';
-    client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
-      final targetHost = uri.host;
-      final targetPort = uri.port;
-      final socket = await _connectToHost(targetHost, targetPort);
-      if (uri.scheme == 'https') {
-        final secureSocket = await SecureSocket.secure(
-          socket,
-          host: targetHost,
-          context: SecurityContext.defaultContext,
-          onBadCertificate: (cert) => true,
-        );
-        return ConnectionTask.fromSocket(Future.value(secureSocket), () {});
-      }
-      return ConnectionTask.fromSocket(Future.value(socket), () {});
-    };
+    final client = _getHttpClient();
     
     try {
       final pathSegments = request.uri.pathSegments;
@@ -357,7 +367,6 @@ class CustomDnsProxy {
               }
             });
             req.headers.set('Host', targetHostRaw);
-            req.headers.set('Connection', 'close');
             req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
             // Apply extracted query parameter headers
@@ -625,7 +634,7 @@ class CustomDnsProxy {
         await request.response.close();
       } catch (_) {}
     } finally {
-      client.close();
+      // Do not close client here, let connection pool be kept-alive
     }
   }
 

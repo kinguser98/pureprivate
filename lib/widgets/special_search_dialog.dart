@@ -12,6 +12,7 @@ import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:io';
 
@@ -175,6 +176,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     // 5. Resolve NetMirror API Scraper (requires movie title)
     tasks.add(_resolveNetmirror(title));
+
+    // 6. Resolve Extra JS Scrapers (dvdplay, mallumv, vidnest, hdhub4u, castle)
+    if (tmdbId.isNotEmpty) {
+      tasks.add(_resolveExtraScraper('dvdplay', tmdbId));
+      tasks.add(_resolveExtraScraper('mallumv', tmdbId));
+      tasks.add(_resolveExtraScraper('vidnest', tmdbId));
+      tasks.add(_resolveExtraScraper('hdhub4u', tmdbId));
+      tasks.add(_resolveExtraScraper('castle', tmdbId));
+    }
 
     await Future.wait(tasks);
 
@@ -474,6 +484,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  Future<void> _resolveExtraScraper(String providerName, String tmdbId) async {
+    try {
+      debugPrint('WebViewScraperExecutor: Resolving streams for $providerName (TMDB: $tmdbId)...');
+      final streams = await WebViewScraperExecutor.runScraper(providerName, tmdbId, 'movie');
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('WebViewScraperExecutor: $providerName failed: $e');
+    }
+  }
+
   Future<void> _resolveStravo(String imdbId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -632,7 +656,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 
   void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) async {
-    if (source.type == StreamSourceType.netmirror) {
+    final isScraperSource = source.type == StreamSourceType.netmirror ||
+                            source.type == StreamSourceType.dvdplay ||
+                            source.type == StreamSourceType.mallumv ||
+                            source.type == StreamSourceType.vidnest ||
+                            source.type == StreamSourceType.hdhub4u ||
+                            source.type == StreamSourceType.castle;
+
+    if (isScraperSource) {
+      final serverSubtitle = '${source.name.split(':')[0]} Server';
+      
       // 1. Show pre-flight loading indicator
       showDialog<void>(
         context: context,
@@ -738,7 +771,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 builder: (_) => VideoPlayerScreen(
                   videoSource: finalUrl,
                   title: movieTitle,
-                  subtitle: 'NetMirror Server',
+                  subtitle: serverSubtitle,
                   movieId: 'special_search_${_selectedMovie['id']}',
                   resumeDirectly: false,
                   headers: headers,
@@ -752,7 +785,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         }
       } catch (e) {
         // Fallback: If pre-flight check fails or times out, launch the stream directly
-        debugPrint('Netmirror pre-flight check failed: $e. Launching stream directly.');
+        debugPrint('Scraper pre-flight check failed: $e. Launching stream directly.');
         if (mounted) {
           Navigator.of(context).pop(); // Dismiss loader if still open
           
@@ -772,7 +805,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               builder: (_) => VideoPlayerScreen(
                 videoSource: source.url,
                 title: movieTitle,
-                subtitle: 'NetMirror Server',
+                subtitle: serverSubtitle,
                 movieId: 'special_search_${_selectedMovie['id']}',
                 resumeDirectly: false,
                 headers: headers,
@@ -1302,6 +1335,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final torrentStreams = _resolvedSources.where((s) => s.type == StreamSourceType.torrent).toList();
     final stalkerStreams = _resolvedSources.where((s) => s.type == StreamSourceType.stalker).toList();
     final netmirrorStreams = _resolvedSources.where((s) => s.type == StreamSourceType.netmirror).toList();
+    final dvdplayStreams = _resolvedSources.where((s) => s.type == StreamSourceType.dvdplay).toList();
+    final mallumvStreams = _resolvedSources.where((s) => s.type == StreamSourceType.mallumv).toList();
+    final vidnestStreams = _resolvedSources.where((s) => s.type == StreamSourceType.vidnest).toList();
+    final hdhub4uStreams = _resolvedSources.where((s) => s.type == StreamSourceType.hdhub4u).toList();
+    final castleStreams = _resolvedSources.where((s) => s.type == StreamSourceType.castle).toList();
 
     if (_activeGroupType == null) {
       // 1. Server groups main list
@@ -1372,6 +1410,71 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.netmirror),
           ),
 
+          // DVDPlay Server Group
+          _buildServerGroupCard(
+            title: '6. DVDPlay Server',
+            subtitle: _resolvingStreams && dvdplayStreams.isEmpty 
+                ? 'Searching DVDPlay...' 
+                : (dvdplayStreams.isNotEmpty ? '${dvdplayStreams.length} links available' : 'Not available'),
+            icon: Icons.disc_full_rounded,
+            accentColor: Colors.deepOrangeAccent,
+            onTap: dvdplayStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.dvdplay),
+          ),
+
+          // MalluMV Server Group
+          _buildServerGroupCard(
+            title: '7. MalluMV Server',
+            subtitle: _resolvingStreams && mallumvStreams.isEmpty 
+                ? 'Searching MalluMV...' 
+                : (mallumvStreams.isNotEmpty ? '${mallumvStreams.length} links available' : 'Not available'),
+            icon: Icons.music_video_rounded,
+            accentColor: Colors.pinkAccent,
+            onTap: mallumvStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.mallumv),
+          ),
+
+          // Vidnest Server Group
+          _buildServerGroupCard(
+            title: '8. Vidnest Server',
+            subtitle: _resolvingStreams && vidnestStreams.isEmpty 
+                ? 'Searching Vidnest...' 
+                : (vidnestStreams.isNotEmpty ? '${vidnestStreams.length} links available' : 'Not available'),
+            icon: Icons.video_library_rounded,
+            accentColor: Colors.indigoAccent,
+            onTap: vidnestStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.vidnest),
+          ),
+
+          // HDHub4u Server Group
+          _buildServerGroupCard(
+            title: '9. HDHub4u Server',
+            subtitle: _resolvingStreams && hdhub4uStreams.isEmpty 
+                ? 'Searching HDHub4u...' 
+                : (hdhub4uStreams.isNotEmpty ? '${hdhub4uStreams.length} links available' : 'Not available'),
+            icon: Icons.hd_rounded,
+            accentColor: Colors.lightGreenAccent,
+            onTap: hdhub4uStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.hdhub4u),
+          ),
+
+          // Castle Server Group
+          _buildServerGroupCard(
+            title: '10. Castle TV Server',
+            subtitle: _resolvingStreams && castleStreams.isEmpty 
+                ? 'Searching Castle...' 
+                : (castleStreams.isNotEmpty ? '${castleStreams.length} links available' : 'Not available'),
+            icon: Icons.castle_rounded,
+            accentColor: Colors.amberAccent,
+            onTap: castleStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.castle),
+          ),
+
         ],
       );
     } else {
@@ -1382,21 +1485,51 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               ? torrentStreams 
               : (_activeGroupType == StreamSourceType.stalker 
                   ? stalkerStreams 
-                  : netmirrorStreams));
+                  : (_activeGroupType == StreamSourceType.netmirror 
+                      ? netmirrorStreams 
+                      : (_activeGroupType == StreamSourceType.dvdplay 
+                          ? dvdplayStreams 
+                          : (_activeGroupType == StreamSourceType.mallumv 
+                              ? mallumvStreams 
+                              : (_activeGroupType == StreamSourceType.vidnest 
+                                  ? vidnestStreams 
+                                  : (_activeGroupType == StreamSourceType.hdhub4u 
+                                      ? hdhub4uStreams 
+                                      : castleStreams))))))));
       final accentColor = _activeGroupType == StreamSourceType.stravo 
           ? Colors.cyan 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Colors.amber 
               : (_activeGroupType == StreamSourceType.stalker 
                   ? Colors.purpleAccent 
-                  : Colors.tealAccent));
+                  : (_activeGroupType == StreamSourceType.netmirror 
+                      ? Colors.tealAccent 
+                      : (_activeGroupType == StreamSourceType.dvdplay 
+                          ? Colors.deepOrangeAccent 
+                          : (_activeGroupType == StreamSourceType.mallumv 
+                              ? Colors.pinkAccent 
+                              : (_activeGroupType == StreamSourceType.vidnest 
+                                  ? Colors.indigoAccent 
+                                  : (_activeGroupType == StreamSourceType.hdhub4u 
+                                      ? Colors.lightGreenAccent 
+                                      : Colors.amberAccent))))))));
       final iconData = _activeGroupType == StreamSourceType.stravo 
           ? Icons.rocket_launch_rounded 
           : (_activeGroupType == StreamSourceType.torrent 
               ? Icons.cloud_circle_rounded 
               : (_activeGroupType == StreamSourceType.stalker 
                   ? Icons.movie_filter_rounded 
-                  : Icons.language_rounded));
+                  : (_activeGroupType == StreamSourceType.netmirror 
+                      ? Icons.language_rounded 
+                      : (_activeGroupType == StreamSourceType.dvdplay 
+                          ? Icons.disc_full_rounded 
+                          : (_activeGroupType == StreamSourceType.mallumv 
+                              ? Icons.music_video_rounded 
+                              : (_activeGroupType == StreamSourceType.vidnest 
+                                  ? Icons.video_library_rounded 
+                                  : (_activeGroupType == StreamSourceType.hdhub4u 
+                                      ? Icons.hd_rounded 
+                                      : Icons.castle_rounded))))))));
 
       if (activeList.isEmpty) {
         return Center(
@@ -1478,7 +1611,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 }
 
-enum StreamSourceType { vidlink, stravo, torrent, stalker, tamilblasters, netmirror }
+enum StreamSourceType { vidlink, stravo, torrent, stalker, tamilblasters, netmirror, dvdplay, mallumv, vidnest, hdhub4u, castle }
 
 class StreamSourceInfo {
   final String name;
