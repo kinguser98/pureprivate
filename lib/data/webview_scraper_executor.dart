@@ -11,6 +11,7 @@ class WebViewScraperExecutor {
   static HeadlessInAppWebView? _headlessWebView;
   static InAppWebViewController? _webViewController;
   static final Map<String, Completer<List<dynamic>>> _pendingRequests = {};
+  static final Map<String, Completer<Map<String, dynamic>>> _pendingFetches = {};
   static int _requestId = 0;
   static bool _initialized = false;
 
@@ -34,7 +35,7 @@ class WebViewScraperExecutor {
       onWebViewCreated: (controller) {
         _webViewController = controller;
         
-        // Add JS callback handler
+        // Scraper result callback
         controller.addJavaScriptHandler(
           handlerName: 'onScraperResult',
           callback: (args) {
@@ -54,6 +55,20 @@ class WebViewScraperExecutor {
             }
           },
         );
+
+        // Fetch proxy callback
+        controller.addJavaScriptHandler(
+          handlerName: 'onFetchRequest',
+          callback: (args) async {
+            if (args.length >= 2) {
+              final reqId = args[0].toString();
+              final url = args[1].toString();
+              final options = args.length >= 3 ? args[2] as Map? : null;
+
+              _executeNativeFetch(controller, reqId, url, options);
+            }
+          },
+        );
       },
       onLoadStop: (controller, url) {
         if (!completer.isCompleted) {
@@ -66,6 +81,68 @@ class WebViewScraperExecutor {
     await completer.future;
     _initialized = true;
     debugPrint('WebViewScraperExecutor: Headless Webview Initialized successfully');
+  }
+
+  /// Executes native fetch request on behalf of the webview to bypass CORS completely
+  static Future<void> _executeNativeFetch(
+    InAppWebViewController controller,
+    String reqId,
+    String url,
+    Map? options,
+  ) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 15);
+
+    try {
+      final method = options?['method']?.toString() ?? 'GET';
+      final Uri uri = Uri.parse(url);
+      final req = await client.openUrl(method, uri);
+
+      // Disable redirects following if configured in options
+      req.followRedirects = options?['followRedirects'] != false;
+
+      // Copy headers
+      if (options?['headers'] is Map) {
+        (options!['headers'] as Map).forEach((k, v) {
+          req.headers.set(k.toString(), v.toString());
+        });
+      }
+
+      // Copy body
+      if (options?['body'] != null) {
+        req.write(options!['body']);
+      }
+
+      final res = await req.close().timeout(const Duration(seconds: 12));
+      final body = await res.transform(utf8.decoder).join();
+
+      final Map<String, String> resHeaders = {};
+      res.headers.forEach((name, values) {
+        resHeaders[name.toLowerCase()] = values.join(', ');
+      });
+
+      final jsCall = """
+        if (window.onFetchResponse) {
+          window.onFetchResponse(
+            "$reqId", 
+            ${res.statusCode}, 
+            ${jsonEncode(body)}, 
+            ${jsonEncode(resHeaders)}
+          );
+        }
+      """;
+      await controller.evaluateJavascript(source: jsCall);
+    } catch (e) {
+      debugPrint('WebViewScraperExecutor native fetch failed for $url: $e');
+      final jsCall = """
+        if (window.onFetchResponse) {
+          window.onFetchResponse("$reqId", 500, "", {}, "${e.toString()}");
+        }
+      """;
+      await controller.evaluateJavascript(source: jsCall);
+    } finally {
+      client.close();
+    }
   }
 
   /// Gets crypto-js library (caches locally in SharedPreferences)
@@ -89,7 +166,7 @@ class WebViewScraperExecutor {
       debugPrint('WebViewScraperExecutor: Failed to download crypto-js: $e');
     }
 
-    return ''; // Return empty fallback (some scrapers don't need it)
+    return ''; 
   }
 
   /// Fetches the latest JS provider script from yoruix repo (caches locally in SharedPreferences)
@@ -136,7 +213,7 @@ class WebViewScraperExecutor {
       final completer = Completer<List<dynamic>>();
       _pendingRequests[reqId] = completer;
 
-      // We inject the DOMParser-based Cheerio mock and require mocks
+      // We inject the DOMParser-based Cheerio mock and native fetch overrides
       final executionJs = """
         (async function() {
           try {
@@ -147,6 +224,54 @@ class WebViewScraperExecutor {
             if (typeof exports === 'undefined') {
               window.exports = window.module.exports;
             }
+            
+            // Native fetch proxy setup
+            window._fetchCompleters = {};
+            window.fetch = function(url, options) {
+              return new Promise((resolve, reject) => {
+                const reqId = 'fetch_' + Math.random() + '_' + Date.now();
+                window._fetchCompleters[reqId] = { resolve, reject };
+
+                let headers = {};
+                if (options && options.headers) {
+                  if (options.headers.forEach) {
+                    options.headers.forEach((v, k) => { headers[k] = v; });
+                  } else {
+                    headers = options.headers;
+                  }
+                }
+
+                const cleanOptions = {
+                  method: (options && options.method) || 'GET',
+                  headers: headers,
+                  body: (options && options.body) || null,
+                  followRedirects: (options && options.redirect !== 'manual')
+                };
+
+                window.flutter_inappwebview.callHandler('onFetchRequest', reqId, url.toString(), cleanOptions);
+              });
+            };
+
+            window.onFetchResponse = function(reqId, status, body, headers, error) {
+              const completer = window._fetchCompleters[reqId];
+              if (completer) {
+                delete window._fetchCompleters[reqId];
+                if (error) {
+                  completer.reject(new Error(error));
+                  return;
+                }
+
+                completer.resolve({
+                  status: status,
+                  ok: status >= 200 && status < 300,
+                  headers: {
+                    get: function(name) { return headers[name.toLowerCase()] || null; }
+                  },
+                  text: function() { return Promise.resolve(body); },
+                  json: function() { return Promise.resolve(JSON.parse(body)); }
+                });
+              }
+            };
             
             // Cheerio mock using native browser DOMParser
             window.cheerio = {
@@ -172,7 +297,11 @@ class WebViewScraperExecutor {
                   
                   elements.attr = function(name) {
                     if (elements.length > 0) {
-                      if (name === 'href') return elements[0].getAttribute('href') || elements[0].href;
+                      if (name === 'href') {
+                        const hrefVal = elements[0].getAttribute('href') || elements[0].href;
+                        // Return normalized absolute or relative value
+                        return hrefVal;
+                      }
                       return elements[0].getAttribute(name);
                     }
                     return null;
