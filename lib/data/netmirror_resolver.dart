@@ -6,6 +6,8 @@ import '../widgets/special_search_dialog.dart'; // To access StreamSourceInfo an
 
 class NetmirrorResolver {
   static final List<String> _defaultDomains = [
+    "aHR0cHM6Ly9uZXQyMi5jYw==",
+    "aHR0cHM6Ly9uZXQ1Mi5jYw==",
     "aHR0cHM6Ly9tb2JpbGVkZXRlY3RzLmNvbQ==",
     "aHR0cHM6Ly9tb2JpbGVkZXRlY3QuYXBw",
     "aHR0cHM6Ly9tb2JpZGV0ZWN0LmFydA==",
@@ -182,7 +184,6 @@ class NetmirrorResolver {
                     // Encode Referer header into URL query parameter
                     final encodedHeaders = jsonEncode({
                       'Referer': referer,
-                      'User-Agent': _baseHeaders['User-Agent']
                     });
                     
                     final resolvedUri = Uri.parse(videoLink).replace(queryParameters: {

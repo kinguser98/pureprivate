@@ -419,7 +419,8 @@ class CustomDnsProxy {
           if (nameLower == 'location') {
             for (final value in values) {
               try {
-                final locUri = Uri.parse(value);
+                final baseUri = Uri.parse(cleanTargetUrl);
+                final locUri = baseUri.resolve(value);
                 final hostWithPort = locUri.hasPort ? '${locUri.host}:${locUri.port}' : locUri.host;
                 final proxyRedirectUri = Uri(
                   scheme: 'http',
@@ -461,9 +462,83 @@ class CustomDnsProxy {
           var bodyStr = utf8.decode(decodedBytes);
           final incomingHeadersParam = request.uri.queryParameters['headers'];
           final selectedAudio = request.uri.queryParameters['selected_audio'];
+          final selectedQuality = request.uri.queryParameters['selected_quality'];
+          
+          // If a specific quality is requested, filter the HLS master playlist first
+          if (selectedQuality != null && selectedQuality.isNotEmpty && bodyStr.contains('#EXT-X-STREAM-INF')) {
+            final tempLines = bodyStr.split(RegExp(r'\r?\n'));
+            final List<String> headerLines = [];
+            final List<MapEntry<String, String>> variantBlocks = [];
+            
+            int i = 0;
+            while (i < tempLines.length) {
+              final line = tempLines[i].trim();
+              if (line.isEmpty) {
+                i++;
+                continue;
+              }
+              if (line.startsWith('#EXT-X-STREAM-INF')) {
+                final tag = line;
+                i++;
+                while (i < tempLines.length && tempLines[i].trim().isEmpty) {
+                  i++;
+                }
+                if (i < tempLines.length) {
+                  final url = tempLines[i].trim();
+                  variantBlocks.add(MapEntry(tag, url));
+                }
+              } else {
+                headerLines.add(line);
+              }
+              i++;
+            }
+            
+            MapEntry<String, String>? bestMatch;
+            for (final block in variantBlocks) {
+              final tag = block.key;
+              final resolutionMatch = RegExp(r'RESOLUTION=(\d+x\d+)').firstMatch(tag);
+              String blockQuality = '';
+              if (resolutionMatch != null) {
+                final res = resolutionMatch.group(1)!;
+                final height = res.split('x')[1];
+                blockQuality = '${height}p';
+              } else {
+                final bandwidthMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(tag);
+                if (bandwidthMatch != null) {
+                  final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
+                  if (bw > 3000000) blockQuality = '1080p';
+                  else if (bw > 1500000) blockQuality = '720p';
+                  else if (bw > 800000) blockQuality = '480p';
+                  else blockQuality = '360p';
+                }
+              }
+              
+              if (blockQuality == selectedQuality) {
+                bestMatch = block;
+                break;
+              }
+            }
+            
+            // If no exact match, fallback to the first available variant
+            if (bestMatch == null && variantBlocks.isNotEmpty) {
+              bestMatch = variantBlocks.first;
+            }
+            
+            final List<String> newLines = [];
+            for (final line in headerLines) {
+              newLines.add(line);
+            }
+            if (bestMatch != null) {
+              newLines.add(bestMatch.key);
+              newLines.add(bestMatch.value);
+            }
+            
+            bodyStr = newLines.join('\n');
+          }
           
           // Parse and rewrite HLS playlist line by line to resolve and proxy all links (playlists, keys, and segments)
-          final lines = bodyStr.split('\n');
+          // Split by \r?\n to safely handle both CRLF and LF, preventing stray \r that can corrupt libmpv's HLS duration parser
+          final lines = bodyStr.split(RegExp(r'\r?\n'));
           final baseUri = Uri.parse(cleanTargetUrl);
           
           for (int i = 0; i < lines.length; i++) {
@@ -497,24 +572,35 @@ class CustomDnsProxy {
                   if (!relativeUrl.contains('127.0.0.1') && !relativeUrl.contains('localhost')) {
                     try {
                       final resolvedUri = baseUri.resolve(relativeUrl);
-                      final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
-                      
-                      var rewrittenUri = resolvedUri;
-                      if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
-                        final newParams = Map<String, String>.from(resolvedUri.queryParameters);
-                        newParams['headers'] = incomingHeadersParam;
-                        rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                      bool shouldProxyHost = false;
+                      for (final pattern in MyHttpOverrides.blocklist) {
+                        if (resolvedUri.host.toLowerCase().contains(pattern)) {
+                          shouldProxyHost = true;
+                          break;
+                        }
                       }
                       
-                      final proxyUri = Uri(
-                        scheme: 'http',
-                        host: '127.0.0.1',
-                        port: port,
-                        path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
-                        queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
-                      );
-                      final proxyUrl = proxyUri.toString();
-                      lines[i] = line.replaceFirst('URI="$relativeUrl"', 'URI="$proxyUrl"');
+                      if (shouldProxyHost) {
+                        final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
+                        var rewrittenUri = resolvedUri;
+                        if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
+                          final newParams = Map<String, String>.from(resolvedUri.queryParameters);
+                          newParams['headers'] = incomingHeadersParam;
+                          rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                        }
+                        
+                        final proxyUri = Uri(
+                          scheme: 'http',
+                          host: '127.0.0.1',
+                          port: port,
+                          path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
+                          queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
+                        );
+                        final proxyUrl = proxyUri.toString();
+                        lines[i] = line.replaceFirst('URI="$relativeUrl"', 'URI="$proxyUrl"');
+                      } else {
+                        lines[i] = line.replaceFirst('URI="$relativeUrl"', 'URI="${resolvedUri.toString()}"');
+                      }
                     } catch (_) {}
                   }
                 }
@@ -524,24 +610,34 @@ class CustomDnsProxy {
               if (!line.contains('127.0.0.1') && !line.contains('localhost')) {
                 try {
                   final resolvedUri = baseUri.resolve(line);
-                  final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
-                  
-                  var rewrittenUri = resolvedUri;
-                  if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
-                    final newParams = Map<String, String>.from(resolvedUri.queryParameters);
-                    newParams['headers'] = incomingHeadersParam;
-                    rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                  bool shouldProxyHost = false;
+                  for (final pattern in MyHttpOverrides.blocklist) {
+                    if (resolvedUri.host.toLowerCase().contains(pattern)) {
+                      shouldProxyHost = true;
+                      break;
+                    }
                   }
                   
-                  final proxyUri = Uri(
-                    scheme: 'http',
-                    host: '127.0.0.1',
-                    port: port,
-                    path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
-                    queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
-                  );
-                  final proxyUrl = proxyUri.toString();
-                  lines[i] = proxyUrl;
+                  if (shouldProxyHost) {
+                    final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
+                    var rewrittenUri = resolvedUri;
+                    if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
+                      final newParams = Map<String, String>.from(resolvedUri.queryParameters);
+                      newParams['headers'] = incomingHeadersParam;
+                      rewrittenUri = resolvedUri.replace(queryParameters: newParams);
+                    }
+                    
+                    final proxyUri = Uri(
+                      scheme: 'http',
+                      host: '127.0.0.1',
+                      port: port,
+                      path: '/proxy/${rewrittenUri.scheme}/$hostWithPort${rewrittenUri.path}',
+                      queryParameters: rewrittenUri.queryParameters.isNotEmpty ? rewrittenUri.queryParameters : null,
+                    );
+                    lines[i] = proxyUri.toString();
+                  } else {
+                    lines[i] = resolvedUri.toString();
+                  }
                 } catch (_) {}
               }
             }

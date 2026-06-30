@@ -19,6 +19,7 @@ import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -47,6 +48,189 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _torrentioSources = [];
   List<StreamSource> _stravoSources = [];
   final Map<String, Map<String, int>> _customMagnetStats = {};
+
+  List<StreamSource> _liveVidlinkSources = [];
+  List<StreamSource> _liveNetmirrorSources = [];
+  List<StreamSource> _liveStalkerSources = [];
+  List<StreamSource> _liveStravoSources = [];
+
+  bool _resolvingVidlink = false;
+  bool _resolvingNetmirror = false;
+  bool _resolvingStalker = false;
+  bool _resolvingStravo = false;
+
+  StateSetter? _modalSetState;
+
+  @override
+  void setState(VoidCallback fn) {
+    if (!mounted) return;
+    super.setState(fn);
+    if (_modalSetState != null) {
+      try {
+        _modalSetState!(() {});
+      } catch (_) {}
+    }
+  }
+
+  void _resolveAllLiveSources() {
+    final activeId = (movie.imdbId != null && movie.imdbId!.isNotEmpty && movie.imdbId != 'null')
+        ? movie.imdbId
+        : ((movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') ? movie.tmdbId : null);
+
+    if (activeId != null) {
+      _resolveLiveVidlink(activeId);
+    }
+    
+    _resolveLiveNetmirror(movie.title);
+    _resolveLiveStalker(movie.title);
+
+    final imdbId = movie.imdbId;
+    if (imdbId != null && imdbId.isNotEmpty && imdbId != 'null') {
+      _resolveLiveStravo(imdbId);
+    }
+  }
+
+  Future<void> _resolveLiveVidlink(String activeId) async {
+    if (mounted) setState(() => _resolvingVidlink = true);
+    try {
+      final url = 'https://movie-scraper-beige.vercel.app/api?id=$activeId';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final rawUrl = data['url'] as String?;
+        if (rawUrl != null && rawUrl.isNotEmpty) {
+          if (mounted) {
+            setState(() {
+              _liveVidlinkSources = [
+                StreamSource(
+                  name: 'VidLink (Native Proxy)',
+                  url: rawUrl,
+                )
+              ];
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('VidLink stream resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingVidlink = false);
+    }
+  }
+
+  Future<void> _resolveLiveNetmirror(String title) async {
+    if (mounted) setState(() => _resolvingNetmirror = true);
+    try {
+      debugPrint('NetMirror: Resolving streams for $title...');
+      final streams = await NetmirrorResolver.resolveStreams(title);
+      final List<StreamSource> resolved = [];
+      for (final s in streams) {
+        resolved.add(StreamSource(name: s.name, url: s.url));
+      }
+      if (mounted) {
+        setState(() {
+          _liveNetmirrorSources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('NetMirror resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingNetmirror = false);
+    }
+  }
+
+  Future<void> _resolveLiveStalker(String title) async {
+    if (mounted) setState(() => _resolvingStalker = true);
+    try {
+      final url = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final movies = data['movies'] as List<dynamic>? ?? [];
+        final List<StreamSource> sources = [];
+        
+        for (final item in movies) {
+          final portalId = int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
+          final cmd = item['cmd']?.toString() ?? '';
+          final name = item['name']?.toString() ?? 'Stalker VOD';
+          
+          if (cmd.isNotEmpty && portalId == 2) {
+            final isDup = sources.any((s) => s.url == 'stalker://$portalId$cmd');
+            if (!isDup) {
+              sources.add(StreamSource(
+                name: 'Stalker: $name',
+                url: 'stalker://$portalId$cmd',
+              ));
+            }
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _liveStalkerSources = sources;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stalker VOD database search failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingStalker = false);
+    }
+  }
+
+  Future<void> _resolveLiveStravo(String imdbId) async {
+    if (mounted) setState(() => _resolvingStravo = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final addonBaseUrl = prefs.getString('stravo_addon_url') ?? 'https://stravo-clfk.onrender.com/default';
+      var baseUrl = addonBaseUrl.trim();
+      if (baseUrl.endsWith('/')) {
+        baseUrl = baseUrl.substring(0, baseUrl.length - 1);
+      }
+      final url = '$baseUrl/stream/movie/$imdbId.json';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final streamsList = data['streams'] as List<dynamic>? ?? [];
+        final List<StreamSource> sources = [];
+
+        for (final stream in streamsList) {
+          final urlStr = stream['url']?.toString() ?? '';
+          if (urlStr.isNotEmpty) {
+            final name = stream['name']?.toString() ?? '';
+            final title = stream['title']?.toString() ?? '';
+            final displayTitle = title.isNotEmpty 
+                ? (name.isNotEmpty ? '$title ($name)' : title)
+                : (name.isNotEmpty ? name : 'Stravo Stream');
+            
+            final cleanName = displayTitle.replaceAll('\n', ' ').trim();
+            
+            if (cleanName.contains('🖥️') || name.contains('🖥️') || title.contains('🖥️')) {
+              continue; // Skip direct PC streams
+            }
+
+            final isDup = sources.any((s) => s.url == urlStr);
+            if (!isDup) {
+              sources.add(StreamSource(
+                name: 'Stravo: $cleanName',
+                url: urlStr,
+              ));
+            }
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _liveStravoSources = sources;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Stravo streams resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingStravo = false);
+    }
+  }
+
 
   static const List<String> _scrapeTrackers = [
     'http://tracker.opentrackr.org:1337/scrape',
@@ -131,6 +315,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _checkDownloadStatus();
     _loadWatchProgress();
     _loadTorrentioStreams();
+    _resolveAllLiveSources();
   }
 
   Future<void> _loadWatchProgress() async {
@@ -1216,7 +1401,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showSourceSelector(List<StreamSource> sources, {bool resumeDirectly = false}) {
+  void _showSourceSelector({bool resumeDirectly = false}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -1224,6 +1409,218 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            _modalSetState = setModalState;
+            
+            final dbMp4Sources = movie.streamSources.where((src) => 
+              !_isStreamtapeSource(src) && 
+              !_isYoutubeSource(src) && 
+              !_isEmbedSource(src) &&
+              !_isMagnetSource(src)
+            ).toList();
+
+            final dbStreamtapeSources = movie.streamSources.where((src) => 
+              _isStreamtapeSource(src)
+            ).toList();
+
+            final customMagnets = movie.streamSources.where(_isMagnetSource).toList();
+
+            final List<Widget> items = [];
+            
+            // 1. MP4/MKV Link
+            items.add(_buildSourceTile(
+              icon: Icons.video_file_rounded,
+              title: '1. Direct MP4/MKV Link',
+              subtitle: dbMp4Sources.isEmpty 
+                  ? 'Not available' 
+                  : (dbMp4Sources.length == 1 ? dbMp4Sources.first.name : '${dbMp4Sources.length} files available'),
+              disabled: dbMp4Sources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                if (dbMp4Sources.length == 1) {
+                  _playWithResolution(dbMp4Sources.first.url, resumeDirectly: resumeDirectly, sourceName: dbMp4Sources.first.name);
+                } else {
+                  _showSubSourceSelector(context, 'MP4/MKV DIRECT FILES', dbMp4Sources, resumeDirectly: resumeDirectly);
+                }
+              },
+            ));
+
+            // 2. Vidlink Server
+            items.add(_buildSourceTile(
+              icon: Icons.play_arrow_rounded,
+              title: '2. Vidlink Server',
+              subtitle: _resolvingVidlink 
+                  ? 'Checking live...' 
+                  : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
+              disabled: _liveVidlinkSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                _playWithResolution(_liveVidlinkSources.first.url, resumeDirectly: resumeDirectly, sourceName: _liveVidlinkSources.first.name);
+              },
+            ));
+
+            // 3. NetMirror Server
+            items.add(_buildSourceTile(
+              icon: Icons.language_rounded,
+              title: '3. NetMirror Server (NF/PV/HS)',
+              subtitle: _resolvingNetmirror 
+                  ? 'Searching NetMirror...' 
+                  : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
+              disabled: _liveNetmirrorSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                if (_liveNetmirrorSources.length == 1) {
+                  _playNetmirrorStream(_liveNetmirrorSources.first, resumeDirectly: resumeDirectly);
+                } else {
+                  _showNetmirrorSubSelector(_liveNetmirrorSources, resumeDirectly: resumeDirectly);
+                }
+              },
+            ));
+
+            // 4. Streamtape Server
+            items.add(_buildSourceTile(
+              icon: Icons.folder_shared_rounded,
+              title: '4. Streamtape Server',
+              subtitle: dbStreamtapeSources.isEmpty 
+                  ? 'Not available' 
+                  : (dbStreamtapeSources.length == 1 ? dbStreamtapeSources.first.name : '${dbStreamtapeSources.length} files available'),
+              disabled: dbStreamtapeSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                if (dbStreamtapeSources.length == 1) {
+                  _playWithResolution(dbStreamtapeSources.first.url, resumeDirectly: resumeDirectly, sourceName: dbStreamtapeSources.first.name);
+                } else {
+                  _showSubSourceSelector(context, 'STREAMTAPE STREAMS', dbStreamtapeSources, resumeDirectly: resumeDirectly);
+                }
+              },
+            ));
+
+            // 5. Stalker VOD Server
+            items.add(_buildSourceTile(
+              icon: Icons.movie_filter_rounded,
+              title: '5. Stalker VOD Server (Portal 2)',
+              subtitle: _resolvingStalker 
+                  ? 'Searching Portal...' 
+                  : (_liveStalkerSources.isNotEmpty ? '${_liveStalkerSources.length} links available' : 'Not available'),
+              disabled: _liveStalkerSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                _showSubSourceSelector(context, 'STALKER VOD STREAMS', _liveStalkerSources, resumeDirectly: resumeDirectly);
+              },
+            ));
+
+            // 6. Stravo Server
+            items.add(_buildSourceTile(
+              icon: Icons.rocket_launch_rounded,
+              title: '6. Stravo Server',
+              subtitle: _resolvingStravo 
+                  ? 'Searching streams...' 
+                  : (_liveStravoSources.isNotEmpty ? '${_liveStravoSources.length} links available' : 'Not available'),
+              disabled: _liveStravoSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                _showSubSourceSelector(context, 'STRAVO STREAMS', _liveStravoSources, resumeDirectly: resumeDirectly);
+              },
+            ));
+
+            // 7. Torrent Server
+            final totalTorrents = _torrentioSources.length + customMagnets.length;
+            items.add(_buildSourceTile(
+              icon: Icons.cloud_circle_rounded,
+              title: '7. Torrent Server',
+              subtitle: totalTorrents > 0 
+                  ? '$totalTorrents links available' 
+                  : 'Not available',
+              disabled: totalTorrents == 0,
+              onTap: () {
+                Navigator.of(context).pop();
+                _showTorrentSourceSelector([...customMagnets, ..._torrentioSources], resumeDirectly: resumeDirectly);
+              },
+            ));
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'SELECT SERVER SOURCE',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) => items[index],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).then((_) {
+      _modalSetState = null;
+    });
+  }
+
+  Widget _buildSourceTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool disabled,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(
+        icon,
+        color: disabled ? Colors.white24 : AppColors.accentBright,
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: disabled ? Colors.white30 : Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(
+          color: disabled ? Colors.white24 : Colors.white54,
+          fontSize: 11.5,
+        ),
+      ),
+      trailing: Icon(
+        Icons.chevron_right_rounded,
+        color: disabled ? Colors.white10 : Colors.white54,
+      ),
+      tileColor: Colors.white.withValues(alpha: 0.03),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onTap: disabled ? null : onTap,
+    );
+  }
+
+  void _showNetmirrorSubSelector(List<StreamSource> sources, {bool resumeDirectly = false}) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -1232,7 +1629,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'SELECT SERVER SOURCE',
+                  'NETMIRROR STREAMS',
                   style: GoogleFonts.outfit(
                     color: Colors.white,
                     fontSize: 16,
@@ -1248,28 +1645,284 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
                       final source = sources[index];
-                      final isYoutube = _isYoutubeUrl(source.url);
-                      final isTorrentPlaceholder = source.url == 'torrent_placeholder';
-                      final isStravoPlaceholder = source.url == 'stravo_placeholder';
-                      
-                      final icon = isTorrentPlaceholder 
-                          ? Icons.cloud_download_rounded 
-                          : (isStravoPlaceholder ? Icons.cloud_queue_rounded : (isYoutube ? Icons.video_library_rounded : Icons.dns_rounded));
-                      final subtitleText = isTorrentPlaceholder 
-                          ? 'Extract movie torrent files and stream' 
-                          : (isStravoPlaceholder ? 'Stream high speed sources via Stravo' : source.url);
+                      return ListTile(
+                        leading: Icon(Icons.play_circle_outline_rounded, color: AppColors.accentBright),
+                        title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        tileColor: Colors.white.withValues(alpha: 0.03),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          _playNetmirrorStream(source, resumeDirectly: resumeDirectly);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
+  /// Plays a NetMirror stream with full HLS pre-flight: audio language + quality selection + headers
+  Future<void> _playNetmirrorStream(StreamSource source, {bool resumeDirectly = false}) async {
+    // Show loading
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Colors.tealAccent),
+      ),
+    );
+
+    try {
+      final uri = Uri.parse(source.url);
+
+      // Extract headers from URL query params
+      final Map<String, String> headers = {};
+      if (uri.queryParameters.containsKey('headers')) {
+        final jsonHeaders = json.decode(uri.queryParameters['headers']!);
+        if (jsonHeaders is Map) {
+          jsonHeaders.forEach((k, v) {
+            headers[k.toString()] = v.toString();
+          });
+        }
+      }
+
+      // Fetch master playlist
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 8);
+      final req = await client.getUrl(uri);
+      headers.forEach((k, v) {
+        req.headers.set(k, v);
+      });
+      final res = await req.close();
+
+      if (res.statusCode == 200) {
+        final body = await res.transform(utf8.decoder).join();
+        client.close();
+
+        // Parse audio tracks
+        final audioLines = body.split('\n').where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')).toList();
+        final List<String> audioLanguages = [];
+        for (final line in audioLines) {
+          final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
+          if (nameMatch != null) {
+            final langName = nameMatch.group(1)!;
+            if (!audioLanguages.contains(langName)) {
+              audioLanguages.add(langName);
+            }
+          }
+        }
+
+        if (mounted) Navigator.of(context).pop(); // Dismiss loader
+
+        String? selectedLanguage;
+        if (audioLanguages.length > 1 && mounted) {
+          selectedLanguage = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) {
+              return AlertDialog(
+                backgroundColor: AppColors.surface,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: Text('Select Audio Language', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: audioLanguages.length,
+                    itemBuilder: (context, index) {
+                      final lang = audioLanguages[index];
+                      return ListTile(
+                        title: Text(lang, style: const TextStyle(color: Colors.white)),
+                        leading: const Icon(Icons.audiotrack_rounded, color: Colors.tealAccent),
+                        onTap: () => Navigator.of(context).pop(lang),
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          );
+        }
+
+        // Parse video qualities
+        final List<String> videoQualities = [];
+        final lines = body.split('\n');
+        for (final line in lines) {
+          if (line.startsWith('#EXT-X-STREAM-INF')) {
+            final resolutionMatch = RegExp(r'RESOLUTION=(\d+x\d+)').firstMatch(line);
+            if (resolutionMatch != null) {
+              final height = resolutionMatch.group(1)!.split('x')[1];
+              final q = '${height}p';
+              if (!videoQualities.contains(q)) videoQualities.add(q);
+            } else {
+              final bandwidthMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(line);
+              if (bandwidthMatch != null) {
+                final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
+                String q = '360p';
+                if (bw > 3000000) q = '1080p';
+                else if (bw > 1500000) q = '720p';
+                else if (bw > 800000) q = '480p';
+                if (!videoQualities.contains(q)) videoQualities.add(q);
+              }
+            }
+          }
+        }
+
+        String? selectedQuality;
+        if (videoQualities.isNotEmpty && mounted) {
+          videoQualities.sort((a, b) {
+            final valA = int.tryParse(a.replaceAll('p', '')) ?? 0;
+            final valB = int.tryParse(b.replaceAll('p', '')) ?? 0;
+            return valB.compareTo(valA);
+          });
+          selectedQuality = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) {
+              return AlertDialog(
+                backgroundColor: AppColors.surface,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: Text('Select Video Quality', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: videoQualities.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return ListTile(
+                          title: const Text('Auto / Best Quality', style: TextStyle(color: Colors.white)),
+                          leading: const Icon(Icons.settings_backup_restore_rounded, color: Colors.tealAccent),
+                          onTap: () => Navigator.of(context).pop('Auto'),
+                        );
+                      }
+                      final q = videoQualities[index - 1];
+                      return ListTile(
+                        title: Text(q, style: const TextStyle(color: Colors.white)),
+                        leading: const Icon(Icons.video_settings_rounded, color: Colors.tealAccent),
+                        onTap: () => Navigator.of(context).pop(q),
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          );
+        }
+
+        // Build final URL with selected audio and quality
+        if (mounted) {
+          var finalUrl = source.url;
+          final Map<String, String> queryParams = {};
+          if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
+            queryParams['selected_audio'] = selectedLanguage;
+          }
+          if (selectedQuality != null && selectedQuality.isNotEmpty && selectedQuality != 'Auto') {
+            queryParams['selected_quality'] = selectedQuality;
+          }
+          if (queryParams.isNotEmpty) {
+            final sourceUri = Uri.parse(source.url);
+            finalUrl = sourceUri.replace(queryParameters: {
+              ...sourceUri.queryParameters,
+              ...queryParams,
+            }).toString();
+          }
+
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => VideoPlayerScreen(
+                videoSource: finalUrl,
+                title: movie.title,
+                subtitle: 'NetMirror Server',
+                movieId: movie.id,
+                resumeDirectly: resumeDirectly,
+                headers: headers,
+              ),
+            ),
+          );
+        }
+      } else {
+        client.close();
+        throw Exception('HLS Master playlist returned status ${res.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('NetMirror pre-flight failed: $e. Launching directly.');
+      if (mounted) {
+        Navigator.of(context).pop(); // Dismiss loader
+        final uri = Uri.parse(source.url);
+        final Map<String, String> headers = {};
+        if (uri.queryParameters.containsKey('headers')) {
+          final jsonHeaders = json.decode(uri.queryParameters['headers']!);
+          if (jsonHeaders is Map) {
+            jsonHeaders.forEach((k, v) {
+              headers[k.toString()] = v.toString();
+            });
+          }
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => VideoPlayerScreen(
+              videoSource: source.url,
+              title: movie.title,
+              subtitle: 'NetMirror Server',
+              movieId: movie.id,
+              resumeDirectly: resumeDirectly,
+              headers: headers,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showSubSourceSelector(BuildContext context, String title, List<StreamSource> sources, {bool resumeDirectly = false}) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: sources.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final source = sources[index];
                       return ListTile(
                         leading: Icon(
-                          icon,
-                          color: isYoutube ? Colors.redAccent : AppColors.accentBright,
+                          Icons.play_circle_outline_rounded,
+                          color: AppColors.accentBright,
                         ),
                         title: Text(
                           source.name,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         subtitle: Text(
-                          subtitleText,
+                          source.url,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: Colors.white30, fontSize: 11),
@@ -1278,15 +1931,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         onTap: () {
                           Navigator.of(context).pop();
-                          if (isTorrentPlaceholder) {
-                            final customMagnets = movie.streamSources.where(_isMagnetSource).toList();
-                            final allTorrents = [...customMagnets, ..._torrentioSources];
-                            _showTorrentSourceSelector(allTorrents, resumeDirectly: resumeDirectly);
-                          } else if (isStravoPlaceholder) {
-                            _showStravoSourceSelector(context, resumeDirectly: resumeDirectly);
-                          } else {
-                            _playWithResolution(source.url, resumeDirectly: resumeDirectly, sourceName: source.name);
-                          }
+                          _playWithResolution(source.url, resumeDirectly: resumeDirectly, sourceName: source.name);
                         },
                       );
                     },
@@ -1439,25 +2084,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return;
     }
     
-    final sources = _getEffectiveSources();
-    if (sources.length > 1) {
-      _showSourceSelector(sources, resumeDirectly: resumeDirectly);
-    } else if (sources.isNotEmpty) {
-      if (sources.first.url == 'torrent_placeholder') {
-        final customMagnets = movie.streamSources.where(_isMagnetSource).toList();
-        final allTorrents = [...customMagnets, ..._torrentioSources];
-        _showTorrentSourceSelector(allTorrents, resumeDirectly: resumeDirectly);
-      } else {
-        _playWithResolution(sources.first.url, resumeDirectly: resumeDirectly, sourceName: sources.first.name);
-      }
-    } else if (movie.videoSource != null && movie.videoSource!.isNotEmpty) {
-      _playWithResolution(movie.videoSource!, resumeDirectly: resumeDirectly);
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No stream sources available for this movie.')),
-      );
-    }
+    _showSourceSelector(resumeDirectly: resumeDirectly);
   }
 
   void _handleResumePressed() {

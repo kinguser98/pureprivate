@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dns_proxy.dart';
 import '../widgets/special_search_dialog.dart';
+import 'crypto_js_source.dart';
 
 class WebViewScraperExecutor {
   static HeadlessInAppWebView? _headlessWebView;
@@ -175,28 +176,9 @@ class WebViewScraperExecutor {
     }
   }
 
-  /// Gets crypto-js library (caches locally in SharedPreferences)
+  /// Gets crypto-js library (fully bundled offline asset)
   static Future<String> _getCryptoJs() async {
-    final prefs = await SharedPreferences.getInstance();
-    const cacheKey = 'crypto_js_lib';
-    final cached = prefs.getString(cacheKey);
-    if (cached != null && cached.isNotEmpty) {
-      return cached;
-    }
-
-    try {
-      const url = 'https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js';
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
-      if (res.statusCode == 200) {
-        final script = res.body;
-        await prefs.setString(cacheKey, script);
-        return script;
-      }
-    } catch (e) {
-      debugPrint('WebViewScraperExecutor: Failed to download crypto-js: $e');
-    }
-
-    return ''; 
+    return CryptoJSAsset.source;
   }
 
   /// Fetches the latest JS provider script from yoruix repo (caches locally in SharedPreferences)

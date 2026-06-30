@@ -390,6 +390,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         await nativePlayer.setProperty('video-sync', 'audio');
         await nativePlayer.setProperty('autosync', '10');
         await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
+        
+        // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
+        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
       }
 
       var resolvedSource = widget.videoSource;
@@ -401,8 +404,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final host = uri.host;
           final lowerHost = host.toLowerCase();
           
-          // Force proxy if URL has custom headers, if playHeaders is not empty, or if host is in blocklist
-          bool shouldProxy = uri.queryParameters.containsKey('headers') || playHeaders.isNotEmpty;
+          // Force proxy if host is in blocklist OR if there are HLS quality/audio selectors to filter in the proxy
+          bool shouldProxy = uri.queryParameters.containsKey('selected_audio') || uri.queryParameters.containsKey('selected_quality');
           if (!shouldProxy) {
             for (final pattern in MyHttpOverrides.blocklist) {
               if (lowerHost.contains(pattern)) {

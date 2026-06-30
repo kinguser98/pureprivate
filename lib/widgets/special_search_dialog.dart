@@ -177,12 +177,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // 5. Resolve NetMirror API Scraper (requires movie title)
     tasks.add(_resolveNetmirror(title));
 
-    // 6. Resolve Extra JS Scrapers (dvdplay, mallumv, vidnest, hdhub4u, castle)
-    if (tmdbId.isNotEmpty) {
-      tasks.add(_resolveExtraScraper('dvdplay', tmdbId));
-      tasks.add(_resolveExtraScraper('mallumv', tmdbId));
-      tasks.add(_resolveExtraScraper('vidnest', tmdbId));
-      tasks.add(_resolveExtraScraper('hdhub4u', tmdbId));
+    // 6. Resolve Castle Scraper (requires TMDB ID)
+    if (tmdbId != null && tmdbId.isNotEmpty) {
       tasks.add(_resolveExtraScraper('castle', tmdbId));
     }
 
@@ -656,12 +652,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 
   void _playStream(StreamSourceInfo source, String movieTitle, String? posterPath) async {
-    final isScraperSource = source.type == StreamSourceType.netmirror ||
-                            source.type == StreamSourceType.dvdplay ||
-                            source.type == StreamSourceType.mallumv ||
-                            source.type == StreamSourceType.vidnest ||
-                            source.type == StreamSourceType.hdhub4u ||
-                            source.type == StreamSourceType.castle;
+    final isScraperSource = source.type == StreamSourceType.netmirror || source.type == StreamSourceType.castle;
 
     if (isScraperSource) {
       final serverSubtitle = '${source.name.split(':')[0]} Server';
@@ -754,15 +745,98 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             );
           }
 
-          // Open player with selected language
+          // Parse video qualities: #EXT-X-STREAM-INF...
+          final List<String> videoQualities = [];
+          final lines = body.split('\n');
+          for (final line in lines) {
+            if (line.startsWith('#EXT-X-STREAM-INF')) {
+              final resolutionMatch = RegExp(r'RESOLUTION=(\d+x\d+)').firstMatch(line);
+              if (resolutionMatch != null) {
+                final height = resolutionMatch.group(1)!.split('x')[1];
+                final q = '${height}p';
+                if (!videoQualities.contains(q)) {
+                  videoQualities.add(q);
+                }
+              } else {
+                final bandwidthMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(line);
+                if (bandwidthMatch != null) {
+                  final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
+                  String q = '360p';
+                  if (bw > 3000000) q = '1080p';
+                  else if (bw > 1500000) q = '720p';
+                  else if (bw > 800000) q = '480p';
+                  if (!videoQualities.contains(q)) {
+                    videoQualities.add(q);
+                  }
+                }
+              }
+            }
+          }
+
+          String? selectedQuality;
+          if (videoQualities.isNotEmpty) {
+            videoQualities.sort((a, b) {
+              final valA = int.tryParse(a.replaceAll('p', '')) ?? 0;
+              final valB = int.tryParse(b.replaceAll('p', '')) ?? 0;
+              return valB.compareTo(valA);
+            });
+
+            if (mounted) {
+              selectedQuality = await showDialog<String>(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) {
+                  return AlertDialog(
+                    backgroundColor: AppColors.surface,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    title: Text(
+                      'Select Video Quality',
+                      style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    content: Container(
+                      width: double.maxFinite,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: videoQualities.length + 1,
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            return ListTile(
+                              title: const Text('Auto / Best Quality', style: TextStyle(color: Colors.white)),
+                              leading: const Icon(Icons.settings_backup_restore_rounded, color: Colors.tealAccent),
+                              onTap: () => Navigator.of(context).pop('Auto'),
+                            );
+                          }
+                          final q = videoQualities[index - 1];
+                          return ListTile(
+                            title: Text(q, style: const TextStyle(color: Colors.white)),
+                            leading: const Icon(Icons.video_settings_rounded, color: Colors.tealAccent),
+                            onTap: () => Navigator.of(context).pop(q),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                },
+              );
+            }
+          }
+
+          // Open player with selected language and quality
           if (mounted) {
             var finalUrl = source.url;
+            final Map<String, String> queryParams = {};
             if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
-              // Encode selected_audio into query parameters so proxy can rewrite HLS playlist
+              queryParams['selected_audio'] = selectedLanguage;
+            }
+            if (selectedQuality != null && selectedQuality.isNotEmpty && selectedQuality != 'Auto') {
+              queryParams['selected_quality'] = selectedQuality;
+            }
+
+            if (queryParams.isNotEmpty) {
               final sourceUri = Uri.parse(source.url);
               finalUrl = sourceUri.replace(queryParameters: {
                 ...sourceUri.queryParameters,
-                'selected_audio': selectedLanguage
+                ...queryParams,
               }).toString();
             }
 
@@ -1345,22 +1419,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       // 1. Server groups main list
       return ListView(
         children: [
-          // Stravo Server Group
-          _buildServerGroupCard(
-            title: '1. Stravo Server',
-            subtitle: _resolvingStreams && stravoStreams.isEmpty 
-                ? 'Searching streams...' 
-                : '${stravoStreams.length} links available',
-            icon: Icons.rocket_launch_rounded,
-            accentColor: Colors.cyan,
-            onTap: stravoStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.stravo),
-          ),
-          
           // VidLink Server Group
           _buildServerGroupCard(
-            title: '2. Vidlink Server',
+            title: '1. Vidlink Server',
             subtitle: _resolvingStreams && vidlinkStreams.isEmpty 
                 ? 'Resolving stream...' 
                 : (vidlinkStreams.isNotEmpty ? '1 native link available' : 'Not available for this title'),
@@ -1371,17 +1432,30 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => _playStream(vidlinkStreams.first, movieTitle, posterPath),
           ),
 
-          // Torrent Server Group
+          // NetMirror Server Group
           _buildServerGroupCard(
-            title: '3. Torrent Server',
-            subtitle: _resolvingStreams && torrentStreams.isEmpty 
-                ? 'Scraping torrents...' 
-                : '${torrentStreams.length} links available',
-            icon: Icons.cloud_circle_rounded,
-            accentColor: Colors.amber,
-            onTap: torrentStreams.isEmpty 
+            title: '2. NetMirror Server (NF/PV/HS)',
+            subtitle: _resolvingStreams && netmirrorStreams.isEmpty 
+                ? 'Searching NetMirror...' 
+                : (netmirrorStreams.isNotEmpty ? '${netmirrorStreams.length} links available' : 'Not available'),
+            icon: Icons.language_rounded,
+            accentColor: Colors.tealAccent,
+            onTap: netmirrorStreams.isEmpty 
                 ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.torrent),
+                : () => setState(() => _activeGroupType = StreamSourceType.netmirror),
+          ),
+
+          // Stravo Server Group
+          _buildServerGroupCard(
+            title: '3. Stravo Server',
+            subtitle: _resolvingStreams && stravoStreams.isEmpty 
+                ? 'Searching streams...' 
+                : '${stravoStreams.length} links available',
+            icon: Icons.rocket_launch_rounded,
+            accentColor: Colors.cyan,
+            onTap: stravoStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.stravo),
           ),
 
           // Stalker Server Group (Portal 2 VODs)
@@ -1397,74 +1471,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.stalker),
           ),
 
-          // NetMirror Server Group
-          _buildServerGroupCard(
-            title: '5. NetMirror Server (NF/PV/HS)',
-            subtitle: _resolvingStreams && netmirrorStreams.isEmpty 
-                ? 'Searching NetMirror...' 
-                : (netmirrorStreams.isNotEmpty ? '${netmirrorStreams.length} links available' : 'Not available'),
-            icon: Icons.language_rounded,
-            accentColor: Colors.tealAccent,
-            onTap: netmirrorStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.netmirror),
-          ),
-
-          // DVDPlay Server Group
-          _buildServerGroupCard(
-            title: '6. DVDPlay Server',
-            subtitle: _resolvingStreams && dvdplayStreams.isEmpty 
-                ? 'Searching DVDPlay...' 
-                : (dvdplayStreams.isNotEmpty ? '${dvdplayStreams.length} links available' : 'Not available'),
-            icon: Icons.disc_full_rounded,
-            accentColor: Colors.deepOrangeAccent,
-            onTap: dvdplayStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.dvdplay),
-          ),
-
-          // MalluMV Server Group
-          _buildServerGroupCard(
-            title: '7. MalluMV Server',
-            subtitle: _resolvingStreams && mallumvStreams.isEmpty 
-                ? 'Searching MalluMV...' 
-                : (mallumvStreams.isNotEmpty ? '${mallumvStreams.length} links available' : 'Not available'),
-            icon: Icons.music_video_rounded,
-            accentColor: Colors.pinkAccent,
-            onTap: mallumvStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.mallumv),
-          ),
-
-          // Vidnest Server Group
-          _buildServerGroupCard(
-            title: '8. Vidnest Server',
-            subtitle: _resolvingStreams && vidnestStreams.isEmpty 
-                ? 'Searching Vidnest...' 
-                : (vidnestStreams.isNotEmpty ? '${vidnestStreams.length} links available' : 'Not available'),
-            icon: Icons.video_library_rounded,
-            accentColor: Colors.indigoAccent,
-            onTap: vidnestStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.vidnest),
-          ),
-
-          // HDHub4u Server Group
-          _buildServerGroupCard(
-            title: '9. HDHub4u Server',
-            subtitle: _resolvingStreams && hdhub4uStreams.isEmpty 
-                ? 'Searching HDHub4u...' 
-                : (hdhub4uStreams.isNotEmpty ? '${hdhub4uStreams.length} links available' : 'Not available'),
-            icon: Icons.hd_rounded,
-            accentColor: Colors.lightGreenAccent,
-            onTap: hdhub4uStreams.isEmpty 
-                ? null 
-                : () => setState(() => _activeGroupType = StreamSourceType.hdhub4u),
-          ),
-
           // Castle Server Group
           _buildServerGroupCard(
-            title: '10. Castle TV Server',
+            title: '5. Castle TV Server',
             subtitle: _resolvingStreams && castleStreams.isEmpty 
                 ? 'Searching Castle...' 
                 : (castleStreams.isNotEmpty ? '${castleStreams.length} links available' : 'Not available'),
@@ -1475,6 +1484,18 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 : () => setState(() => _activeGroupType = StreamSourceType.castle),
           ),
 
+          // Torrent Server Group
+          _buildServerGroupCard(
+            title: '6. Torrent Server',
+            subtitle: _resolvingStreams && torrentStreams.isEmpty 
+                ? 'Scraping torrents...' 
+                : '${torrentStreams.length} links available',
+            icon: Icons.cloud_circle_rounded,
+            accentColor: Colors.amber,
+            onTap: torrentStreams.isEmpty 
+                ? null 
+                : () => setState(() => _activeGroupType = StreamSourceType.torrent),
+          ),
         ],
       );
     } else {
