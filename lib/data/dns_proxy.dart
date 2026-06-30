@@ -106,33 +106,46 @@ class CustomDnsProxy {
     }
     
     final List<String> ips = [];
-
-    // 1. Try Cloudflare DNS over HTTPS (DoH) JSON API first
+    
+    // 1. Try standard system DNS resolution first to ensure CDN edge geo-routing speed
     try {
-      final uri = Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
-      final resBody = await _getWithCleanClient(uri, {
-        'Accept': 'application/dns-json',
-      });
-      
-      if (resBody != null) {
-        final data = jsonDecode(resBody);
-        final answers = data['Answer'] as List?;
-        if (answers != null && answers.isNotEmpty) {
-          for (final ans in answers) {
-            if (ans['type'] == 1) { // Type 1 is A record
-              final ip = ans['data'] as String;
-              if (ip.isNotEmpty && ip != '0.0.0.0') {
-                ips.add(ip);
+      final list = await InternetAddress.lookup(host).timeout(const Duration(seconds: 2));
+      for (final addr in list) {
+        final ip = addr.address;
+        if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
+          ips.add(ip);
+        }
+      }
+    } catch (_) {}
+
+    // 2. Fallback to Cloudflare DNS over HTTPS (DoH) JSON API if blocked/failed
+    if (ips.isEmpty) {
+      try {
+        final uri = Uri.parse('https://cloudflare-dns.com/dns-query?name=$host&type=A');
+        final resBody = await _getWithCleanClient(uri, {
+          'Accept': 'application/dns-json',
+        });
+        
+        if (resBody != null) {
+          final data = jsonDecode(resBody);
+          final answers = data['Answer'] as List?;
+          if (answers != null && answers.isNotEmpty) {
+            for (final ans in answers) {
+              if (ans['type'] == 1) { // Type 1 is A record
+                final ip = ans['data'] as String;
+                if (ip.isNotEmpty && ip != '0.0.0.0') {
+                  ips.add(ip);
+                }
               }
             }
           }
         }
+      } catch (e) {
+        debugPrint('CustomDnsProxy: Cloudflare DoH list error for $host: $e');
       }
-    } catch (e) {
-      debugPrint('CustomDnsProxy: Cloudflare DoH list error for $host: $e');
     }
 
-    // 2. Try Google DNS over HTTPS (DoH) JSON API
+    // 3. Fallback to Google DNS over HTTPS (DoH) JSON API
     if (ips.isEmpty) {
       try {
         final uri = Uri.parse('https://dns.google/resolve?name=$host&type=A');
@@ -155,19 +168,6 @@ class CustomDnsProxy {
       } catch (e) {
         debugPrint('CustomDnsProxy: Google DoH list error for $host: $e');
       }
-    }
-
-    // 3. Fallback to standard system DNS resolution
-    if (ips.isEmpty) {
-      try {
-        final list = await InternetAddress.lookup(host);
-        for (final addr in list) {
-          final ip = addr.address;
-          if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
-            ips.add(ip);
-          }
-        }
-      } catch (_) {}
     }
 
     if (ips.isNotEmpty) {

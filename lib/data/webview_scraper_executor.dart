@@ -75,6 +75,9 @@ class WebViewScraperExecutor {
           completer.complete();
         }
       },
+      onConsoleMessage: (controller, consoleMessage) {
+        debugPrint('WebViewScraperExecutor JS Console: [${consoleMessage.messageLevel}] ${consoleMessage.message}');
+      },
     );
 
     await _headlessWebView!.run();
@@ -92,6 +95,7 @@ class WebViewScraperExecutor {
   ) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 15);
+    client.badCertificateCallback = (cert, host, port) => true;
 
     try {
       final method = options?['method']?.toString() ?? 'GET';
@@ -102,10 +106,19 @@ class WebViewScraperExecutor {
       req.followRedirects = options?['followRedirects'] != false;
 
       // Copy headers
+      bool hasUserAgent = false;
       if (options?['headers'] is Map) {
         (options!['headers'] as Map).forEach((k, v) {
-          req.headers.set(k.toString(), v.toString());
+          final keyStr = k.toString();
+          if (keyStr.toLowerCase() == 'user-agent') {
+            hasUserAgent = true;
+          }
+          req.headers.set(keyStr, v.toString());
         });
+      }
+
+      if (!hasUserAgent) {
+        req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
       }
 
       // Copy body
