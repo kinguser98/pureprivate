@@ -476,7 +476,6 @@ class CustomDnsProxy {
                   line += ',DEFAULT=NO,AUTOSELECT=NO';
                 }
               }
-            }
               
               // Parse URI attribute if present (e.g. URI="...")
               if (line.contains('URI="')) {
