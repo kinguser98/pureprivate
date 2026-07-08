@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'dns_proxy.dart';
 import '../widgets/special_search_dialog.dart';
 import 'crypto_js_source.dart';
+import 'stremio_addon_resolver.dart';
 
 class WebViewScraperExecutor {
   static HeadlessInAppWebView? _headlessWebView;
@@ -181,6 +182,16 @@ class WebViewScraperExecutor {
     return CryptoJSAsset.source;
   }
 
+  /// Clears all cached scraper scripts forcing re-download on next use
+  static Future<void> clearScriptCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys().where((k) => k.startsWith('scraper_js_'));
+    for (final key in keys) {
+      await prefs.remove(key);
+    }
+    debugPrint('WebViewScraperExecutor: Cleared all scraper script caches');
+  }
+
   /// Fetches the latest JS provider script from yoruix repo (caches locally in SharedPreferences)
   static Future<String> _getProviderScript(String providerName) async {
     final prefs = await SharedPreferences.getInstance();
@@ -229,18 +240,14 @@ class WebViewScraperExecutor {
       final executionJs = """
         (async function() {
           try {
-            // Setup global module/exports compatibility mock for CommonJS
+            // Setup local module/exports compatibility mock for CommonJS to prevent concurrency override
             window.global = window;
-            if (typeof module === 'undefined') {
-              window.module = { exports: {} };
-            }
-            if (typeof exports === 'undefined') {
-              window.exports = window.module.exports;
-            }
+            const module = { exports: {} };
+            const exports = module.exports;
             
-            // Native fetch proxy setup
-            window._fetchCompleters = {};
-            window.fetch = function(url, options) {
+            // Native fetch proxy setup (preserve existing completers across concurrent scrapers)
+            window._fetchCompleters = window._fetchCompleters || {};
+            window.fetch = window.fetch || function(url, options) {
               return new Promise((resolve, reject) => {
                 const reqId = 'fetch_' + Math.random() + '_' + Date.now();
                 window._fetchCompleters[reqId] = { resolve, reject };
@@ -265,7 +272,7 @@ class WebViewScraperExecutor {
               });
             };
 
-            window.onFetchResponse = function(reqId, status, body, headers, error) {
+            window.onFetchResponse = window.onFetchResponse || function(reqId, status, body, headers, error) {
               const completer = window._fetchCompleters[reqId];
               if (completer) {
                 delete window._fetchCompleters[reqId];
@@ -359,7 +366,7 @@ class WebViewScraperExecutor {
             }
 
             // CommonJS Require Mock
-            window.require = function(pkg) {
+            window.require = window.require || function(pkg) {
               if (pkg.includes('cheerio')) return window.cheerio;
               if (pkg.includes('crypto-js')) return window.CryptoJS;
               return {};
@@ -368,8 +375,8 @@ class WebViewScraperExecutor {
             // Evaluate the provider JS code
             ${script}
 
-            // Resolve getStreams
-            const getStreamsFn = window.getStreams || (window.module && window.module.exports && window.module.exports.getStreams);
+            // Resolve getStreams (prioritize local module exports to avoid concurrent cross-provider overwrites)
+            const getStreamsFn = module.exports.getStreams || window.getStreams || (window.module && window.module.exports && window.module.exports.getStreams);
             if (!getStreamsFn) {
               throw new Error("getStreams function not found in script");
             }
@@ -446,4 +453,259 @@ class WebViewScraperExecutor {
         return StreamSourceType.netmirror;
     }
   }
+
+  /// Runs getStreams for a dynamic scraper by URL
+  static Future<List<StreamSourceInfo>> runDynamicScraper({
+    required String scraperId,
+    required String scraperName,
+    required String scriptUrl,
+    required String tmdbId,
+    required String mediaType,
+    int? season,
+    int? episode,
+  }) async {
+    try {
+      await ensureInitialized();
+
+      final script = await _getDynamicProviderScript(scriptUrl);
+      final cryptoJs = await _getCryptoJs();
+      final reqId = 'req_${_requestId++}';
+      final completer = Completer<List<dynamic>>();
+      _pendingRequests[reqId] = completer;
+
+      // We inject the DOMParser-based Cheerio mock and native fetch overrides
+      final executionJs = """
+        (async function() {
+          try {
+            // Setup local module/exports compatibility mock for CommonJS to prevent concurrency override
+            window.global = window;
+            const module = { exports: {} };
+            const exports = module.exports;
+            
+            // Native fetch proxy setup (preserve existing completers across concurrent scrapers)
+            window._fetchCompleters = window._fetchCompleters || {};
+            window.fetch = window.fetch || function(url, options) {
+              return new Promise((resolve, reject) => {
+                const reqId = 'fetch_' + Math.random() + '_' + Date.now();
+                window._fetchCompleters[reqId] = { resolve, reject };
+
+                let headers = {};
+                if (options && options.headers) {
+                  if (options.headers.forEach) {
+                    options.headers.forEach((v, k) => { headers[k] = v; });
+                  } else {
+                    headers = options.headers;
+                  }
+                }
+
+                const cleanOptions = {
+                  method: (options && options.method) || 'GET',
+                  headers: headers,
+                  body: (options && options.body) || null,
+                  followRedirects: (options && options.redirect !== 'manual')
+                };
+
+                window.flutter_inappwebview.callHandler('onFetchRequest', reqId, url.toString(), cleanOptions);
+              });
+            };
+
+            window.onFetchResponse = window.onFetchResponse || function(reqId, status, body, headers, error) {
+              const completer = window._fetchCompleters[reqId];
+              if (completer) {
+                delete window._fetchCompleters[reqId];
+                if (error) {
+                  completer.reject(new Error(error));
+                  return;
+                }
+
+                completer.resolve({
+                  status: status,
+                  ok: status >= 200 && status < 300,
+                  headers: {
+                    get: function(name) { return headers[name.toLowerCase()] || null; }
+                  },
+                  text: function() { return Promise.resolve(body); },
+                  json: function() { return Promise.resolve(JSON.parse(body)); }
+                });
+              }
+            };
+            
+            // Cheerio mock using native browser DOMParser
+            window.cheerio = {
+              load: function(htmlText) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
+                
+                const selectorFn = function(selector) {
+                  if (selector === 'html') {
+                    return {
+                      html: function() { return htmlText; }
+                    };
+                  }
+                  
+                  let elements = [];
+                  if (typeof selector === 'string') {
+                    elements = Array.from(doc.querySelectorAll(selector));
+                  } else if (selector && selector.tagName) {
+                    elements = [selector];
+                  } else if (Array.isArray(selector)) {
+                    elements = selector;
+                  }
+                  
+                  elements.attr = function(name) {
+                    if (elements.length > 0) {
+                      if (name === 'href') {
+                        const hrefVal = elements[0].getAttribute('href') || elements[0].href;
+                        return hrefVal;
+                      }
+                      return elements[0].getAttribute(name);
+                    }
+                    return null;
+                  };
+                  
+                  elements.each = function(callback) {
+                    elements.forEach((el, index) => {
+                      callback.call(el, index, el);
+                    });
+                    return elements;
+                  };
+                  
+                  elements.text = function() {
+                    return elements.map(el => el.textContent).join(' ');
+                  };
+                  
+                  elements.find = function(subSelector) {
+                    const found = [];
+                    elements.forEach(el => {
+                      found.push(...Array.from(el.querySelectorAll(subSelector)));
+                    });
+                    return selectorFn(found);
+                  };
+                  
+                  elements.toArray = function() {
+                    return elements;
+                  };
+                  
+                  return elements;
+                };
+                
+                selectorFn.html = function() { return htmlText; };
+                return selectorFn;
+              }
+            };
+
+            // Inject crypto-js library
+            if (typeof CryptoJS === 'undefined' && `${cryptoJs}`.length > 0) {
+              const cryptoScript = document.createElement('script');
+              cryptoScript.textContent = `${cryptoJs}`;
+              document.head.appendChild(cryptoScript);
+            }
+
+            // CommonJS Require Mock
+            window.require = window.require || function(pkg) {
+              if (pkg.includes('cheerio')) return window.cheerio;
+              if (pkg.includes('crypto-js')) return window.CryptoJS;
+              return {};
+            };
+
+            // Evaluate the provider JS code
+            ${script}
+
+            // Resolve getStreams (prioritize local module exports to avoid concurrent cross-provider overwrites)
+            const getStreamsFn = module.exports.getStreams || window.getStreams || (window.module && window.module.exports && window.module.exports.getStreams);
+            if (!getStreamsFn) {
+              throw new Error("getStreams function not found in script");
+            }
+
+            const result = await getStreamsFn(
+              "$tmdbId", 
+              "$mediaType", 
+              ${season != null ? season : 'null'}, 
+              ${episode != null ? episode : 'null'}
+            );
+            
+            window.flutter_inappwebview.callHandler('onScraperResult', "$reqId", result);
+          } catch (e) {
+            window.flutter_inappwebview.callHandler('onScraperResult', "$reqId", null, e.toString());
+          }
+        })();
+      """;
+
+      await _webViewController!.evaluateJavascript(source: executionJs);
+      final List<dynamic> rawList = await completer.future.timeout(const Duration(seconds: 25));
+      final List<StreamSourceInfo> sources = [];
+
+      for (final rawItem in rawList) {
+        if (rawItem is Map) {
+          final name = rawItem['name']?.toString() ?? 'Server Link';
+          final url = rawItem['url']?.toString() ?? '';
+          
+          if (url.isNotEmpty) {
+            final Map<String, String> headers = {};
+            if (rawItem['headers'] is Map) {
+              (rawItem['headers'] as Map).forEach((k, v) {
+                headers[k.toString()] = v.toString();
+              });
+            }
+
+            var finalUrl = url;
+            if (headers.isNotEmpty) {
+              finalUrl = Uri.parse(url).replace(queryParameters: {
+                ...Uri.parse(url).queryParameters,
+                'headers': jsonEncode(headers)
+              }).toString();
+            }
+
+            // Parse metadata
+            final parsedQuality = StremioParser.parseQuality(name, name);
+            final parsedLangs = StremioParser.parseLanguages(name, name);
+            final parsedSize = StremioParser.parseSize(name);
+
+            sources.add(StreamSourceInfo(
+              name: name,
+              url: finalUrl,
+              type: StreamSourceType.nuveoAddon,
+              headers: headers,
+              addonName: scraperName,
+              originalTitle: name,
+              quality: parsedQuality,
+              languages: parsedLangs,
+              size: parsedSize,
+            ));
+          }
+        }
+      }
+
+      return sources;
+    } catch (e) {
+      debugPrint('WebViewScraperExecutor dynamic error for $scraperName: $e');
+      return [];
+    }
+  }
+
+  static Future<String> _getDynamicProviderScript(String scriptUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cleanKey = 'dynamic_scraper_js_${base64Encode(utf8.encode(scriptUrl)).replaceAll('=', '')}';
+    final cachedScript = prefs.getString(cleanKey);
+    
+    try {
+      final res = await http.get(Uri.parse(scriptUrl)).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final script = res.body;
+        if (script.isNotEmpty) {
+          await prefs.setString(cleanKey, script);
+          return script;
+        }
+      }
+    } catch (e) {
+      debugPrint('WebViewScraperExecutor: Failed to fetch fresh script for $scriptUrl: $e');
+    }
+
+    if (cachedScript != null && cachedScript.isNotEmpty) {
+      return cachedScript;
+    }
+    
+    throw Exception('Scraper script $scriptUrl not available');
+  }
 }
+

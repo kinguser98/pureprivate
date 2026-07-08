@@ -13,13 +13,19 @@ import 'package:private_cinema_mobile/data/download_manager.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/youtube_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
+import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
+import 'package:private_cinema_mobile/data/hls_preflight.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -31,6 +37,7 @@ class MovieDetailScreen extends StatefulWidget {
 }
 
 class _MovieDetailScreenState extends State<MovieDetailScreen> {
+  Movie get movie => widget.movie;
   String? _pickedPath;
   bool _isFavorite = false;
   bool _inWatchlist = false;
@@ -51,15 +58,33 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
   List<StreamSource> _liveVidlinkSources = [];
   List<StreamSource> _liveNetmirrorSources = [];
+  List<StreamSource> _liveCinemmSources = [];
   List<StreamSource> _liveStalkerSources = [];
   List<StreamSource> _liveStravoSources = [];
+  List<StreamSource> _liveStremioSources = [];
+  List<StreamSource> _liveNuveoSources = [];
 
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
+  bool _resolvingCinemm = false;
   bool _resolvingStalker = false;
   bool _resolvingStravo = false;
+  bool _resolvingStremio = false;
+  bool _resolvingNuveo = false;
 
   StateSetter? _modalSetState;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFavoriteStatus();
+    _loadWatchlistState();
+    _loadTmdbDetails();
+    _checkDownloadStatus();
+    _loadWatchProgress();
+    _loadTorrentioStreams();
+    _resolveAllLiveSources();
+  }
 
   @override
   void setState(VoidCallback fn) {
@@ -73,20 +98,34 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   void _resolveAllLiveSources() {
-    final activeId = (movie.imdbId != null && movie.imdbId!.isNotEmpty && movie.imdbId != 'null')
+    final activeId =
+        (movie.imdbId != null &&
+            movie.imdbId!.isNotEmpty &&
+            movie.imdbId != 'null')
         ? movie.imdbId
-        : ((movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') ? movie.tmdbId : null);
+        : ((movie.tmdbId != null &&
+                  movie.tmdbId!.isNotEmpty &&
+                  movie.tmdbId != '0' &&
+                  movie.tmdbId != 'null')
+              ? movie.tmdbId
+              : null);
 
     if (activeId != null) {
       _resolveLiveVidlink(activeId);
     }
-    
+
     _resolveLiveNetmirror(movie.title);
+    _resolveLiveCinemm(movie.title);
     _resolveLiveStalker(movie.title);
 
     final imdbId = movie.imdbId;
     if (imdbId != null && imdbId.isNotEmpty && imdbId != 'null') {
       _resolveLiveStravo(imdbId);
+      _resolveLiveStremioAddons(imdbId);
+    }
+
+    if (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') {
+      _resolveLiveNuveoAddons(movie.tmdbId!);
     }
   }
 
@@ -94,7 +133,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (mounted) setState(() => _resolvingVidlink = true);
     try {
       final url = 'https://movie-scraper-beige.vercel.app/api?id=$activeId';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final rawUrl = data['url'] as String?;
@@ -102,10 +143,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           if (mounted) {
             setState(() {
               _liveVidlinkSources = [
-                StreamSource(
-                  name: 'VidLink (Native Proxy)',
-                  url: rawUrl,
-                )
+                StreamSource(name: 'VidLink (Native Proxy)', url: rawUrl),
               ];
             });
           }
@@ -139,28 +177,60 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _resolveLiveCinemm(String title) async {
+    if (mounted) setState(() => _resolvingCinemm = true);
+    try {
+      debugPrint('CineMM: Resolving streams for $title...');
+      final streams = await CinemmResolver.resolveStreams(
+        title: title,
+        year: movie.year?.toString(),
+      );
+      final resolved = streams
+          .map((s) => StreamSource(name: s.name, url: s.url, headers: s.headers))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _liveCinemmSources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('CineMM resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingCinemm = false);
+    }
+  }
+
   Future<void> _resolveLiveStalker(String title) async {
     if (mounted) setState(() => _resolvingStalker = true);
     try {
-      final url = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      final url =
+          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(utf8.decode(response.bodyBytes));
         final movies = data['movies'] as List<dynamic>? ?? [];
         final List<StreamSource> sources = [];
-        
+
         for (final item in movies) {
-          final portalId = int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
+          final portalId =
+              int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
           final cmd = item['cmd']?.toString() ?? '';
           final name = item['name']?.toString() ?? 'Stalker VOD';
-          
-          if (cmd.isNotEmpty && portalId == 2) {
-            final isDup = sources.any((s) => s.url == 'stalker://$portalId$cmd');
+          final portalName = item['portal_name']?.toString() ?? 'Portal $portalId';
+
+          if (cmd.isNotEmpty) {
+            final isDup = sources.any(
+              (s) => s.url == 'stalker://$portalId$cmd',
+            );
             if (!isDup) {
-              sources.add(StreamSource(
-                name: 'Stalker: $name',
-                url: 'stalker://$portalId$cmd',
-              ));
+              sources.add(
+                StreamSource(
+                  name: '[$portalName] $name',
+                  url: 'stalker://$portalId$cmd',
+                ),
+              );
             }
           }
         }
@@ -181,13 +251,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (mounted) setState(() => _resolvingStravo = true);
     try {
       final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl = prefs.getString('stravo_addon_url') ?? 'https://stravo-clfk.onrender.com/default';
+      final addonBaseUrl =
+          prefs.getString('stravo_addon_url') ??
+          'https://stravo-clfk.onrender.com/default';
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
       }
       final url = '$baseUrl/stream/movie/$imdbId.json';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Origin': 'https://app.strem.io',
+          'Referer': 'https://app.strem.io/',
+        },
+      ).timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -199,22 +279,31 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           if (urlStr.isNotEmpty) {
             final name = stream['name']?.toString() ?? '';
             final title = stream['title']?.toString() ?? '';
-            final displayTitle = title.isNotEmpty 
+            final displayTitle = title.isNotEmpty
                 ? (name.isNotEmpty ? '$title ($name)' : title)
                 : (name.isNotEmpty ? name : 'Stravo Stream');
-            
+
             final cleanName = displayTitle.replaceAll('\n', ' ').trim();
-            
-            if (cleanName.contains('🖥️') || name.contains('🖥️') || title.contains('🖥️')) {
-              continue; // Skip direct PC streams
+
+            Map<String, String>? headers;
+            if (stream['behaviorHints'] is Map &&
+                stream['behaviorHints']['proxyHeaders'] is Map &&
+                stream['behaviorHints']['proxyHeaders']['request'] is Map) {
+              final reqHeaders = stream['behaviorHints']['proxyHeaders']['request'] as Map;
+              headers = reqHeaders.map((k, v) => MapEntry(k.toString(), v.toString()));
+            }
+            if (headers == null) {
+              headers = {
+                'Referer': 'https://lok-lok.cc/',
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+              };
             }
 
             final isDup = sources.any((s) => s.url == urlStr);
             if (!isDup) {
-              sources.add(StreamSource(
-                name: 'Stravo: $cleanName',
-                url: urlStr,
-              ));
+              sources.add(
+                StreamSource(name: 'Stravo: $cleanName', url: urlStr, headers: headers),
+              );
             }
           }
         }
@@ -231,102 +320,125 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-
-  static const List<String> _scrapeTrackers = [
-    'http://tracker.opentrackr.org:1337/scrape',
-    'https://tracker.nanoha.org:443/scrape',
-    'http://open.acgtracker.com:1096/scrape',
-  ];
-
-  String? _extractInfoHash(String magnetUrl) {
+  Future<void> _resolveLiveStremioAddons(String imdbId) async {
+    if (mounted) setState(() => _resolvingStremio = true);
     try {
-      final uri = Uri.parse(magnetUrl);
-      final xt = uri.queryParameters['xt'];
-      if (xt != null && xt.startsWith('urn:btih:')) {
-        return xt.substring('urn:btih:'.length).toLowerCase();
+      final addonUrls = await SyncService.fetchStremioAddons();
+      if (addonUrls.isEmpty) return;
+
+      final List<Future<List<StremioStream>>> tasks = [];
+      for (final url in addonUrls) {
+        tasks.add(StremioAddonResolver.fetchStreams(
+          manifestUrl: url,
+          type: 'movie',
+          imdbId: imdbId,
+        ));
       }
-    } catch (_) {}
-    final match = RegExp(r'xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-9]{32})', caseSensitive: false).firstMatch(magnetUrl);
-    if (match != null) {
-      return match.group(1)?.toLowerCase();
-    }
-    return null;
-  }
-
-  String _hexToUrlEncoded(String hex) {
-    final cleanHex = hex.trim().toLowerCase();
-    if (cleanHex.length != 40) return '';
-    final buffer = StringBuffer();
-    for (int i = 0; i < cleanHex.length; i += 2) {
-      buffer.write('%${cleanHex.substring(i, i + 2)}');
-    }
-    return buffer.toString();
-  }
-
-  Future<Map<String, int>?> _scrapeTorrentStats(String magnetUrl) async {
-    final infoHash = _extractInfoHash(magnetUrl);
-    if (infoHash == null || infoHash.length != 40) return null;
-    
-    final urlEncodedHash = _hexToUrlEncoded(infoHash);
-    if (urlEncodedHash.isEmpty) return null;
-
-    for (final trackerUrl in _scrapeTrackers) {
-      try {
-        final scrapeUrl = '$trackerUrl?info_hash=$urlEncodedHash';
-        final response = await http.get(Uri.parse(scrapeUrl)).timeout(const Duration(seconds: 4));
-        if (response.statusCode == 200) {
-          final body = latin1.decode(response.bodyBytes);
-          final completeMatch = RegExp(r'completei(\d+)e').firstMatch(body);
-          final incompleteMatch = RegExp(r'incompletei(\d+)e').firstMatch(body);
-          
-          if (completeMatch != null || incompleteMatch != null) {
-            final seeders = completeMatch != null ? int.parse(completeMatch.group(1)!) : 0;
-            final peers = incompleteMatch != null ? int.parse(incompleteMatch.group(1)!) : 0;
-            return {'seeders': seeders, 'peers': peers};
+      final results = await Future.wait(tasks);
+      final List<StreamSource> sources = [];
+      for (final list in results) {
+        for (final item in list) {
+          final isDup = sources.any((s) => s.url == item.url);
+          if (!isDup) {
+            sources.add(StreamSource(
+              name: '${item.addonName} - ${item.quality}',
+              url: item.url,
+              headers: item.headers.isNotEmpty ? item.headers : null,
+            ));
           }
         }
-      } catch (e) {
-        debugPrint('Failed to scrape from $trackerUrl: $e');
       }
+      if (mounted) {
+        setState(() {
+          _liveStremioSources = sources;
+        });
+      }
+    } catch (e) {
+      debugPrint('Stremio addon resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingStremio = false);
     }
+  }
+
+  Future<void> _resolveLiveNuveoAddons(String tmdbId) async {
+    if (mounted) setState(() => _resolvingNuveo = true);
+    try {
+      final addons = await SyncService.fetchNuveoAddons();
+      if (addons.isEmpty) return;
+
+      final List<Future<List<dynamic>>> tasks = [];
+      for (final addon in addons) {
+        final scrapers = addon['scrapers'] as List<dynamic>? ?? [];
+        for (final scraper in scrapers) {
+          final isEnabled = scraper['enabled'] == true;
+          if (!isEnabled) continue;
+          final scraperId = scraper['id']?.toString() ?? '';
+          final scraperName = scraper['name']?.toString() ?? 'Scraper';
+          final filename = scraper['filename']?.toString() ?? '';
+          if (filename.isEmpty) continue;
+          final manifestUrl = addon['url']?.toString() ?? '';
+          if (manifestUrl.isEmpty) continue;
+          String scriptUrl = '';
+          try {
+            scriptUrl = Uri.parse(manifestUrl).resolve(filename).toString();
+          } catch (_) {
+            continue;
+          }
+          tasks.add(WebViewScraperExecutor.runDynamicScraper(
+            scraperId: scraperId,
+            scraperName: scraperName,
+            scriptUrl: scriptUrl,
+            tmdbId: tmdbId,
+            mediaType: 'movie',
+          ));
+        }
+      }
+      final results = await Future.wait(tasks);
+      final List<StreamSource> sources = [];
+      for (final list in results) {
+        for (final item in list) {
+          final isDup = sources.any((s) => s.url == item.url);
+          if (!isDup) {
+            sources.add(StreamSource(
+              name: '${item.addonName ?? item.name}${item.quality != null ? ' - ${item.quality}' : ''}',
+              url: item.url,
+              headers: item.headers,
+            ));
+          }
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _liveNuveoSources = sources;
+        });
+      }
+    } catch (e) {
+      debugPrint('Nuveo addon resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingNuveo = false);
+    }
+  }
+
+  Future<Map<String, int>?> _scrapeTorrentStats(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 5);
+      final req = await client.getUrl(uri);
+      final res = await req.close();
+      if (res.statusCode == 200) {
+        final body = await res.transform(utf8.decoder).join();
+        client.close();
+        final seeders = RegExp(r'seeds?e?r?s?[:\s]+(\d+)', caseSensitive: false).firstMatch(body);
+        final peers = RegExp(r'peers?[:\s]+(\d+)', caseSensitive: false).firstMatch(body);
+        return {
+          'seeders': int.tryParse(seeders?.group(1) ?? '') ?? 0,
+          'peers': int.tryParse(peers?.group(1) ?? '') ?? 0,
+        };
+      }
+      client.close();
+    } catch (_) {}
     return null;
-  }
-
-  Movie get movie => widget.movie;
-
-  bool get _canDownload {
-    if (_pickedPath != null) return false;
-    return _getDownloadableSources().isNotEmpty;
-  }
-
-  List<StreamSource> _getDownloadableSources() {
-    final sources = _getEffectiveSources();
-    return sources.where((src) => 
-      !_isYoutubeSource(src) && !_isEmbedSource(src)
-    ).toList();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _loadFavoriteStatus();
-    _loadWatchlistState();
-    _loadTmdbDetails();
-    _checkDownloadStatus();
-    _loadWatchProgress();
-    _loadTorrentioStreams();
-    _resolveAllLiveSources();
-  }
-
-  Future<void> _loadWatchProgress() async {
-    final progress = await PlaybackTracker.getWatchProgress(movie.id);
-    final pos = await PlaybackTracker.getSavedPosition(movie.id);
-    if (mounted) {
-      setState(() {
-        _watchProgress = progress;
-        _savedPositionMs = pos;
-      });
-    }
   }
 
   Future<void> _loadTorrentioStreams() async {
@@ -344,63 +456,74 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     final imdbId = movie.imdbId;
     if (imdbId == null || imdbId.isEmpty || imdbId == 'null') return;
-    
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl = prefs.getString('torrentio_addon_url') ?? 'https://torrentio.strem.fun';
-      
+      final addonBaseUrl =
+          prefs.getString('torrentio_addon_url') ??
+          'https://torrentio.strem.fun';
+
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
       }
-      
+
       final url = '$baseUrl/stream/movie/$imdbId.json';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final streamsList = data['streams'] as List<dynamic>? ?? [];
         final List<StreamSource> torrentSources = [];
-        
+
         for (final stream in streamsList) {
           final infoHash = stream['infoHash']?.toString() ?? '';
           final directUrl = stream['url']?.toString() ?? '';
           final title = stream['title']?.toString() ?? 'Stream';
           final streamName = stream['name']?.toString() ?? 'Stremio';
-          
+
           if (directUrl.isNotEmpty) {
             final titleLines = title.split('\n');
-            final mainTitle = titleLines.isNotEmpty ? titleLines[0] : 'Direct Stream';
+            final mainTitle = titleLines.isNotEmpty
+                ? titleLines[0]
+                : 'Direct Stream';
             final peerInfo = titleLines.length > 1 ? titleLines[1] : '';
             final sizeInfo = titleLines.length > 2 ? titleLines[2] : '';
-            
+
             var sourceName = '$streamName: $mainTitle';
             if (peerInfo.isNotEmpty || sizeInfo.isNotEmpty) {
-              sourceName += ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
+              sourceName +=
+                  ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
             }
             sourceName = sourceName.replaceAll('\n', ' ').trim();
-            
+
             // Extract custom headers
             final Map<String, String> headers = {};
             if (stream['behaviorHints']?['requestHeaders'] is Map) {
-              (stream['behaviorHints']['requestHeaders'] as Map).forEach((k, v) {
+              (stream['behaviorHints']['requestHeaders'] as Map).forEach((
+                k,
+                v,
+              ) {
                 headers[k.toString()] = v.toString();
               });
             }
-            
+
             var finalUrl = directUrl;
             if (headers.isNotEmpty) {
-              finalUrl = Uri.parse(directUrl).replace(queryParameters: {
-                ...Uri.parse(directUrl).queryParameters,
-                'headers': jsonEncode(headers)
-              }).toString();
+              finalUrl = Uri.parse(directUrl)
+                  .replace(
+                    queryParameters: {
+                      ...Uri.parse(directUrl).queryParameters,
+                      'headers': jsonEncode(headers),
+                    },
+                  )
+                  .toString();
             }
-            
+
             final isDup = torrentSources.any((s) => s.url == finalUrl);
             if (!isDup) {
-              torrentSources.add(StreamSource(
-                name: sourceName,
-                url: finalUrl,
-              ));
+              torrentSources.add(StreamSource(name: sourceName, url: finalUrl));
             }
           } else if (infoHash.isNotEmpty) {
             final trackers = [
@@ -411,33 +534,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               'udp://open.stealth.si:80/announce',
               'udp://tracker.tiny-vps.me:6969/announce',
             ];
-            final trackersQuery = trackers.map((t) => 'tr=${Uri.encodeComponent(t)}').join('&');
-            final magnetLink = 'magnet:?xt=urn:btih:$infoHash&dn=${Uri.encodeComponent(movie.title)}&$trackersQuery';
-            
+            final trackersQuery = trackers
+                .map((t) => 'tr=${Uri.encodeComponent(t)}')
+                .join('&');
+            final magnetLink =
+                'magnet:?xt=urn:btih:$infoHash&dn=${Uri.encodeComponent(movie.title)}&$trackersQuery';
+
             final titleLines = title.split('\n');
             final mainTitle = titleLines.isNotEmpty ? titleLines[0] : 'Torrent';
             final peerInfo = titleLines.length > 1 ? titleLines[1] : '';
             final sizeInfo = titleLines.length > 2 ? titleLines[2] : '';
-            
+
             var sourceName = 'Torrent: $mainTitle';
             if (peerInfo.isNotEmpty || sizeInfo.isNotEmpty) {
-              sourceName += ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
+              sourceName +=
+                  ' ($peerInfo ${sizeInfo.isNotEmpty ? "• $sizeInfo" : ""})';
             }
             sourceName = sourceName
                 .replaceAll('👥', ' Peers:')
                 .replaceAll('👤', ' Seeders:')
                 .replaceAll('\n', ' ');
-            
+
             final isDup = torrentSources.any((s) => s.url == magnetLink);
             if (!isDup) {
-              torrentSources.add(StreamSource(
-                name: sourceName,
-                url: magnetLink,
-              ));
+              torrentSources.add(
+                StreamSource(name: sourceName, url: magnetLink),
+              );
             }
           }
         }
-        
+
         if (mounted) {
           setState(() {
             _torrentioSources = torrentSources;
@@ -460,46 +586,65 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final addonBaseUrl = prefs.getString('stravo_addon_url') ?? 'https://stravo-clfk.onrender.com/default';
-    
+    final addonBaseUrl =
+        prefs.getString('stravo_addon_url') ??
+        'https://stravo-clfk.onrender.com/default';
+
     var baseUrl = addonBaseUrl.trim();
     if (baseUrl.endsWith('/')) {
       baseUrl = baseUrl.substring(0, baseUrl.length - 1);
     }
-    
+
     final url = '$baseUrl/stream/movie/$imdbId.json';
-    final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
-    
+    final response = await http.get(
+      Uri.parse(url),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Origin': 'https://app.strem.io',
+        'Referer': 'https://app.strem.io/',
+      },
+    ).timeout(const Duration(seconds: 20));
+
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       final streamsList = data['streams'] as List<dynamic>? ?? [];
       final List<StreamSource> stravoSources = [];
-      
+
       for (final stream in streamsList) {
         final urlStr = stream['url']?.toString() ?? '';
         if (urlStr.isNotEmpty) {
           final name = stream['name']?.toString() ?? '';
           final title = stream['title']?.toString() ?? '';
-          final displayTitle = title.isNotEmpty 
+          final displayTitle = title.isNotEmpty
               ? (name.isNotEmpty ? '$title ($name)' : title)
               : (name.isNotEmpty ? name : 'Stravo Stream');
-          
+
           final cleanName = displayTitle.replaceAll('\n', ' ').trim();
-          
-          if (cleanName.contains('🖥️') || name.contains('🖥️') || title.contains('🖥️')) {
-            continue; // Skip direct PC streams as requested
+
+          Map<String, String>? headers;
+          if (stream['behaviorHints'] is Map &&
+              stream['behaviorHints']['proxyHeaders'] is Map &&
+              stream['behaviorHints']['proxyHeaders']['request'] is Map) {
+            final reqHeaders = stream['behaviorHints']['proxyHeaders']['request'] as Map;
+            headers = reqHeaders.map((k, v) => MapEntry(k.toString(), v.toString()));
+          }
+          if (headers == null) {
+            headers = {
+              'Referer': 'https://lok-lok.cc/',
+              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+            };
           }
 
           final isDup = stravoSources.any((s) => s.url == urlStr);
           if (!isDup) {
-            stravoSources.add(StreamSource(
-              name: 'Stravo: $cleanName',
-              url: urlStr,
-            ));
+            stravoSources.add(
+              StreamSource(name: 'Stravo: $cleanName', url: urlStr, headers: headers),
+            );
           }
         }
       }
-      
+
       _stravoSources = stravoSources;
       return stravoSources;
     } else {
@@ -507,7 +652,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showStravoSourceSelector(BuildContext context, {bool resumeDirectly = false}) {
+  void _showStravoSourceSelector(
+    BuildContext context, {
+    bool resumeDirectly = false,
+  }) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -540,11 +688,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         return SizedBox(
                           height: 120,
                           child: Center(
-                            child: CircularProgressIndicator(color: AppColors.accentBright),
+                            child: CircularProgressIndicator(
+                              color: AppColors.accentBright,
+                            ),
                           ),
                         );
                       }
-                      
+
                       if (snapshot.hasError) {
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 20),
@@ -552,7 +702,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             child: Text(
                               'Error: ${snapshot.error}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+                              style: const TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         );
@@ -565,7 +718,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           child: Center(
                             child: Text(
                               'No Stravo streams found for this content.',
-                              style: TextStyle(color: Colors.white54, fontSize: 13),
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                         );
@@ -584,19 +740,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             ),
                             title: Text(
                               source.name.replaceFirst('Stravo: ', ''),
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
                             ),
                             subtitle: Text(
                               source.url,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white30, fontSize: 11),
+                              style: const TextStyle(
+                                color: Colors.white30,
+                                fontSize: 11,
+                              ),
                             ),
                             tileColor: Colors.white.withValues(alpha: 0.03),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                             onTap: () {
                               Navigator.of(context).pop();
-                              _playWithResolution(source.url, resumeDirectly: resumeDirectly, sourceName: source.name);
+                              _playWithResolution(
+                                source.url,
+                                resumeDirectly: resumeDirectly,
+                                sourceName: source.name,
+                              );
                             },
                           );
                         },
@@ -617,6 +786,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (mounted) {
       setState(() {
         _isDownloaded = isDown;
+      });
+    }
+  }
+
+  Future<void> _loadWatchProgress() async {
+    final progress = await PlaybackTracker.getWatchProgress(movie.id);
+    final pos = await PlaybackTracker.getSavedPosition(movie.id);
+    if (mounted) {
+      setState(() {
+        _watchProgress = progress;
+        _savedPositionMs = pos;
       });
     }
   }
@@ -646,9 +826,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       } else {
         list.add(movie.id);
         setState(() => _inWatchlist = true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Added to Watchlist.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Added to Watchlist.')));
       }
       await prefs.setStringList('watchlist_ids', list);
     } catch (_) {}
@@ -711,21 +891,37 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     try {
       // 1. Fetch Credits (Cast & Crew)
-      var creditsUrl = Uri.parse('https://api.themoviedb.org/3/movie/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
-      var creditsResponse = await http.get(creditsUrl).timeout(const Duration(seconds: 8));
+      var creditsUrl = Uri.parse(
+        'https://api.themoviedb.org/3/movie/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+      );
+      var creditsResponse = await http
+          .get(creditsUrl)
+          .timeout(const Duration(seconds: 8));
 
       if (creditsResponse.statusCode == 404) {
-        creditsUrl = Uri.parse('https://api.themoviedb.org/3/tv/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
-        creditsResponse = await http.get(creditsUrl).timeout(const Duration(seconds: 8));
+        creditsUrl = Uri.parse(
+          'https://api.themoviedb.org/3/tv/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+        );
+        creditsResponse = await http
+            .get(creditsUrl)
+            .timeout(const Duration(seconds: 8));
       }
 
       // 2. Fetch Details (Rating / Vote Average)
-      var detailsUrl = Uri.parse('https://api.themoviedb.org/3/movie/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
-      var detailsResponse = await http.get(detailsUrl).timeout(const Duration(seconds: 8));
+      var detailsUrl = Uri.parse(
+        'https://api.themoviedb.org/3/movie/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+      );
+      var detailsResponse = await http
+          .get(detailsUrl)
+          .timeout(const Duration(seconds: 8));
 
       if (detailsResponse.statusCode == 404) {
-        detailsUrl = Uri.parse('https://api.themoviedb.org/3/tv/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
-        detailsResponse = await http.get(detailsUrl).timeout(const Duration(seconds: 8));
+        detailsUrl = Uri.parse(
+          'https://api.themoviedb.org/3/tv/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+        );
+        detailsResponse = await http
+            .get(detailsUrl)
+            .timeout(const Duration(seconds: 8));
       }
 
       List<CastMember> cast = movie.castMembers;
@@ -745,10 +941,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           final name = item['name']?.toString() ?? '';
           final path = item['profile_path']?.toString() ?? '';
           if (name.isNotEmpty) {
-            parsedCast.add(CastMember(
-              name: name,
-              profileUrl: path.isNotEmpty ? (photoBase + path) : '',
-            ));
+            parsedCast.add(
+              CastMember(
+                name: name,
+                profileUrl: path.isNotEmpty ? (photoBase + path) : '',
+              ),
+            );
           }
         }
         if (parsedCast.isNotEmpty) {
@@ -768,6 +966,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
 
+      String? resolvedImdb;
       if (detailsResponse.statusCode == 200) {
         final jsonString = utf8.decode(detailsResponse.bodyBytes);
         final data = json.decode(jsonString) as Map<String, dynamic>;
@@ -778,6 +977,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         final pop = data['popularity'];
         if (pop != null) {
           popularity = double.tryParse(pop.toString());
+        }
+        resolvedImdb = data['imdb_id']?.toString();
+      }
+
+      if ((resolvedImdb == null || resolvedImdb.isEmpty || resolvedImdb == 'null') && tmdbId != 'null') {
+        try {
+          final extUrl = Uri.parse('https://api.themoviedb.org/3/movie/$tmdbId/external_ids?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
+          final extRes = await http.get(extUrl).timeout(const Duration(seconds: 5));
+          if (extRes.statusCode == 200) {
+            final extData = json.decode(utf8.decode(extRes.bodyBytes));
+            resolvedImdb = extData['imdb_id']?.toString();
+          }
+        } catch (_) {}
+        if (resolvedImdb == null || resolvedImdb.isEmpty || resolvedImdb == 'null') {
+          try {
+            final extUrl = Uri.parse('https://api.themoviedb.org/3/tv/$tmdbId/external_ids?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
+            final extRes = await http.get(extUrl).timeout(const Duration(seconds: 5));
+            if (extRes.statusCode == 200) {
+              final extData = json.decode(utf8.decode(extRes.bodyBytes));
+              resolvedImdb = extData['imdb_id']?.toString();
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (resolvedImdb != null && resolvedImdb.isNotEmpty && resolvedImdb != 'null') {
+        final currentImdb = movie.imdbId;
+        if (currentImdb == null || currentImdb.isEmpty || currentImdb == 'null') {
+          _resolveLiveStravo(resolvedImdb);
         }
       }
 
@@ -810,25 +1038,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _isEmbedUrl(String url) {
     final lower = url.toLowerCase();
     if (_isYoutubeUrl(url)) return false;
-    
+
     // If it has a direct video extension or standard HLS/stream segment pattern, it's not a generic web embed
-    if (lower.contains('.m3u8') || 
-        lower.contains('.mp4') || 
-        lower.contains('.mpd') || 
-        lower.contains('/hls/') || 
+    if (lower.contains('.m3u8') ||
+        lower.contains('.mp4') ||
+        lower.contains('.mpd') ||
+        lower.contains('/hls/') ||
         lower.contains('/stream/') ||
         lower.contains('.mkv') ||
         lower.contains('.webm') ||
         lower.contains('.avi')) {
       return false;
     }
-    
+
     // Otherwise, standard web URLs are treated as embeds needing resolution
     return url.startsWith('http://') || url.startsWith('https://');
   }
 
   bool _isStreamtapeSource(StreamSource source) {
-    if (source.name.toLowerCase().contains('streamtape') || 
+    if (source.name.toLowerCase().contains('streamtape') ||
         source.name.toLowerCase().contains('strcloud')) {
       return true;
     }
@@ -838,20 +1066,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
   bool _isYoutubeSource(StreamSource source) {
     if (source.name.toLowerCase() == 'youtube') return true;
-    if (source.name.toLowerCase() == 'mp4/mkv' || 
-        source.name.toLowerCase() == 'embed' || 
-        _isStreamtapeSource(source)) return false;
+    if (source.name.toLowerCase() == 'mp4/mkv' ||
+        source.name.toLowerCase() == 'embed' ||
+        _isStreamtapeSource(source))
+      return false;
     return _isYoutubeUrl(source.url);
   }
 
   bool _isMagnetSource(StreamSource source) {
-    return source.url.toLowerCase().startsWith('magnet:') || 
-           source.name.toLowerCase() == 'torrent (magnet)';
+    return source.url.toLowerCase().startsWith('magnet:') ||
+        source.name.toLowerCase() == 'torrent (magnet)';
   }
 
   bool _isCustomMagnet(StreamSource source) {
-    return movie.streamSources.any((s) => s.url == source.url && 
-      (s.url.toLowerCase().startsWith('magnet:') || s.name.toLowerCase() == 'torrent (magnet)'));
+    return movie.streamSources.any(
+      (s) =>
+          s.url == source.url &&
+          (s.url.toLowerCase().startsWith('magnet:') ||
+              s.name.toLowerCase() == 'torrent (magnet)'),
+    );
   }
 
   bool _isEmbedSource(StreamSource source) {
@@ -860,8 +1093,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
     if (_isStreamtapeSource(source)) return false;
     if (source.name.toLowerCase() == 'embed') return true;
-    if (source.name.toLowerCase() == 'mp4/mkv' || 
-        source.name.toLowerCase() == 'youtube' || 
+    if (source.name.toLowerCase() == 'mp4/mkv' ||
+        source.name.toLowerCase() == 'youtube' ||
         source.name.toLowerCase().contains('vidlink') ||
         _isMagnetSource(source)) {
       return false;
@@ -869,7 +1102,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     return _isEmbedUrl(source.url);
   }
 
-  void _play(String source, {bool resumeDirectly = false, Map<String, String>? headers, String? originalEmbedUrl}) async {
+  void _play(
+    String source, {
+    bool resumeDirectly = false,
+    Map<String, String>? headers,
+    String? originalEmbedUrl,
+  }) async {
+    if (!source.startsWith('magnet:') && !source.startsWith('stalker://') && !_isYoutubeUrl(source) && !_isEmbedUrl(source)) {
+      try {
+        final hlsResult = await runHlsPreflight(
+          context: context,
+          url: source,
+          movieTitle: movie.title,
+          headers: headers,
+        );
+        if (hlsResult?.url != null) source = hlsResult!.url;
+      } catch (_) {}
+    }
     final List<String> parts = [];
     if (movie.year != null) parts.add(movie.year.toString());
     if (movie.runtime != null) parts.add(movie.runtime!);
@@ -896,10 +1145,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         context: context,
         builder: (context) => AlertDialog(
           backgroundColor: AppColors.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Text(
             'Playback Failed',
-            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           content: const Text(
             'Failed to play the video natively. Would you like to try the Web Player instead?',
@@ -917,9 +1171,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               onPressed: () => Navigator.of(context).pop(true),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.accentBright,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
-              child: const Text('Try Web Player', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Try Web Player',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ],
         ),
@@ -941,16 +1203,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
   List<StreamSource> _getEffectiveSources() {
     final originalSources = movie.streamSources;
-    
+
     // 1. Identify Streamtape sources
-    final streamtapeSources = originalSources.where((src) => 
-      _isStreamtapeSource(src)
-    ).toList();
+    final streamtapeSources = originalSources
+        .where((src) => _isStreamtapeSource(src))
+        .toList();
 
     // 2. Identify YouTube sources
-    final youtubeSources = originalSources.where((src) => 
-      _isYoutubeSource(src)
-    ).toList();
+    final youtubeSources = originalSources
+        .where((src) => _isYoutubeSource(src))
+        .toList();
 
     // 3. Create VidLink source if ID is available
     StreamSource? vidlinkSource;
@@ -958,7 +1220,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final tmdbId = movie.tmdbId;
     final activeId = (imdbId != null && imdbId.isNotEmpty && imdbId != 'null')
         ? imdbId
-        : ((tmdbId != null && tmdbId.isNotEmpty && tmdbId != '0' && tmdbId != 'null') ? tmdbId : null);
+        : ((tmdbId != null &&
+                  tmdbId.isNotEmpty &&
+                  tmdbId != '0' &&
+                  tmdbId != 'null')
+              ? tmdbId
+              : null);
 
     if (activeId != null) {
       vidlinkSource = StreamSource(
@@ -968,22 +1235,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     // 4. Identify Embed / Web player sources
-    final embedSources = originalSources.where((src) => 
-      _isEmbedSource(src)
-    ).toList();
+    final embedSources = originalSources
+        .where((src) => _isEmbedSource(src))
+        .toList();
 
     // 5. Identify Custom Magnet sources
-    final customMagnets = originalSources.where((src) => 
-      _isMagnetSource(src)
-    ).toList();
+    final customMagnets = originalSources
+        .where((src) => _isMagnetSource(src))
+        .toList();
 
     // 6. Identify MP4/MKV sources (neither streamtape, youtube, vidlink, embed, nor magnet)
-    final mp4Sources = originalSources.where((src) => 
-      !_isStreamtapeSource(src) && 
-      !_isYoutubeSource(src) && 
-      !_isEmbedSource(src) &&
-      !_isMagnetSource(src)
-    ).toList();
+    final mp4Sources = originalSources
+        .where(
+          (src) =>
+              !_isStreamtapeSource(src) &&
+              !_isYoutubeSource(src) &&
+              !_isEmbedSource(src) &&
+              !_isMagnetSource(src),
+        )
+        .toList();
 
     final List<StreamSource> result = [];
     result.addAll(mp4Sources);
@@ -994,24 +1264,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
     final hasImdb = imdbId != null && imdbId.isNotEmpty && imdbId != 'null';
     if (hasImdb) {
-      result.add(const StreamSource(
-        name: 'Stravo Streams',
-        url: 'stravo_placeholder',
-      ));
+      result.add(
+        const StreamSource(name: 'Stravo Streams', url: 'stravo_placeholder'),
+      );
     }
     if (_torrentioSources.isNotEmpty || customMagnets.isNotEmpty) {
-      result.add(const StreamSource(
-        name: 'Torrent Streams',
-        url: 'torrent_placeholder',
-      ));
+      result.add(
+        const StreamSource(name: 'Torrent Streams', url: 'torrent_placeholder'),
+      );
     }
     result.addAll(embedSources);
 
     // Safeguard: Add any remaining source that might have been skipped
     for (final src in originalSources) {
-      if (!mp4Sources.contains(src) && 
-          !streamtapeSources.contains(src) && 
-          !youtubeSources.contains(src) && 
+      if (!mp4Sources.contains(src) &&
+          !streamtapeSources.contains(src) &&
+          !youtubeSources.contains(src) &&
           !embedSources.contains(src) &&
           !_isMagnetSource(src)) {
         result.add(src);
@@ -1024,11 +1292,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   String _sanitizeUrl(String url) {
     try {
       final uri = Uri.parse(url);
-      final isAlist = uri.host.contains('koyeb.app') || 
-                      uri.host.contains('alist') || 
-                      url.contains('/Movies/Movies/');
-      if (isAlist && 
-          !uri.path.startsWith('/d/') && 
+      final isAlist =
+          uri.host.contains('koyeb.app') ||
+          uri.host.contains('alist') ||
+          url.contains('/Movies/Movies/');
+      if (isAlist &&
+          !uri.path.startsWith('/d/') &&
           !uri.path.startsWith('/api/')) {
         final newPath = '/d${uri.path}';
         return uri.replace(path: newPath).toString();
@@ -1044,12 +1313,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   static const String _streamtapeKey = 'aGYRRB932LSJRp';
 
   String? _extractStreamtapeId(String url, {String? sourceName}) {
-    var match = RegExp(r'(?:streamtape\.[a-z]+|strcloud\.[a-z]+)/[ve]/([a-zA-Z0-9]+)').firstMatch(url);
+    var match = RegExp(
+      r'(?:streamtape\.[a-z]+|strcloud\.[a-z]+)/[ve]/([a-zA-Z0-9]+)',
+    ).firstMatch(url);
     if (match != null) return match.group(1);
-    
-    final isNameStreamtape = sourceName != null && 
-        (sourceName.toLowerCase().contains('streamtape') || sourceName.toLowerCase().contains('strcloud'));
-    if (isNameStreamtape || url.toLowerCase().contains('streamtape') || url.toLowerCase().contains('strcloud')) {
+
+    final isNameStreamtape =
+        sourceName != null &&
+        (sourceName.toLowerCase().contains('streamtape') ||
+            sourceName.toLowerCase().contains('strcloud'));
+    if (isNameStreamtape ||
+        url.toLowerCase().contains('streamtape') ||
+        url.toLowerCase().contains('strcloud')) {
       match = RegExp(r'/[ve]/([a-zA-Z0-9]+)').firstMatch(url);
       if (match != null) return match.group(1);
     }
@@ -1064,21 +1339,27 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       'api.strcloud.club',
       'api.streamtape.com',
       'api.streamtape.to',
-      'api.streamtape.net'
+      'api.streamtape.net',
     ];
 
-    Future<http.Response> getWithRetry(String fetchUrl, {int maxAttempts = 3}) async {
+    Future<http.Response> getWithRetry(
+      String fetchUrl, {
+      int maxAttempts = 3,
+    }) async {
       Object? lastError;
       for (int i = 0; i < maxAttempts; i++) {
         try {
           debugPrint('Streamtape resolve attempt ${i + 1} fetching...');
-          final res = await http.get(
-            Uri.parse(fetchUrl),
-            headers: {
-              'Connection': 'close',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-          ).timeout(const Duration(seconds: 8));
+          final res = await http
+              .get(
+                Uri.parse(fetchUrl),
+                headers: {
+                  'Connection': 'close',
+                  'User-Agent':
+                      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                },
+              )
+              .timeout(const Duration(seconds: 8));
           return res;
         } catch (e) {
           lastError = e;
@@ -1088,42 +1369,52 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           }
         }
       }
-      throw lastError ?? Exception('Request failed after $maxAttempts attempts');
+      throw lastError ??
+          Exception('Request failed after $maxAttempts attempts');
     }
 
     for (final domain in apiDomains) {
       try {
         debugPrint('Attempting Streamtape resolve via $domain');
         // 1. Get download ticket client-side
-        final ticketUrl = 'https://$domain/file/dlticket?file=$fileId&login=$_streamtapeLogin&key=$_streamtapeKey';
+        final ticketUrl =
+            'https://$domain/file/dlticket?file=$fileId&login=$_streamtapeLogin&key=$_streamtapeKey';
         final ticketRes = await getWithRetry(ticketUrl);
         if (ticketRes.statusCode != 200) {
-          throw Exception('Failed to fetch ticket (HTTP ${ticketRes.statusCode})');
+          throw Exception(
+            'Failed to fetch ticket (HTTP ${ticketRes.statusCode})',
+          );
         }
         final ticketData = json.decode(ticketRes.body);
         if (ticketData['status'] != 200 || ticketData['result'] == null) {
           throw Exception(ticketData['msg'] ?? 'Error fetching ticket');
         }
-        
+
         final ticket = ticketData['result']['ticket'];
         final waitTime = ticketData['result']['wait_time'] ?? 5;
         debugPrint('Ticket obtained: $ticket. Waiting $waitTime seconds...');
-        
+
         // Wait for the required ticket wait time
         if (waitTime > 0) {
           await Future.delayed(Duration(seconds: waitTime));
         }
-        
+
         // 2. Get direct download link client-side
         final dlUrl = 'https://$domain/file/dl?file=$fileId&ticket=$ticket';
         final dlRes = await getWithRetry(dlUrl);
         if (dlRes.statusCode != 200) {
-          throw Exception('Failed to fetch download link (HTTP ${dlRes.statusCode})');
+          throw Exception(
+            'Failed to fetch download link (HTTP ${dlRes.statusCode})',
+          );
         }
         final dlData = json.decode(dlRes.body);
-        if (dlData['status'] == 200 && dlData['result'] != null && dlData['result']['url'] != null) {
+        if (dlData['status'] == 200 &&
+            dlData['result'] != null &&
+            dlData['result']['url'] != null) {
           final streamUrl = dlData['result']['url'] as String;
-          debugPrint('Streamtape resolved successfully via $domain -> $streamUrl');
+          debugPrint(
+            'Streamtape resolved successfully via $domain -> $streamUrl',
+          );
           return streamUrl;
         } else {
           throw Exception(dlData['msg'] ?? 'Failed to resolve download link');
@@ -1135,14 +1426,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     return null;
   }
 
-  Future<void> _playWithResolution(String source, {
-    bool resumeDirectly = false, 
+  Future<void> _playWithResolution(
+    String source, {
+    bool resumeDirectly = false,
     String? sourceName,
     bool forceNative = false,
     bool forceWeb = false,
+    Map<String, String>? headers,
   }) async {
     source = _sanitizeUrl(source);
-    
+
     if (source.startsWith('magnet:')) {
       if (mounted) {
         Navigator.of(context).push(
@@ -1157,23 +1450,28 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       return;
     }
-    
+
     // Intercept Stalker VOD sources to resolve their links client-side
-    final isStalkerVod = sourceName != null && sourceName.toLowerCase() == 'stalker vod';
+    final isStalkerVod =
+        source.startsWith('stalker://') ||
+        (sourceName != null &&
+            (sourceName.toLowerCase() == 'stalker vod' ||
+                sourceName.toLowerCase().contains('stalker')));
     if (isStalkerVod) {
       showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (BuildContext context) {
-          return Center(
-            child: CircularProgressIndicator(color: AppColors.accentBright),
+          return ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Connecting to Stalker VOD Portal...',
           );
         },
       );
-      
+
       var stalkerCmd = source;
       var portalId = 1;
-      
+
       try {
         if (source.startsWith('stalker://')) {
           final uri = Uri.parse(source);
@@ -1183,16 +1481,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             stalkerCmd += '?${uri.query}';
           }
         }
-        final stalkerStream = await StalkerResolver.resolveStream(stalkerCmd, portalId, isLive: false);
+        final stalkerStream = await StalkerResolver.resolveStream(
+          stalkerCmd,
+          portalId,
+          isLive: false,
+        );
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
-        
-        _play(stalkerStream.url, resumeDirectly: resumeDirectly, headers: stalkerStream.headers);
+
+        _play(
+          stalkerStream.url,
+          resumeDirectly: resumeDirectly,
+          headers: stalkerStream.headers,
+        );
       } catch (e) {
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Stalker VOD failed (Portal $portalId, cmd: $stalkerCmd): $e'),
+              content: Text(
+                'Stalker VOD failed (Portal $portalId, cmd: $stalkerCmd): $e',
+              ),
               backgroundColor: Colors.redAccent,
               duration: const Duration(seconds: 8),
             ),
@@ -1204,28 +1512,37 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // Intercept Streamtape or Strcloud links to resolve natively completely in-app
     final lowerSource = source.toLowerCase();
-    final isStreamtape = lowerSource.contains('streamtape.com') || 
-                         lowerSource.contains('strcloud.club') ||
-                         (sourceName != null && (sourceName.toLowerCase().contains('streamtape') || sourceName.toLowerCase().contains('strcloud')));
+    final isStreamtape =
+        lowerSource.contains('streamtape.com') ||
+        lowerSource.contains('strcloud.club') ||
+        (sourceName != null &&
+            (sourceName.toLowerCase().contains('streamtape') ||
+                sourceName.toLowerCase().contains('strcloud')));
     if (isStreamtape) {
       showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (BuildContext context) {
-          return Center(
-            child: CircularProgressIndicator(color: AppColors.accentBright),
+          return ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Bypassing Streamtape Scrapers...',
           );
         },
       );
-      
+
       try {
-        final resolved = await _resolveStreamtape(source, sourceName: sourceName);
+        final resolved = await _resolveStreamtape(
+          source,
+          sourceName: sourceName,
+        );
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
-        
+
         if (resolved != null && resolved.isNotEmpty) {
           _play(resolved, resumeDirectly: resumeDirectly);
         } else {
-          throw Exception('Failed to resolve Streamtape direct URL. Please check your credentials.');
+          throw Exception(
+            'Failed to resolve Streamtape direct URL. Please check your credentials.',
+          );
         }
       } catch (e) {
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
@@ -1241,39 +1558,59 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return;
     }
 
-    final isScraper = source.contains('movie-scraper-beige.vercel.app') || 
-                      source.contains('movie-scraper-beige.vercel.app');
+    final isScraper =
+        source.contains('movie-scraper-beige.vercel.app') ||
+        source.contains('movie-scraper-beige.vercel.app');
     if (isScraper) {
-      final vidlinkTmdbId = (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null')
+      final vidlinkTmdbId =
+          (movie.tmdbId != null &&
+              movie.tmdbId!.isNotEmpty &&
+              movie.tmdbId != '0' &&
+              movie.tmdbId != 'null')
           ? movie.tmdbId
           : movie.imdbId;
       final targetEmbedUrl = 'https://vidlink.pro/movie/$vidlinkTmdbId';
-      
+
       try {
-        debugPrint('Resolving VidLink stream in background from: $targetEmbedUrl');
-        final resolvedUrl = await EmbedResolver.resolve(context, targetEmbedUrl);
-        
+        debugPrint(
+          'Resolving VidLink stream in background from: $targetEmbedUrl',
+        );
+        final resolvedUrl = await EmbedResolver.resolve(
+          context,
+          targetEmbedUrl,
+        );
+
         if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
           final headers = {
             'Referer': 'https://vidlink.pro/',
             'Origin': 'https://vidlink.pro',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           };
           debugPrint('VidLink: Resolved stream natively: $resolvedUrl');
-          _play(resolvedUrl, resumeDirectly: resumeDirectly, headers: headers, originalEmbedUrl: targetEmbedUrl);
+          _play(
+            resolvedUrl,
+            resumeDirectly: resumeDirectly,
+            headers: headers,
+            originalEmbedUrl: targetEmbedUrl,
+          );
         } else {
           throw Exception('Failed to resolve stream in background');
         }
       } catch (e) {
-        debugPrint('VidLink native resolution failed: $e. Falling back to on-screen Web Player...');
+        debugPrint(
+          'VidLink native resolution failed: $e. Falling back to on-screen Web Player...',
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('VidLink native resolver failed. Launching Web Player...'),
+              content: Text(
+                'VidLink native resolver failed. Launching Web Player...',
+              ),
               duration: Duration(seconds: 3),
             ),
           );
-          
+
           final fallbackEmbedUrl = 'https://vidlink.pro/movie/$vidlinkTmdbId';
           Navigator.of(context).push(
             MaterialPageRoute<void>(
@@ -1326,17 +1663,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           );
         },
       );
-      
+
       try {
         final resolvedUrl = await YoutubeService.getStreamUrl(source);
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
-        
+
         if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
           _play(resolvedUrl, resumeDirectly: resumeDirectly);
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Could not load YouTube stream. Please try again.')),
+              const SnackBar(
+                content: Text(
+                  'Could not load YouTube stream. Please try again.',
+                ),
+              ),
             );
           }
         }
@@ -1368,11 +1709,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final resolvedUrl = await EmbedResolver.resolve(context, source);
       if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
         // Always provide VidSrc/VidsrcMe referer headers for resolved embeds to satisfy CDN host security
-        final headers = EmbedResolver.getHeadersForUrl(resolvedUrl, fallbackHeaders: {
-          'Referer': 'https://vidsrcme.ru/',
-          'Origin': 'https://vidsrcme.ru',
-        });
-        _play(resolvedUrl, resumeDirectly: resumeDirectly, headers: headers, originalEmbedUrl: source);
+        final headers = EmbedResolver.getHeadersForUrl(
+          resolvedUrl,
+          fallbackHeaders: {
+            'Referer': 'https://vidsrcme.ru/',
+            'Origin': 'https://vidsrcme.ru',
+          },
+        );
+        _play(
+          resolvedUrl,
+          resumeDirectly: resumeDirectly,
+          headers: headers,
+          originalEmbedUrl: source,
+        );
       } else {
         // Fallback: Launch on-screen webview player which solves Turnstile, intercept the .m3u8 stream link,
         // pop the webview, and play natively in VideoPlayerScreen!
@@ -1386,18 +1735,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               ),
             ),
           );
-          
+
           if (interceptedUrl != null && interceptedUrl.isNotEmpty) {
-            final headers = EmbedResolver.getHeadersForUrl(interceptedUrl, fallbackHeaders: {
-              'Referer': 'https://vidsrcme.ru/',
-              'Origin': 'https://vidsrcme.ru',
-            });
-            _play(interceptedUrl, resumeDirectly: resumeDirectly, headers: headers, originalEmbedUrl: source);
+            final headers = EmbedResolver.getHeadersForUrl(
+              interceptedUrl,
+              fallbackHeaders: {
+                'Referer': 'https://vidsrcme.ru/',
+                'Origin': 'https://vidsrcme.ru',
+              },
+            );
+            _play(
+              interceptedUrl,
+              resumeDirectly: resumeDirectly,
+              headers: headers,
+              originalEmbedUrl: source,
+            );
           }
         }
       }
     } else {
-      _play(source, resumeDirectly: resumeDirectly);
+      final result = await runHlsPreflight(
+        context: context,
+        url: source,
+        movieTitle: movie.title,
+        headers: headers,
+      );
+      final playUrl = result?.url ?? source;
+      final uri = Uri.tryParse(playUrl);
+      final Map<String, String> finalHeaders = {};
+      if (headers != null) {
+        finalHeaders.addAll(headers);
+      }
+      if (uri != null && uri.queryParameters.containsKey('headers')) {
+        try {
+          final jsonHeaders = json.decode(uri.queryParameters['headers']!);
+          if (jsonHeaders is Map) {
+            jsonHeaders.forEach((k, v) {
+              finalHeaders[k.toString()] = v.toString();
+            });
+          }
+        } catch (e) {
+          debugPrint('Failed to parse stream headers: $e');
+        }
+      }
+      _play(
+        playUrl,
+        resumeDirectly: resumeDirectly,
+        headers: finalHeaders.isEmpty ? null : finalHeaders,
+      );
     }
   }
 
@@ -1412,136 +1797,325 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             _modalSetState = setModalState;
-            
-            final dbMp4Sources = movie.streamSources.where((src) => 
-              !_isStreamtapeSource(src) && 
-              !_isYoutubeSource(src) && 
-              !_isEmbedSource(src) &&
-              !_isMagnetSource(src)
-            ).toList();
 
-            final dbStreamtapeSources = movie.streamSources.where((src) => 
-              _isStreamtapeSource(src)
-            ).toList();
+            final dbMp4Sources = movie.streamSources
+                .where(
+                  (src) =>
+                      !_isStreamtapeSource(src) &&
+                      !_isYoutubeSource(src) &&
+                      !_isEmbedSource(src) &&
+                      !_isMagnetSource(src),
+                )
+                .toList();
 
-            final customMagnets = movie.streamSources.where(_isMagnetSource).toList();
+            final dbStreamtapeSources = movie.streamSources
+                .where((src) => _isStreamtapeSource(src))
+                .toList();
+
+            final customMagnets = movie.streamSources
+                .where(_isMagnetSource)
+                .toList();
 
             final List<Widget> items = [];
-            
+
             // 1. MP4/MKV Link
-            items.add(_buildSourceTile(
-              icon: Icons.video_file_rounded,
-              title: '1. Direct MP4/MKV Link',
-              subtitle: dbMp4Sources.isEmpty 
-                  ? 'Not available' 
-                  : (dbMp4Sources.length == 1 ? dbMp4Sources.first.name : '${dbMp4Sources.length} files available'),
-              disabled: dbMp4Sources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                if (dbMp4Sources.length == 1) {
-                  _playWithResolution(dbMp4Sources.first.url, resumeDirectly: resumeDirectly, sourceName: dbMp4Sources.first.name);
-                } else {
-                  _showSubSourceSelector(context, 'MP4/MKV DIRECT FILES', dbMp4Sources, resumeDirectly: resumeDirectly);
-                }
-              },
-            ));
+            if (dbMp4Sources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.video_file_rounded,
+                  title: '1. Direct MP4/MKV Link',
+                  subtitle: dbMp4Sources.length == 1
+                        ? dbMp4Sources.first.name
+                        : '${dbMp4Sources.length} files available',
+                  disabled: false,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (dbMp4Sources.length == 1) {
+                      _playWithResolution(
+                        dbMp4Sources.first.url,
+                        resumeDirectly: resumeDirectly,
+                        sourceName: dbMp4Sources.first.name,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        'MP4/MKV DIRECT FILES',
+                        dbMp4Sources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                ),
+              );
+            }
 
             // 2. Vidlink Server
-            items.add(_buildSourceTile(
-              icon: Icons.play_arrow_rounded,
-              title: '2. Vidlink Server',
-              subtitle: _resolvingVidlink 
-                  ? 'Checking live...' 
-                  : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
-              disabled: _liveVidlinkSources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                _playWithResolution(_liveVidlinkSources.first.url, resumeDirectly: resumeDirectly, sourceName: _liveVidlinkSources.first.name);
-              },
-            ));
+            if (_resolvingVidlink || _liveVidlinkSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.play_arrow_rounded,
+                  title: '2. Vidlink Server',
+                  subtitle: _resolvingVidlink
+                      ? 'Checking live...'
+                      : '1 native link available',
+                  disabled: _resolvingVidlink,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _playWithResolution(
+                      _liveVidlinkSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveVidlinkSources.first.name,
+                    );
+                  },
+                ),
+              );
+            }
 
             // 3. NetMirror Server
-            items.add(_buildSourceTile(
-              icon: Icons.language_rounded,
-              title: '3. NetMirror Server (NF/PV/HS)',
-              subtitle: _resolvingNetmirror 
-                  ? 'Searching NetMirror...' 
-                  : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
-              disabled: _liveNetmirrorSources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                if (_liveNetmirrorSources.length == 1) {
-                  _playNetmirrorStream(_liveNetmirrorSources.first, resumeDirectly: resumeDirectly);
-                } else {
-                  _showNetmirrorSubSelector(_liveNetmirrorSources, resumeDirectly: resumeDirectly);
-                }
-              },
-            ));
+            if (_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.language_rounded,
+                  title: '3. NetMirror Server (NF/PV/HS)',
+                  subtitle: _resolvingNetmirror
+                      ? 'Searching NetMirror...'
+                      : '${_liveNetmirrorSources.length} links available',
+                  disabled: _resolvingNetmirror,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (_liveNetmirrorSources.length == 1) {
+                      _playNetmirrorStream(
+                        _liveNetmirrorSources.first,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    } else {
+                      _showNetmirrorSubSelector(
+                        _liveNetmirrorSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                ),
+              );
+            }
 
             // 4. Streamtape Server
-            items.add(_buildSourceTile(
-              icon: Icons.folder_shared_rounded,
-              title: '4. Streamtape Server',
-              subtitle: dbStreamtapeSources.isEmpty 
-                  ? 'Not available' 
-                  : (dbStreamtapeSources.length == 1 ? dbStreamtapeSources.first.name : '${dbStreamtapeSources.length} files available'),
-              disabled: dbStreamtapeSources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                if (dbStreamtapeSources.length == 1) {
-                  _playWithResolution(dbStreamtapeSources.first.url, resumeDirectly: resumeDirectly, sourceName: dbStreamtapeSources.first.name);
-                } else {
-                  _showSubSourceSelector(context, 'STREAMTAPE STREAMS', dbStreamtapeSources, resumeDirectly: resumeDirectly);
-                }
-              },
-            ));
+            if (dbStreamtapeSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.folder_shared_rounded,
+                  title: '4. Streamtape Server',
+                  subtitle: dbStreamtapeSources.length == 1
+                        ? dbStreamtapeSources.first.name
+                        : '${dbStreamtapeSources.length} files available',
+                  disabled: false,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (dbStreamtapeSources.length == 1) {
+                      _playWithResolution(
+                        dbStreamtapeSources.first.url,
+                        resumeDirectly: resumeDirectly,
+                        sourceName: dbStreamtapeSources.first.name,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        'STREAMTAPE STREAMS',
+                        dbStreamtapeSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                ),
+              );
+            }
 
-            // 5. Stalker VOD Server
-            items.add(_buildSourceTile(
-              icon: Icons.movie_filter_rounded,
-              title: '5. Stalker VOD Server (Portal 2)',
-              subtitle: _resolvingStalker 
-                  ? 'Searching Portal...' 
-                  : (_liveStalkerSources.isNotEmpty ? '${_liveStalkerSources.length} links available' : 'Not available'),
-              disabled: _liveStalkerSources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                _showSubSourceSelector(context, 'STALKER VOD STREAMS', _liveStalkerSources, resumeDirectly: resumeDirectly);
-              },
-            ));
+            // 5. CineMM Server
+            if (_resolvingCinemm || _liveCinemmSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.local_movies_rounded,
+                  title: '5. CineMM Server',
+                  subtitle: _resolvingCinemm
+                      ? 'Searching CineMM...'
+                      : '${_liveCinemmSources.length} links available',
+                  disabled: _resolvingCinemm,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (_liveCinemmSources.length == 1) {
+                      _playWithResolution(
+                        _liveCinemmSources.first.url,
+                        resumeDirectly: resumeDirectly,
+                        sourceName: _liveCinemmSources.first.name,
+                        headers: _liveCinemmSources.first.headers,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        'CINEMM STREAMS',
+                        _liveCinemmSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                ),
+              );
+            }
 
-            // 6. Stravo Server
-            items.add(_buildSourceTile(
-              icon: Icons.rocket_launch_rounded,
-              title: '6. Stravo Server',
-              subtitle: _resolvingStravo 
-                  ? 'Searching streams...' 
-                  : (_liveStravoSources.isNotEmpty ? '${_liveStravoSources.length} links available' : 'Not available'),
-              disabled: _liveStravoSources.isEmpty,
-              onTap: () {
-                Navigator.of(context).pop();
-                _showSubSourceSelector(context, 'STRAVO STREAMS', _liveStravoSources, resumeDirectly: resumeDirectly);
-              },
-            ));
+            // 6. Stalker VOD Server
+            if (_resolvingStalker || _liveStalkerSources.isNotEmpty) {
+              final uniquePortals = _liveStalkerSources.map((s) {
+                final stripped = s.url.replaceAll('stalker://', '');
+                final portalMatch = RegExp(r'^(\d+)').firstMatch(stripped);
+                return portalMatch?.group(1) ?? '1';
+              }).toSet();
 
-            // 7. Torrent Server
-            final totalTorrents = _torrentioSources.length + customMagnets.length;
-            items.add(_buildSourceTile(
-              icon: Icons.cloud_circle_rounded,
-              title: '7. Torrent Server',
-              subtitle: totalTorrents > 0 
-                  ? '$totalTorrents links available' 
-                  : 'Not available',
-              disabled: totalTorrents == 0,
-              onTap: () {
-                Navigator.of(context).pop();
-                _showTorrentSourceSelector([...customMagnets, ..._torrentioSources], resumeDirectly: resumeDirectly);
-              },
-            ));
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.movie_filter_rounded,
+                  title: uniquePortals.length > 1
+                      ? '6. Stalker VOD Servers'
+                      : '6. Stalker VOD Server',
+                  subtitle: _resolvingStalker
+                      ? 'Searching Portal...'
+                      : '${_liveStalkerSources.length} links available',
+                  disabled: _resolvingStalker,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (uniquePortals.length > 1) {
+                      _showStalkerGroupedSelector(
+                        context,
+                        _liveStalkerSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        'STALKER VOD STREAMS',
+                        _liveStalkerSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                ),
+              );
+            }
+
+            // 7. Stravo Server
+            if (_resolvingStravo || _liveStravoSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.rocket_launch_rounded,
+                  title: '7. Stravo Server',
+                  subtitle: _resolvingStravo
+                      ? 'Searching streams...'
+                      : '${_liveStravoSources.length} links available',
+                  disabled: _resolvingStravo,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showSubSourceSelector(
+                      context,
+                      'STRAVO STREAMS',
+                      _liveStravoSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  },
+                ),
+              );
+            }
+
+            // 8. Torrent Server
+            final totalTorrents =
+                _torrentioSources.length + customMagnets.length;
+            if (totalTorrents > 0) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.cloud_circle_rounded,
+                  title: '8. Torrent Server',
+                  subtitle: '$totalTorrents links available',
+                  disabled: false,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showTorrentSourceSelector([
+                      ...customMagnets,
+                      ..._torrentioSources,
+                    ], resumeDirectly: resumeDirectly);
+                  },
+                ),
+              );
+            }
+
+            // 9. Stremio Addons
+            if (_resolvingStremio || _liveStremioSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.extension_rounded,
+                  title: '9. Stremio Addons',
+                  subtitle: _resolvingStremio
+                      ? 'Searching...'
+                      : '${_liveStremioSources.length} links available',
+                  disabled: _resolvingStremio,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showAddonGroupedSelector(
+                      context,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  },
+                ),
+              );
+            }
+
+            // 10. Nuveo Addons
+            if (_resolvingNuveo || _liveNuveoSources.isNotEmpty) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.auto_awesome_rounded,
+                  title: '10. Nuveo Addons',
+                  subtitle: _resolvingNuveo
+                      ? 'Searching...'
+                      : '${_liveNuveoSources.length} links available',
+                  disabled: _resolvingNuveo,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showAddonGroupedSelector(
+                      context,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  },
+                ),
+              );
+            }
+
+            if (items.isEmpty) {
+              final resolvingAny = _resolvingVidlink || _resolvingNetmirror || _resolvingCinemm || _resolvingStalker || _resolvingStravo || _resolvingStremio || _resolvingNuveo;
+              return SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (resolvingAny) ...[
+                        const CircularProgressIndicator(color: Colors.white),
+                        const SizedBox(height: 16),
+                        const Text('Searching online sources...', style: TextStyle(color: Colors.white70)),
+                      ] else ...[
+                        const Icon(Icons.sentiment_dissatisfied_rounded, color: Colors.white38, size: 40),
+                        const SizedBox(height: 12),
+                        const Text('No active stream servers found.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      ]
+                    ],
+                  ),
+                ),
+              );
+            }
 
             return SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 24,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1613,7 +2187,77 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  void _showNetmirrorSubSelector(List<StreamSource> sources, {bool resumeDirectly = false}) {
+  Widget _getOttLogo(String name, {double size = 24}) {
+    final lower = name.toLowerCase();
+    String? domain;
+    Widget fallback;
+
+    if (lower.contains('netflix') || lower.contains('(nf)')) {
+      domain = 'netflix.com';
+      fallback = Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: Colors.red.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.red.withOpacity(0.3)),
+        ),
+        child: const Center(
+          child: Text('N', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 11)),
+        ),
+      );
+    } else if (lower.contains('prime') || lower.contains('(pv)')) {
+      domain = 'primevideo.com';
+      fallback = Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: Colors.blue.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.blue.withOpacity(0.3)),
+        ),
+        child: const Center(
+          child: Text('PV', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 9)),
+        ),
+      );
+    } else if (lower.contains('hotstar') || lower.contains('disney') || lower.contains('(hs)')) {
+      domain = 'hotstar.com';
+      fallback = Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: Colors.teal.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.teal.withOpacity(0.3)),
+        ),
+        child: const Center(
+          child: Text('D+', style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 9)),
+        ),
+      );
+    } else {
+      return Icon(Icons.language_rounded, color: AppColors.accentBright, size: size);
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Image.network(
+        'https://logo.clearbit.com/$domain',
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => fallback,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return fallback;
+        },
+      ),
+    );
+  }
+
+  void _showNetmirrorSubSelector(
+    List<StreamSource> sources, {
+    bool resumeDirectly = false,
+  }) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -1646,13 +2290,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     itemBuilder: (context, index) {
                       final source = sources[index];
                       return ListTile(
-                        leading: Icon(Icons.play_circle_outline_rounded, color: AppColors.accentBright),
-                        title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        leading: _getOttLogo(source.name, size: 28),
+                        title: Text(
+                          source.name,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
                         tileColor: Colors.white.withValues(alpha: 0.03),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         onTap: () {
                           Navigator.of(ctx).pop();
-                          _playNetmirrorStream(source, resumeDirectly: resumeDirectly);
+                          _playNetmirrorStream(
+                            source,
+                            resumeDirectly: resumeDirectly,
+                          );
                         },
                       );
                     },
@@ -1667,13 +2323,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   /// Plays a NetMirror stream with full HLS pre-flight: audio language + quality selection + headers
-  Future<void> _playNetmirrorStream(StreamSource source, {bool resumeDirectly = false}) async {
+  Future<void> _playNetmirrorStream(
+    StreamSource source, {
+    bool resumeDirectly = false,
+  }) async {
     // Show loading
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Colors.tealAccent),
+      builder: (context) => ResolvingProgressDialog(
+        title: movie.title,
+        subtitle: 'Pre-flight HLS NetMirror Checks...',
       ),
     );
 
@@ -1705,7 +2365,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         client.close();
 
         // Parse audio tracks
-        final audioLines = body.split('\n').where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')).toList();
+        final audioLines = body
+            .split('\n')
+            .where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO'))
+            .toList();
         final List<String> audioLanguages = [];
         for (final line in audioLines) {
           final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
@@ -1727,8 +2390,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             builder: (context) {
               return AlertDialog(
                 backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                title: Text('Select Audio Language', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                title: Text(
+                  'Select Audio Language',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 content: SizedBox(
                   width: double.maxFinite,
                   child: ListView.builder(
@@ -1737,8 +2408,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     itemBuilder: (context, index) {
                       final lang = audioLanguages[index];
                       return ListTile(
-                        title: Text(lang, style: const TextStyle(color: Colors.white)),
-                        leading: const Icon(Icons.audiotrack_rounded, color: Colors.tealAccent),
+                        title: Text(
+                          lang,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        leading: const Icon(
+                          Icons.audiotrack_rounded,
+                          color: Colors.tealAccent,
+                        ),
                         onTap: () => Navigator.of(context).pop(lang),
                       );
                     },
@@ -1754,19 +2431,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         final lines = body.split('\n');
         for (final line in lines) {
           if (line.startsWith('#EXT-X-STREAM-INF')) {
-            final resolutionMatch = RegExp(r'RESOLUTION=(\d+x\d+)').firstMatch(line);
+            final resolutionMatch = RegExp(
+              r'RESOLUTION=(\d+x\d+)',
+            ).firstMatch(line);
             if (resolutionMatch != null) {
               final height = resolutionMatch.group(1)!.split('x')[1];
               final q = '${height}p';
               if (!videoQualities.contains(q)) videoQualities.add(q);
             } else {
-              final bandwidthMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(line);
+              final bandwidthMatch = RegExp(
+                r'BANDWIDTH=(\d+)',
+              ).firstMatch(line);
               if (bandwidthMatch != null) {
                 final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
                 String q = '360p';
-                if (bw > 3000000) q = '1080p';
-                else if (bw > 1500000) q = '720p';
-                else if (bw > 800000) q = '480p';
+                if (bw > 3000000)
+                  q = '1080p';
+                else if (bw > 1500000)
+                  q = '720p';
+                else if (bw > 800000)
+                  q = '480p';
                 if (!videoQualities.contains(q)) videoQualities.add(q);
               }
             }
@@ -1786,8 +2470,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             builder: (context) {
               return AlertDialog(
                 backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                title: Text('Select Video Quality', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                title: Text(
+                  'Select Video Quality',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 content: SizedBox(
                   width: double.maxFinite,
                   child: ListView.builder(
@@ -1796,15 +2488,27 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     itemBuilder: (context, index) {
                       if (index == 0) {
                         return ListTile(
-                          title: const Text('Auto / Best Quality', style: TextStyle(color: Colors.white)),
-                          leading: const Icon(Icons.settings_backup_restore_rounded, color: Colors.tealAccent),
+                          title: const Text(
+                            'Auto / Best Quality',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          leading: const Icon(
+                            Icons.settings_backup_restore_rounded,
+                            color: Colors.tealAccent,
+                          ),
                           onTap: () => Navigator.of(context).pop('Auto'),
                         );
                       }
                       final q = videoQualities[index - 1];
                       return ListTile(
-                        title: Text(q, style: const TextStyle(color: Colors.white)),
-                        leading: const Icon(Icons.video_settings_rounded, color: Colors.tealAccent),
+                        title: Text(
+                          q,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        leading: const Icon(
+                          Icons.video_settings_rounded,
+                          color: Colors.tealAccent,
+                        ),
                         onTap: () => Navigator.of(context).pop(q),
                       );
                     },
@@ -1822,15 +2526,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
             queryParams['selected_audio'] = selectedLanguage;
           }
-          if (selectedQuality != null && selectedQuality.isNotEmpty && selectedQuality != 'Auto') {
+          if (selectedQuality != null &&
+              selectedQuality.isNotEmpty &&
+              selectedQuality != 'Auto') {
             queryParams['selected_quality'] = selectedQuality;
           }
           if (queryParams.isNotEmpty) {
             final sourceUri = Uri.parse(source.url);
-            finalUrl = sourceUri.replace(queryParameters: {
-              ...sourceUri.queryParameters,
-              ...queryParams,
-            }).toString();
+            finalUrl = sourceUri
+                .replace(
+                  queryParameters: {
+                    ...sourceUri.queryParameters,
+                    ...queryParams,
+                  },
+                )
+                .toString();
           }
 
           Navigator.of(context).push(
@@ -1848,7 +2558,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       } else {
         client.close();
-        throw Exception('HLS Master playlist returned status ${res.statusCode}');
+        throw Exception(
+          'HLS Master playlist returned status ${res.statusCode}',
+        );
       }
     } catch (e) {
       debugPrint('NetMirror pre-flight failed: $e. Launching directly.');
@@ -1880,7 +2592,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showSubSourceSelector(BuildContext context, String title, List<StreamSource> sources, {bool resumeDirectly = false}) {
+  void _showSubSourceSelector(
+    BuildContext context,
+    String title,
+    List<StreamSource> sources, {
+    bool resumeDirectly = false,
+  }) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -1919,19 +2636,33 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         ),
                         title: Text(
                           source.name,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
                         subtitle: Text(
                           source.url,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white30, fontSize: 11),
+                          style: const TextStyle(
+                            color: Colors.white30,
+                            fontSize: 11,
+                          ),
                         ),
                         tileColor: Colors.white.withValues(alpha: 0.03),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         onTap: () {
                           Navigator.of(context).pop();
-                          _playWithResolution(source.url, resumeDirectly: resumeDirectly, sourceName: source.name);
+                          _playWithResolution(
+                            source.url,
+                            resumeDirectly: resumeDirectly,
+                            sourceName: source.name,
+                            headers: source.headers,
+                          );
                         },
                       );
                     },
@@ -1945,7 +2676,245 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  void _showTorrentSourceSelector(List<StreamSource> torrentSources, {bool resumeDirectly = false}) {
+  void _showStalkerGroupedSelector(
+    BuildContext context,
+    List<StreamSource> sources, {
+    bool resumeDirectly = false,
+  }) {
+    final Map<String, List<StreamSource>> grouped = {};
+    for (final s in sources) {
+      final stripped = s.url.replaceAll('stalker://', '');
+      final portalMatch = RegExp(r'^(\d+)').firstMatch(stripped);
+      final portalId = portalMatch?.group(1) ?? '1';
+      grouped.putIfAbsent(portalId, () => []);
+      grouped[portalId]!.add(s);
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final allEntries = grouped.entries.toList();
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'STALKER VOD SERVERS',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: allEntries.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, groupIdx) {
+                      final entry = allEntries[groupIdx];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, bottom: 6),
+                            child: Text(
+                              'Portal ${entry.key}',
+                              style: GoogleFonts.outfit(
+                                color: AppColors.accentBright,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          ...entry.value.map((source) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: ListTile(
+                              leading: Icon(
+                                Icons.play_circle_outline_rounded,
+                                color: AppColors.accentBright,
+                              ),
+                              title: Text(
+                                source.name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              subtitle: Text(
+                                source.url,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white30,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              tileColor: Colors.white.withValues(alpha: 0.03),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                _playWithResolution(
+                                  source.url,
+                                  resumeDirectly: resumeDirectly,
+                                  sourceName: source.name,
+                                  headers: source.headers,
+                                );
+                              },
+                            ),
+                          )),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showAddonGroupedSelector(
+    BuildContext context, {
+    bool resumeDirectly = false,
+  }) {
+    final List<StreamSource> allSources = [
+      ..._liveStremioSources,
+      ..._liveNuveoSources,
+    ];
+
+    final Map<String, List<StreamSource>> grouped = {};
+    for (final s in allSources) {
+      final addonName = s.name.contains(' - ')
+          ? s.name.split(' - ').first.trim()
+          : s.name;
+      grouped.putIfAbsent(addonName, () => []);
+      grouped[addonName]!.add(s);
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final allEntries = grouped.entries.toList();
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'STREMIO / NUVEO ADDON STREAMS',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: allEntries.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, groupIdx) {
+                      final entry = allEntries[groupIdx];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, bottom: 6),
+                            child: Text(
+                              entry.key,
+                              style: GoogleFonts.outfit(
+                                color: AppColors.accentBright,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          ...entry.value.map((source) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: ListTile(
+                              leading: Icon(
+                                Icons.play_circle_outline_rounded,
+                                color: AppColors.accentBright,
+                              ),
+                              title: Text(
+                                source.name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              subtitle: Text(
+                                source.url,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white30,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              tileColor: Colors.white.withValues(alpha: 0.03),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                _playWithResolution(
+                                  source.url,
+                                  resumeDirectly: resumeDirectly,
+                                  sourceName: source.name,
+                                  headers: source.headers,
+                                );
+                              },
+                            ),
+                          )),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  List<StreamSource> _buildFlatSourceList() {
+    return [
+      ..._liveStremioSources,
+      ..._liveNuveoSources,
+    ];
+  }
+
+  void _showTorrentSourceSelector(
+    List<StreamSource> torrentSources, {
+    bool resumeDirectly = false,
+  }) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -1980,25 +2949,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       final isCustomMagnet = _isCustomMagnet(source);
                       return ListTile(
                         leading: Icon(
-                          isCustomMagnet ? Icons.stars_rounded : Icons.cloud_circle_rounded,
-                          color: isCustomMagnet ? Colors.amber : AppColors.accentBright,
+                          isCustomMagnet
+                              ? Icons.stars_rounded
+                              : Icons.cloud_circle_rounded,
+                          color: isCustomMagnet
+                              ? Colors.amber
+                              : AppColors.accentBright,
                         ),
                         title: Row(
                           children: [
                             Expanded(
                               child: Text(
                                 source.name,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
                               ),
                             ),
                             if (isCustomMagnet) ...[
                               const SizedBox(width: 8),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.amber.withValues(alpha: 0.15),
                                   borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(color: Colors.amber.withValues(alpha: 0.4), width: 1),
+                                  border: Border.all(
+                                    color: Colors.amber.withValues(alpha: 0.4),
+                                    width: 1,
+                                  ),
                                 ),
                                 child: const Text(
                                   'DIRECT',
@@ -2019,11 +3002,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               final dbSeeders = source.seeders;
                               final dbPeers = source.peers;
                               if (dbSeeders != null) {
-                                subtitleText = '👤 Seeders: $dbSeeders  •  👥 Peers: $dbPeers';
+                                subtitleText =
+                                    '👤 Seeders: $dbSeeders  •  👥 Peers: $dbPeers';
                               } else {
                                 final stats = _customMagnetStats[source.url];
                                 if (stats != null) {
-                                  subtitleText = '👤 Seeders: ${stats['seeders']}  •  👥 Peers: ${stats['peers']}';
+                                  subtitleText =
+                                      '👤 Seeders: ${stats['seeders']}  •  👥 Peers: ${stats['peers']}';
                                 } else {
                                   subtitleText = 'Loading peers info...';
                                 }
@@ -2044,18 +3029,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             );
                           },
                         ),
-                        tileColor: isCustomMagnet 
-                            ? Colors.amber.withValues(alpha: 0.06) 
+                        tileColor: isCustomMagnet
+                            ? Colors.amber.withValues(alpha: 0.06)
                             : Colors.white.withValues(alpha: 0.03),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: isCustomMagnet 
-                              ? BorderSide(color: Colors.amber.withValues(alpha: 0.3), width: 1.2) 
+                          side: isCustomMagnet
+                              ? BorderSide(
+                                  color: Colors.amber.withValues(alpha: 0.3),
+                                  width: 1.2,
+                                )
                               : BorderSide.none,
                         ),
                         onTap: () {
                           Navigator.of(context).pop();
-                          _playWithResolution(source.url, resumeDirectly: resumeDirectly, sourceName: source.name);
+                          _playWithResolution(
+                            source.url,
+                            resumeDirectly: resumeDirectly,
+                            sourceName: source.name,
+                          );
                         },
                       );
                     },
@@ -2083,7 +3075,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       _play(localPath, resumeDirectly: resumeDirectly);
       return;
     }
-    
+
     _showSourceSelector(resumeDirectly: resumeDirectly);
   }
 
@@ -2103,18 +3095,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         foregroundColor: foregroundColor,
         side: BorderSide(color: borderColor, width: 1.2),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
       label: Text(
         label,
-        style: GoogleFonts.outfit(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-        ),
+        style: GoogleFonts.outfit(fontSize: 14, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -2130,14 +3117,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start download: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to start download: $e')));
       }
     }
   }
 
-  void _showDownloadSourceSelector(List<StreamSource> sources) {
+  void _showDownloadSourceSelector() {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -2145,6 +3132,176 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        final dbMp4Sources = movie.streamSources.where((src) => 
+          !_isStreamtapeSource(src) && 
+          !_isYoutubeSource(src) && 
+          !_isEmbedSource(src) &&
+          !_isMagnetSource(src)
+        ).toList();
+
+        final dbStreamtapeSources = movie.streamSources.where(_isStreamtapeSource).toList();
+        final totalTorrents = _torrentioSources.length + movie.streamSources.where(_isMagnetSource).length;
+
+        final List<Widget> items = [];
+
+        // 1. MP4/MKV Link
+        items.add(_buildSourceTile(
+          icon: Icons.video_file_rounded,
+          title: '1. Direct MP4/MKV Link',
+          subtitle: dbMp4Sources.isEmpty 
+              ? 'Not available' 
+              : (dbMp4Sources.length == 1 ? dbMp4Sources.first.name : '${dbMp4Sources.length} files available'),
+          disabled: dbMp4Sources.isEmpty,
+          onTap: () {
+            Navigator.of(context).pop();
+            if (dbMp4Sources.length == 1) {
+              _downloadSourceUrl(dbMp4Sources.first.url, sourceName: dbMp4Sources.first.name);
+            } else {
+              _showDownloadSubSelector('MP4/MKV DIRECT FILES', dbMp4Sources);
+            }
+          },
+        ));
+
+        // 2. Vidlink Server
+        items.add(_buildSourceTile(
+          icon: Icons.play_arrow_rounded,
+          title: '2. Vidlink Server',
+          subtitle: _resolvingVidlink 
+              ? 'Checking live...' 
+              : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
+          disabled: _liveVidlinkSources.isEmpty,
+          onTap: () {
+            Navigator.of(context).pop();
+            _downloadSourceUrl(_liveVidlinkSources.first.url, sourceName: _liveVidlinkSources.first.name);
+          },
+        ));
+
+        // 3. NetMirror Server
+        items.add(_buildSourceTile(
+          icon: Icons.language_rounded,
+          title: '3. NetMirror Server (NF/PV/HS)',
+          subtitle: _resolvingNetmirror 
+              ? 'Searching NetMirror...' 
+              : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
+          disabled: _liveNetmirrorSources.isEmpty,
+          onTap: () {
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(this.context).showSnackBar(
+              const SnackBar(
+                content: Text('NetMirror uses HLS (.m3u8) format, which does not support downloading. Please choose another server.'),
+                backgroundColor: Colors.orangeAccent,
+              ),
+            );
+          },
+        ));
+
+        // 4. Streamtape Server
+        items.add(_buildSourceTile(
+          icon: Icons.folder_shared_rounded,
+          title: '4. Streamtape Server',
+          subtitle: dbStreamtapeSources.isEmpty 
+              ? 'Not available' 
+              : (dbStreamtapeSources.length == 1 ? dbStreamtapeSources.first.name : '${dbStreamtapeSources.length} files available'),
+          disabled: dbStreamtapeSources.isEmpty,
+          onTap: () {
+            Navigator.of(context).pop();
+            if (dbStreamtapeSources.length == 1) {
+              _downloadStreamtapeSource(dbStreamtapeSources.first);
+            } else {
+              _showDownloadSubSelector('STREAMTAPE DOWNLOADS', dbStreamtapeSources, isStreamtape: true);
+            }
+          },
+        ));
+
+        // 5. CineMM Server
+        if (!_resolvingCinemm && _liveCinemmSources.isNotEmpty) {
+          items.add(_buildSourceTile(
+            icon: Icons.local_movies_rounded,
+            title: '5. CineMM Server',
+            subtitle: '${_liveCinemmSources.length} links available',
+            disabled: false,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveCinemmSources.length == 1) {
+                _downloadCinemmStream(_liveCinemmSources.first);
+              } else {
+                _showDownloadSubSelector('CINEMM DOWNLOADS', _liveCinemmSources, isCinemm: true);
+              }
+            },
+          ));
+        } else if (_resolvingCinemm) {
+          items.add(_buildSourceTile(
+            icon: Icons.local_movies_rounded,
+            title: '5. CineMM Server',
+            subtitle: 'Searching CineMM...',
+            disabled: true,
+            onTap: () {},
+          ));
+        }
+
+        // 6. Stalker VOD Server
+        if (!_resolvingStalker && _liveStalkerSources.isNotEmpty) {
+          items.add(_buildSourceTile(
+            icon: Icons.movie_filter_rounded,
+            title: '6. Stalker VOD Server (Portal 2)',
+            subtitle: '${_liveStalkerSources.length} links available',
+            disabled: false,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveStalkerSources.length == 1) {
+                _downloadStalkerStream(_liveStalkerSources.first);
+              } else {
+                _showDownloadSubSelector('STALKER VOD DOWNLOADS', _liveStalkerSources, isStalker: true);
+              }
+            },
+          ));
+        } else if (_resolvingStalker) {
+          items.add(_buildSourceTile(
+            icon: Icons.movie_filter_rounded,
+            title: '6. Stalker VOD Server (Portal 2)',
+            subtitle: 'Searching Portal...',
+            disabled: true,
+            onTap: () {},
+          ));
+        }
+
+        // 7. Stravo Server
+        if (!_resolvingStravo && _liveStravoSources.isNotEmpty) {
+          items.add(_buildSourceTile(
+            icon: Icons.rocket_launch_rounded,
+            title: '7. Stravo Server',
+            subtitle: '${_liveStravoSources.length} links available',
+            disabled: false,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveStravoSources.length == 1) {
+                _downloadStravoStream(_liveStravoSources.first);
+              } else {
+                _showDownloadSubSelector('STRAVO DOWNLOADS', _liveStravoSources, isStravo: true);
+              }
+            },
+          ));
+        } else if (_resolvingStravo) {
+          items.add(_buildSourceTile(
+            icon: Icons.rocket_launch_rounded,
+            title: '7. Stravo Server',
+            subtitle: 'Searching streams...',
+            disabled: true,
+            onTap: () {},
+          ));
+        }
+
+        // 8. Torrent Server
+        if (totalTorrents > 0) {
+          items.add(_buildSourceTile(
+            icon: Icons.cloud_circle_rounded,
+            title: '8. Torrent Server',
+            subtitle: '$totalTorrents links available',
+            disabled: true,
+            onTap: () {},
+          ));
+        }
+
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -2153,7 +3310,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'SELECT DOWNLOAD SOURCE',
+                  'SELECT SERVER FOR DOWNLOAD',
                   style: GoogleFonts.outfit(
                     color: Colors.white,
                     fontSize: 16,
@@ -2165,30 +3322,300 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 Flexible(
                   child: ListView.separated(
                     shrinkWrap: true,
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) => items[index],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _downloadSourceUrl(String rawUrl, {String? sourceName}) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Center(
+          child: CircularProgressIndicator(color: AppColors.accentBright),
+        );
+      },
+    );
+    try {
+      final url = _sanitizeUrl(rawUrl);
+      String? resolvedUrl = url;
+      Map<String, String>? headers;
+
+      if (url.contains('movie-scraper-beige.vercel.app')) {
+        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          resolvedUrl = data['url'] as String?;
+          if (resolvedUrl != null) {
+            headers = EmbedResolver.getHeadersForUrl(
+              resolvedUrl,
+              fallbackHeaders: {
+                'Referer': 'https://vidlink.pro/',
+                'Origin': 'https://vidlink.pro',
+              },
+            );
+          }
+        }
+      }
+
+      if (mounted) Navigator.of(context).pop();
+
+      if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+        await DownloadManager.downloadMovie(movie, resolvedUrl, headers: headers);
+        await _checkDownloadStatus();
+        if (mounted) {
+          ScaffoldMessenger.of(this.context).showSnackBar(
+            SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
+          );
+        }
+      } else {
+        throw Exception('Could not resolve download link.');
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Future<void> _downloadCinemmStream(StreamSource source) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return const ResolvingProgressDialog(
+          title: 'Resolving CineMM...',
+          subtitle: 'Extracting Direct Stream',
+        );
+      },
+    );
+    try {
+      final url = _sanitizeUrl(source.url);
+      if (mounted) Navigator.of(context).pop();
+
+      if (url.isNotEmpty) {
+        await DownloadManager.downloadMovie(movie, url);
+        await _checkDownloadStatus();
+        if (mounted) {
+          ScaffoldMessenger.of(this.context).showSnackBar(
+            SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
+          );
+        }
+      } else {
+        throw Exception('Failed to resolve CineMM direct URL.');
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Future<void> _downloadStreamtapeSource(StreamSource source) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Center(
+          child: CircularProgressIndicator(color: AppColors.accentBright),
+        );
+      },
+    );
+    try {
+      final url = _sanitizeUrl(source.url);
+      final resolvedUrl = await _resolveStreamtape(url, sourceName: source.name);
+      if (mounted) Navigator.of(context).pop();
+
+      if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+        await DownloadManager.downloadMovie(movie, resolvedUrl);
+        await _checkDownloadStatus();
+        ScaffoldMessenger.of(this.context).showSnackBar(
+          SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
+        );
+      } else {
+        throw Exception('Failed to resolve Streamtape direct URL.');
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Future<void> _downloadStalkerStream(StreamSource source) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.tealAccent)),
+    );
+    try {
+      final uri = Uri.parse(source.url);
+      final portalId = int.tryParse(uri.host) ?? 1;
+      final cmd = uri.path;
+      final resolved = await StalkerResolver.resolveStream(cmd, portalId, isLive: false);
+      if (mounted) Navigator.of(context).pop();
+
+      await DownloadManager.downloadMovie(movie, resolved.url, headers: resolved.headers);
+      await _checkDownloadStatus();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
+      );
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Stalker download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Future<void> _downloadStravoStream(StreamSource source) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.tealAccent)),
+    );
+    try {
+      final uri = Uri.parse(source.url);
+      final Map<String, String> headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+      };
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 15));
+      if (mounted) Navigator.of(context).pop();
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final streamsList = data['streams'] as List<dynamic>? ?? [];
+        final List<dynamic> validStreams = streamsList.where((s) {
+          final u = s['url']?.toString() ?? '';
+          return u.isNotEmpty && !u.contains('t.me');
+        }).toList();
+
+        if (validStreams.isEmpty) {
+          throw Exception('No downloadable video streams returned by Stravo.');
+        }
+
+        if (mounted) {
+          final selectedStream = await showDialog<dynamic>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text('Select Download Quality', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: validStreams.length,
+                  itemBuilder: (context, index) {
+                    final stream = validStreams[index];
+                    final title = stream['title']?.toString() ?? 'Stream ${index + 1}';
+                    final name = stream['name']?.toString() ?? '';
+                    return ListTile(
+                      title: Text(title, style: const TextStyle(color: Colors.white)),
+                      subtitle: name.isNotEmpty ? Text(name, style: const TextStyle(color: Colors.white54)) : null,
+                      leading: const Icon(Icons.download_rounded, color: Colors.tealAccent),
+                      onTap: () => Navigator.of(context).pop(stream),
+                    );
+                  },
+                ),
+              ),
+            ),
+          );
+
+          if (selectedStream != null) {
+            final dlUrl = selectedStream['url']?.toString() ?? '';
+            final Map<String, String> dlHeaders = {};
+            final behavior = selectedStream['behaviorHints'];
+            if (behavior != null && behavior['proxyHeaders'] != null && behavior['proxyHeaders']['request'] != null) {
+              final reqHeaders = behavior['proxyHeaders']['request'] as Map<String, dynamic>;
+              reqHeaders.forEach((k, v) {
+                dlHeaders[k] = v.toString();
+              });
+            }
+            if (dlHeaders.isEmpty) {
+              dlHeaders.addAll({
+                'Referer': 'https://lok-lok.cc/',
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
+              });
+            }
+
+            await DownloadManager.downloadMovie(movie, dlUrl, headers: dlHeaders.isNotEmpty ? dlHeaders : null);
+            await _checkDownloadStatus();
+            ScaffoldMessenger.of(this.context).showSnackBar(
+              SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
+            );
+          }
+        }
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Stravo download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false}) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
                     itemCount: sources.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
                       final source = sources[index];
                       return ListTile(
-                        leading: Icon(
-                          Icons.download_rounded,
-                          color: AppColors.accentBright,
-                        ),
-                        title: Text(
-                          source.name,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Text(
-                          source.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white30, fontSize: 11),
-                        ),
-                        tileColor: Colors.white.withValues(alpha: 0.03),
+                        leading: Icon(Icons.download_rounded, color: AppColors.accentBright),
+                        title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        tileColor: Colors.white.withOpacity(0.03),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         onTap: () {
-                          Navigator.of(context).pop();
-                          _downloadSource(source);
+                          Navigator.of(ctx).pop();
+                          if (isStreamtape) {
+                            _downloadStreamtapeSource(source);
+                          } else if (isStalker) {
+                            _downloadStalkerStream(source);
+                          } else if (isStravo) {
+                            _downloadStravoStream(source);
+                          } else if (isCinemm) {
+                            _downloadCinemmStream(source);
+                          } else {
+                            _downloadSourceUrl(source.url, sourceName: source.name);
+                          }
                         },
                       );
                     },
@@ -2202,79 +3629,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  Future<void> _downloadSource(StreamSource source) async {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return Center(
-          child: CircularProgressIndicator(color: AppColors.accentBright),
-        );
-      },
-    );
-
-    String? resolvedUrl;
-    Map<String, String>? headers;
-
-    try {
-      final url = _sanitizeUrl(source.url);
-      if (_isStreamtapeSource(source)) {
-        resolvedUrl = await _resolveStreamtape(url, sourceName: source.name);
-      } else if (url.contains('movie-scraper-beige.vercel.app')) {
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          resolvedUrl = data['url'] as String?;
-          if (resolvedUrl != null) {
-            headers = EmbedResolver.getHeadersForUrl(resolvedUrl, fallbackHeaders: {
-              'Referer': 'https://vidlink.pro/',
-              'Origin': 'https://vidlink.pro',
-            });
-          }
-        } else {
-          throw Exception('Server returned status code ${response.statusCode}');
-        }
-      } else {
-        resolvedUrl = url;
-      }
-
-      if (mounted) Navigator.of(context).pop(); // Dismiss progress
-
-      if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
-        await DownloadManager.downloadMovie(movie, resolvedUrl, headers: headers);
-        await _checkDownloadStatus();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
-          );
-        }
-      } else {
-        throw Exception('Could not resolve download link.');
-      }
-    } catch (e) {
-      if (mounted) Navigator.of(context).pop(); // Dismiss progress
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to download: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    }
-  }
-
   Future<void> _startDownload() async {
-    final downloadableSources = _getDownloadableSources();
-    if (downloadableSources.length > 1) {
-      _showDownloadSourceSelector(downloadableSources);
-    } else if (downloadableSources.isNotEmpty) {
-      _downloadSource(downloadableSources.first);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No downloadable sources available for this movie.')),
-      );
-    }
+    _showDownloadSourceSelector();
   }
 
   Future<void> _deleteDownload() async {
@@ -2285,21 +3641,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
           'Delete Download?',
-          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+          style: GoogleFonts.outfit(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         content: const Text('Remove downloaded video from device storage?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white60),
+            ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -2321,15 +3691,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     final lowerTrailer = trailer.toLowerCase();
-    if (lowerTrailer.contains('youtube.com') || lowerTrailer.contains('youtu.be')) {
+    if (lowerTrailer.contains('youtube.com') ||
+        lowerTrailer.contains('youtu.be')) {
       // Direct YouTube webview playback in 720p HD quality
       String embedUrl = trailer;
-      final regExp = RegExp(r'^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#\&\?]*)');
+      final regExp = RegExp(
+        r'^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#\&\?]*)',
+      );
       final match = regExp.firstMatch(trailer);
-      if (match != null && match.group(7) != null && match.group(7)!.length == 11) {
-        embedUrl = 'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=https://ott.redapp.space';
+      if (match != null &&
+          match.group(7) != null &&
+          match.group(7)!.length == 11) {
+        embedUrl =
+            'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=https://ott.redapp.space';
       }
-      
+
       if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -2363,16 +3739,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not load trailer stream. Please try again.')),
+            const SnackBar(
+              content: Text('Could not load trailer stream. Please try again.'),
+            ),
           );
         }
       }
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error playing trailer: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error playing trailer: $e')));
       }
     }
   }
@@ -2390,7 +3768,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   void _shareMovie() {
-    final text = 'Watch "${movie.title}" on GoXio.\n\nDescription: ${movie.description ?? ""}\nIMDb rating: ★${movie.rating.toStringAsFixed(1)}\n\nStream link: ${movie.videoSource ?? ""}';
+    final text =
+        'Watch "${movie.title}" on GoXio.\n\nDescription: ${movie.description ?? ""}\nIMDb rating: ★${movie.rating.toStringAsFixed(1)}\n\nStream link: ${movie.videoSource ?? ""}';
     Share.share(text, subject: 'Check out ${movie.title}');
   }
 
@@ -2440,7 +3819,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     blendMode: BlendMode.dstIn,
                     child: ImageFiltered(
                       imageFilter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
-                      child: MovieImage(source: movie.displayBackdrop, fit: BoxFit.cover),
+                      child: MovieImage(
+                        source: movie.displayBackdrop,
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                   // Gradual bottom fade overlay to merge into page background
@@ -2494,11 +3876,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   top: -20,
                                   bottom: -20,
                                   child: ImageFiltered(
-                                    imageFilter: ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
+                                    imageFilter: ImageFilter.blur(
+                                      sigmaX: 15.0,
+                                      sigmaY: 15.0,
+                                    ),
                                     child: Container(
                                       margin: const EdgeInsets.all(20),
                                       decoration: BoxDecoration(
-                                        color: (movie.posterColor ?? activeTheme.accentBright).withValues(alpha: 0.9),
+                                        color:
+                                            (movie.posterColor ??
+                                                    activeTheme.accentBright)
+                                                .withValues(alpha: 0.9),
                                         borderRadius: BorderRadius.circular(16),
                                       ),
                                     ),
@@ -2512,7 +3900,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   decoration: BoxDecoration(
                                     color: AppColors.surface,
                                     borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: Colors.white.withOpacity(0.12), width: 0.8),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.12),
+                                      width: 0.8,
+                                    ),
                                     boxShadow: const [
                                       BoxShadow(
                                         color: Colors.black54,
@@ -2549,18 +3940,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 8),
-                                  
+
                                   // Combined Meta tags (Year • Runtime • Genre • Content Rating)
                                   Builder(
                                     builder: (context) {
                                       final List<String> detailsParts = [];
-                                      if (movie.year != null) detailsParts.add(movie.year.toString());
-                                      if (movie.runtime != null) detailsParts.add(movie.runtime!);
+                                      if (movie.year != null)
+                                        detailsParts.add(movie.year.toString());
+                                      if (movie.runtime != null)
+                                        detailsParts.add(movie.runtime!);
                                       if (movie.genre.isNotEmpty) {
-                                        detailsParts.add(movie.genre.split(',').first.trim());
+                                        detailsParts.add(
+                                          movie.genre.split(',').first.trim(),
+                                        );
                                       }
                                       return Wrap(
-                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        crossAxisAlignment:
+                                            WrapCrossAlignment.center,
                                         spacing: 6,
                                         runSpacing: 4,
                                         children: [
@@ -2572,13 +3968,29 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                               fontWeight: FontWeight.w400,
                                             ),
                                           ),
-                                          if (movie.contentRating != null && movie.contentRating!.isNotEmpty) ...[
-                                            const Text('•', style: TextStyle(color: Colors.white60)),
+                                          if (movie.contentRating != null &&
+                                              movie
+                                                  .contentRating!
+                                                  .isNotEmpty) ...[
+                                            const Text(
+                                              '•',
+                                              style: TextStyle(
+                                                color: Colors.white60,
+                                              ),
+                                            ),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 5,
+                                                    vertical: 1.5,
+                                                  ),
                                               decoration: BoxDecoration(
-                                                border: Border.all(color: Colors.white54, width: 0.8),
-                                                borderRadius: BorderRadius.circular(4),
+                                                border: Border.all(
+                                                  color: Colors.white54,
+                                                  width: 0.8,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
                                               ),
                                               child: Text(
                                                 movie.contentRating!,
@@ -2592,24 +4004,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                           ],
                                         ],
                                       );
-                                    }
+                                    },
                                   ),
                                   const SizedBox(height: 12),
-                                  
+
                                   // Redesigned IMDb & TMDB Rating Badges side-by-side
                                   Row(
                                     children: [
                                       // IMDb Badge
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFF5C518), // IMDb Gold
-                                          borderRadius: BorderRadius.circular(6),
+                                          color: const Color(
+                                            0xFFF5C518,
+                                          ), // IMDb Gold
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            const Icon(Icons.star_rounded, color: Colors.black, size: 14),
+                                            const Icon(
+                                              Icons.star_rounded,
+                                              color: Colors.black,
+                                              size: 14,
+                                            ),
                                             const SizedBox(width: 3),
                                             Text(
                                               movie.rating.toStringAsFixed(1),
@@ -2620,7 +4043,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                               ),
                                             ),
                                             const SizedBox(width: 4),
-                                            Container(width: 0.8, height: 10, color: Colors.black26),
+                                            Container(
+                                              width: 0.8,
+                                              height: 10,
+                                              color: Colors.black26,
+                                            ),
                                             const SizedBox(width: 4),
                                             Text(
                                               'IMDb',
@@ -2636,19 +4063,34 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                       const SizedBox(width: 8),
                                       // TMDB Badge
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF032541).withOpacity(0.6),
-                                          border: Border.all(color: const Color(0xFF01B4E4), width: 1.2),
-                                          borderRadius: BorderRadius.circular(6),
+                                          color: const Color(
+                                            0xFF032541,
+                                          ).withOpacity(0.6),
+                                          border: Border.all(
+                                            color: const Color(0xFF01B4E4),
+                                            width: 1.2,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            const Icon(Icons.star_rounded, color: Color(0xFF01B4E4), size: 14),
+                                            const Icon(
+                                              Icons.star_rounded,
+                                              color: Color(0xFF01B4E4),
+                                              size: 14,
+                                            ),
                                             const SizedBox(width: 3),
                                             Text(
-                                              (_dynamicRating ?? 6.5).toStringAsFixed(1),
+                                              (_dynamicRating ?? 6.5)
+                                                  .toStringAsFixed(1),
                                               style: GoogleFonts.outfit(
                                                 color: Colors.white,
                                                 fontSize: 11,
@@ -2656,7 +4098,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                               ),
                                             ),
                                             const SizedBox(width: 4),
-                                            Container(width: 0.8, height: 10, color: Colors.white24),
+                                            Container(
+                                              width: 0.8,
+                                              height: 10,
+                                              color: Colors.white24,
+                                            ),
                                             const SizedBox(width: 4),
                                             Text(
                                               'TMDB',
@@ -2672,13 +4118,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 12),
-                                  
+
                                   // Redesigned Popularity Metric
                                   Row(
                                     children: [
                                       const Icon(
                                         Icons.trending_up_rounded,
-                                        color: Color(0xFFA855F7), // Purple trending icon
+                                        color: Color(
+                                          0xFFA855F7,
+                                        ), // Purple trending icon
                                         size: 16,
                                       ),
                                       const SizedBox(width: 6),
@@ -2709,7 +4157,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 height: 48,
                                 decoration: BoxDecoration(
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFFFBBF24), Color(0xFFF59E0B)],
+                                    colors: [
+                                      Color(0xFFFBBF24),
+                                      Color(0xFFF59E0B),
+                                    ],
                                     begin: Alignment.centerLeft,
                                     end: Alignment.centerRight,
                                   ),
@@ -2725,7 +4176,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     ),
                                   ),
                                   onPressed: _handlePlayPressed,
-                                  icon: const Icon(Icons.play_arrow_rounded, color: Colors.black, size: 20),
+                                  icon: const Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: Colors.black,
+                                    size: 20,
+                                  ),
                                   label: Text(
                                     'Watch Now',
                                     style: GoogleFonts.outfit(
@@ -2745,7 +4200,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 height: 48,
                                 decoration: BoxDecoration(
                                   color: Colors.transparent,
-                                  border: Border.all(color: Colors.white24, width: 1.2),
+                                  border: Border.all(
+                                    color: Colors.white24,
+                                    width: 1.2,
+                                  ),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: ElevatedButton.icon(
@@ -2759,8 +4217,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   ),
                                   onPressed: _toggleFavorite,
                                   icon: Icon(
-                                    _isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                                    color: _isFavorite ? Colors.redAccent : Colors.white70,
+                                    _isFavorite
+                                        ? Icons.favorite_rounded
+                                        : Icons.favorite_border_rounded,
+                                    color: _isFavorite
+                                        ? Colors.redAccent
+                                        : Colors.white70,
                                     size: 18,
                                   ),
                                   label: Text(
@@ -2787,16 +4249,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               onTap: _watchTrailer,
                             ),
                             _buildActionButtonCard(
-                              icon: _isDownloaded ? Icons.download_done_rounded : Icons.download_rounded,
+                              icon: _isDownloaded
+                                  ? Icons.download_done_rounded
+                                  : Icons.download_rounded,
                               label: _isDownloaded ? 'Downloaded' : 'Download',
-                              onTap: _isDownloaded ? _deleteDownload : _startDownload,
-                              activeColor: _isDownloaded ? Colors.redAccent : null,
+                              onTap: _isDownloaded
+                                  ? _deleteDownload
+                                  : _startDownload,
+                              activeColor: _isDownloaded
+                                  ? Colors.redAccent
+                                  : null,
                             ),
                             _buildActionButtonCard(
-                              icon: _inWatchlist ? Icons.playlist_add_check_rounded : Icons.playlist_add_rounded,
+                              icon: _inWatchlist
+                                  ? Icons.playlist_add_check_rounded
+                                  : Icons.playlist_add_rounded,
                               label: 'Watchlist',
                               onTap: _toggleWatchlist,
-                              activeColor: _inWatchlist ? activeTheme.accentBright : null,
+                              activeColor: _inWatchlist
+                                  ? activeTheme.accentBright
+                                  : null,
                             ),
                             _buildActionButtonCard(
                               icon: Icons.share_rounded,
@@ -2818,7 +4290,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          movie.description ?? 'Enjoy premium streaming of ${movie.title} in full HD quality.',
+                          movie.description ??
+                              'Enjoy premium streaming of ${movie.title} in full HD quality.',
                           style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 14,
@@ -2831,7 +4304,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         if (_dynamicDirector != null) ...[
                           Text(
                             'Director',
-                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           const SizedBox(height: 10),
                           Row(
@@ -2839,11 +4316,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               CircleAvatar(
                                 radius: 20,
                                 backgroundColor: AppColors.surface,
-                                backgroundImage: _directorProfileUrl != null && _directorProfileUrl!.isNotEmpty
+                                backgroundImage:
+                                    _directorProfileUrl != null &&
+                                        _directorProfileUrl!.isNotEmpty
                                     ? NetworkImage(_directorProfileUrl!)
                                     : null,
-                                child: _directorProfileUrl == null || _directorProfileUrl!.isEmpty
-                                    ? const Icon(Icons.person_rounded, color: Colors.white30)
+                                child:
+                                    _directorProfileUrl == null ||
+                                        _directorProfileUrl!.isEmpty
+                                    ? const Icon(
+                                        Icons.person_rounded,
+                                        color: Colors.white30,
+                                      )
                                     : null,
                               ),
                               const SizedBox(width: 12),
@@ -2852,12 +4336,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 children: [
                                   Text(
                                     _dynamicDirector!,
-                                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
                                     'Director',
-                                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white38,
+                                      fontSize: 12,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -2869,7 +4360,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         if (_dynamicCast.isNotEmpty) ...[
                           Text(
                             'Featured Cast',
-                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           const SizedBox(height: 12),
                           SizedBox(
@@ -2877,7 +4372,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             child: ListView.separated(
                               scrollDirection: Axis.horizontal,
                               itemCount: _dynamicCast.length,
-                              separatorBuilder: (_, __) => const SizedBox(width: 14),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: 14),
                               itemBuilder: (context, index) {
                                 final actor = _dynamicCast[index];
                                 return Column(
@@ -2889,13 +4385,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                       decoration: BoxDecoration(
                                         color: AppColors.surface,
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: Colors.white12, width: 0.8),
+                                        border: Border.all(
+                                          color: Colors.white12,
+                                          width: 0.8,
+                                        ),
                                       ),
                                       child: ClipRRect(
                                         borderRadius: BorderRadius.circular(12),
                                         child: actor.profileUrl.isNotEmpty
-                                            ? MovieImage(source: actor.profileUrl, fit: BoxFit.cover)
-                                            : const Icon(Icons.person_rounded, color: Colors.white30, size: 24),
+                                            ? MovieImage(
+                                                source: actor.profileUrl,
+                                                fit: BoxFit.cover,
+                                              )
+                                            : const Icon(
+                                                Icons.person_rounded,
+                                                color: Colors.white30,
+                                                size: 24,
+                                              ),
                                       ),
                                     ),
                                     const SizedBox(height: 8),
@@ -2906,7 +4412,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 11,
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -2922,7 +4431,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.02),
-                            border: Border.all(color: Colors.white10, width: 0.8),
+                            border: Border.all(
+                              color: Colors.white10,
+                              width: 0.8,
+                            ),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Row(
@@ -2976,7 +4488,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     child: Container(
                       color: Colors.black26,
                       child: IconButton(
-                        icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
+                        icon: const Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                         onPressed: () => Navigator.of(context).pop(),
                       ),
                     ),
@@ -2989,7 +4505,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     child: Container(
                       color: Colors.black26,
                       child: IconButton(
-                        icon: const Icon(Icons.share_rounded, color: Colors.white, size: 18),
+                        icon: const Icon(
+                          Icons.share_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                         onPressed: _shareMovie,
                       ),
                     ),
@@ -3040,7 +4560,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  Widget _buildBottomGridItem({required IconData icon, required String title, required String value}) {
+  Widget _buildBottomGridItem({
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
     return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3066,11 +4590,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Widget _buildVerticalDivider() {
-    return Container(
-      width: 0.8,
-      height: 40,
-      color: Colors.white10,
-    );
+    return Container(width: 0.8, height: 40, color: Colors.white10);
   }
 
   Widget _buildMetaBadge(String label) {

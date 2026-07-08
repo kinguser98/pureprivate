@@ -12,11 +12,13 @@ class StreamSource {
     required this.url,
     this.seeders,
     this.peers,
+    this.headers,
   });
   final String name;
   final String url;
   final int? seeders;
   final int? peers;
+  final Map<String, String>? headers;
 }
 
 class Movie {

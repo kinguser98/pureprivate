@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/special_search_dialog.dart'; // To access StreamSourceInfo and StreamSourceType
+import 'api_service.dart';
 
 class NetmirrorResolver {
   static final List<String> _defaultDomains = [
@@ -120,11 +122,51 @@ class NetmirrorResolver {
     throw Exception('Failed to resolve Netmirror API base URL');
   }
 
+  /// Proxies NetMirror API calls through the server backend to bypass rate limits
+  static Future<String> _proxyRequest(String url, Map<String, String> extraHeaders) async {
+    try {
+      final encodedUrl = Uri.encodeComponent(url);
+      final encodedHeaders = Uri.encodeComponent(jsonEncode(extraHeaders));
+      final proxyUrl = '${ApiService.apiUrl}?action=proxy_fetch&url=$encodedUrl&headers=$encodedHeaders';
+      final res = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) return res.body;
+      throw Exception('Proxy returned ${res.statusCode}');
+    } catch (e) {
+      // Fallback to direct request if proxy fails
+      debugPrint('NetmirrorResolver: Proxy failed, falling back to direct: $e');
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 8);
+      final uri = Uri.parse(url);
+      final req = await client.getUrl(uri);
+      _baseHeaders.forEach((k, v) => req.headers.set(k, v));
+      extraHeaders.forEach((k, v) => req.headers.set(k, v));
+      final res = await req.close();
+      if (res.statusCode == 200) {
+        final body = await res.transform(utf8.decoder).join();
+        client.close();
+        return body;
+      }
+      client.close();
+      throw Exception('Direct request failed: ${res.statusCode}');
+    }
+  }
+
   /// Searches and resolves streams for a given movie title
   static Future<List<StreamSourceInfo>> resolveStreams(String title) async {
     final List<StreamSourceInfo> sources = [];
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 8);
+
+    // Parse series Season and Episode if present, e.g. "Breaking Bad S01E01" -> "Breaking Bad", season=1, episode=1
+    int? season;
+    int? episode;
+    String cleanSearchTitle = title;
+
+    final regExp = RegExp(r'\s+S(\d+)E(\d+)', caseSensitive: false);
+    final match = regExp.firstMatch(title);
+    if (match != null) {
+      season = int.tryParse(match.group(1) ?? '');
+      episode = int.tryParse(match.group(2) ?? '');
+      cleanSearchTitle = title.substring(0, match.start).trim();
+    }
 
     try {
       final apiBase = await _resolveApiBase();
@@ -140,41 +182,55 @@ class NetmirrorResolver {
         final ottVal = entry.value;
 
         try {
-          final searchUrl = '$apiBase/newtv/search.php?s=${Uri.encodeComponent(title)}';
-          final req = await client.getUrl(Uri.parse(searchUrl));
-
-          _baseHeaders.forEach((k, v) {
-            req.headers.set(k, v);
-          });
-          req.headers.set('Ott', ottVal);
-
-          final res = await req.close();
-          if (res.statusCode == 200) {
-            final body = await res.transform(utf8.decoder).join();
+          final searchUrl = '$apiBase/newtv/search.php?s=${Uri.encodeComponent(cleanSearchTitle)}';
+          final body = await _proxyRequest(searchUrl, {'Ott': ottVal});
+          if (body.isNotEmpty) {
             final searchData = jsonDecode(body);
             final results = searchData['searchResult'] as List<dynamic>? ?? [];
 
             for (final result in results) {
-              final contentId = result['id']?.toString() ?? '';
+              final seriesId = result['id']?.toString() ?? '';
               final resultTitle = result['t']?.toString() ?? '';
               
-              if (contentId.isNotEmpty) {
+              if (seriesId.isNotEmpty) {
+                String contentId = seriesId;
+                
+                if (season != null && episode != null) {
+                  // Retrieve the exact episode sub-content ID via post.php and episodes.php
+                  try {
+                    final postUrl = '$apiBase/newtv/post.php?id=$seriesId';
+                    final postBody = await _proxyRequest(postUrl, {'Ott': ottVal});
+                    if (postBody.isNotEmpty) {
+                      final postData = jsonDecode(postBody);
+                      final episodes = await _getAllEpisodes(seriesId, postData, ottVal, apiBase);
+                      
+                      final targetEp = episodes.firstWhere(
+                        (ep) => ep['s'] == season && ep['ep'] == episode,
+                        orElse: () => {},
+                      );
+                      
+                      if (targetEp.isNotEmpty && targetEp['id'] != null) {
+                        contentId = targetEp['id'].toString();
+                      } else {
+                        // Skip if episode is not found in this platform's seasons
+                        continue;
+                      }
+                    } else {
+                      continue;
+                    }
+                  } catch (e) {
+                    debugPrint('NetmirrorResolver series pre-flight error: $e');
+                    continue;
+                  }
+                }
+
                 // Get player link
                 final playerUrl = '$apiBase/newtv/player.php?id=$contentId';
-                final playerReq = await client.getUrl(Uri.parse(playerUrl));
-                
-                _baseHeaders.forEach((k, v) {
-                  playerReq.headers.set(k, v);
-                });
-                playerReq.headers.set('Ott', ottVal);
-                playerReq.headers.set('Usertoken', '');
-
-                final playerRes = await playerReq.close();
-                if (playerRes.statusCode == 200) {
-                  final playerBody = await playerRes.transform(utf8.decoder).join();
+                final playerBody = await _proxyRequest(playerUrl, {'Ott': ottVal, 'Usertoken': ''});
+                if (playerBody.isNotEmpty) {
                   final playerData = jsonDecode(playerBody);
 
-                  if (playerData['status'] == 'ok' && playerData['video_link'] != null) {
+                  if ((playerData['status'] == 'ok' || playerData['status'] == 'otp') && playerData['video_link'] != null) {
                     final videoLink = playerData['video_link']?.toString() ?? '';
                     final referer = playerData['referer']?.toString() ?? apiBase;
                     
@@ -207,10 +263,92 @@ class NetmirrorResolver {
       }
     } catch (e) {
       debugPrint('NetmirrorResolver failed: $e');
-    } finally {
-      client.close();
     }
 
     return sources;
+  }
+
+  static Future<List<Map<String, dynamic>>> _getAllEpisodes(
+    String seriesId,
+    Map<String, dynamic> postData,
+    String ottVal,
+    String apiBase,
+  ) async {
+    final List<Map<String, dynamic>> episodesList = [];
+
+    Future<void> fetchEpisodesPage(String seasonId, int page, int seasonNumber) async {
+      int pg = page;
+      while (true) {
+        final epUrl = '$apiBase/newtv/episodes.php?id=$seasonId&page=$pg';
+        try {
+          final body = await _proxyRequest(epUrl, {'Ott': ottVal});
+          if (body.isNotEmpty) {
+            final data = jsonDecode(body);
+            final eps = data['episodes'] as List<dynamic>? ?? [];
+            
+            for (final ep in eps) {
+              if (ep != null) {
+                final epNum = int.tryParse(ep['ep']?.toString() ?? '') ?? 
+                              int.tryParse(ep['epNum']?.toString().replaceAll('E', '') ?? '') ?? 
+                              0;
+                episodesList.add({
+                  'id': ep['id']?.toString() ?? '',
+                  's': seasonNumber,
+                  'ep': epNum,
+                });
+              }
+            }
+            if (data['nextPageShow'] != 1) {
+              break;
+            }
+            pg++;
+          } else {
+            break;
+          }
+        } catch (_) {
+          break;
+        }
+      }
+    }
+
+    final selectedSeasonIdx = postData['season'] is List 
+        ? (postData['season'] as List).indexWhere((s) => s['selected'] == true) 
+        : -1;
+    final selectedSeasonId = selectedSeasonIdx >= 0 
+        ? postData['season'][selectedSeasonIdx]['id']?.toString() 
+        : postData['nextPageSeason']?.toString();
+    final selectedSeasonNumber = selectedSeasonIdx >= 0 ? selectedSeasonIdx + 1 : 1;
+
+    if (postData['episodes'] is List) {
+      final eps = postData['episodes'] as List;
+      for (final ep in eps) {
+        if (ep != null) {
+          final epNum = int.tryParse(ep['ep']?.toString() ?? '') ?? 
+                        int.tryParse(ep['epNum']?.toString().replaceAll('E', '') ?? '') ?? 
+                        0;
+          episodesList.add({
+            'id': ep['id']?.toString() ?? '',
+            's': selectedSeasonNumber,
+            'ep': epNum,
+          });
+        }
+      }
+    }
+
+    if (postData['nextPageShow'] == 1 && selectedSeasonId != null) {
+      await fetchEpisodesPage(selectedSeasonId, 2, selectedSeasonNumber);
+    }
+
+    if (postData['season'] is List) {
+      final seasons = postData['season'] as List;
+      for (int i = 0; i < seasons.length; i++) {
+        final sId = seasons[i]['id']?.toString();
+        if (sId != null && sId != selectedSeasonId) {
+          await fetchEpisodesPage(sId, 1, i + 1);
+        }
+      }
+    }
+
+    return episodesList;
   }
 }

@@ -851,6 +851,23 @@ class StalkerResolver {
 
   /// Syncs all or selected VOD movies from the Stalker Portal directly to the OTT backend server database.
   /// Bypasses server-side Cloudflare/datacenter IP blocks because this runs from a clean client-side IP.
+  /// Fetches the set of already-synced Stalker VOD IDs from the backend
+  static Future<Set<String>> _fetchExistingVodIds(int portalId) async {
+    try {
+      final url = '${ApiService.apiUrl}?action=get_stalker_vod_ids&portal_id=$portalId';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data is Map && data['success'] == true && data['ids'] is List) {
+          return (data['ids'] as List).map((e) => e.toString()).toSet();
+        }
+      }
+    } catch (e) {
+      debugPrint('StalkerResolver: Failed to fetch existing VOD IDs: $e');
+    }
+    return {};
+  }
+
   static Future<Map<String, dynamic>> syncVodsToServer({
     required int portalId,
     List<String>? selectedCategoryIds,
@@ -864,6 +881,10 @@ class StalkerResolver {
       if (deviceId.contains(' ')) {
         deviceId = deviceId.split(' ').last.trim();
       }
+
+      // Pre-fetch already-synced IDs to skip them during pagination
+      final existingIds = await _fetchExistingVodIds(portalId);
+      debugPrint('StalkerResolver: Loaded ${existingIds.length} existing VOD IDs from backend');
 
       // Auto-retry helper for requests that handle authorization loss or rate limit (429)
        Future<_StalkerHttpResponse> getWithRetry(String url) async {
@@ -939,7 +960,7 @@ class StalkerResolver {
         throw Exception('No VOD categories found on Stalker Portal.');
       }
 
-      final Set<String> seenIds = {};
+      final Set<String> seenIds = Set<String>.from(existingIds);
       int totalImported = 0;
 
       // Filter target categories based on selection or defaults
@@ -1046,10 +1067,10 @@ class StalkerResolver {
               if (id.isNotEmpty && name.isNotEmpty && cmd.isNotEmpty) {
                 if (!seenIdsThisCategory.contains(id)) {
                   seenIdsThisCategory.add(id);
-                  newItemsThisCategoryCount++;
                 }
                 if (!seenIds.contains(id)) {
                   seenIds.add(id);
+                  newItemsThisCategoryCount++;
                   categoryPayload.add({
                     'id': id,
                     'name': name,

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
@@ -16,11 +18,22 @@ class DownloadsScreen extends StatefulWidget {
 class _DownloadsScreenState extends State<DownloadsScreen> {
   List<Movie> _completedDownloads = [];
   bool _loadingCompleted = true;
+  String? _pairedTvDeviceId;
 
   @override
   void initState() {
     super.initState();
     _loadCompleted();
+    _loadPairedTv();
+  }
+
+  Future<void> _loadPairedTv() async {
+    final tvId = await SyncService.getPairedTvDeviceId();
+    if (mounted) {
+      setState(() {
+        _pairedTvDeviceId = tvId;
+      });
+    }
   }
 
   Future<void> _loadCompleted() async {
@@ -100,16 +113,41 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Header Title
+                  // Header Title & Actions Row
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Text(
-                      'Downloads',
-                      style: GoogleFonts.outfit(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Downloads',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            // Pairing Action Button
+                            IconButton(
+                              onPressed: _showPairingDialog,
+                              icon: Icon(
+                                _pairedTvDeviceId != null ? Icons.tv_rounded : Icons.tv_off_rounded,
+                                color: _pairedTvDeviceId != null ? AppColors.accentBright : Colors.white38,
+                              ),
+                              tooltip: 'TV Pairing Settings',
+                            ),
+                            const SizedBox(width: 8),
+                            // Manual Download Add Button
+                            IconButton(
+                              onPressed: _showAddManualDownloadDialog,
+                              icon: const Icon(Icons.add_rounded, color: Colors.white70),
+                              tooltip: 'Add Manual Link',
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
 
@@ -204,9 +242,65 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               '${movie.genre} • ${movie.year ?? 2026} • ${movie.runtime ?? "2h"}',
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
-              onPressed: () => _showDeleteConfirmDialog(movie),
+             trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    Icons.tv_rounded,
+                    color: _pairedTvDeviceId != null ? AppColors.accentBright : Colors.white24,
+                  ),
+                  tooltip: 'Send Download Link to TV',
+                  onPressed: () async {
+                    if (_pairedTvDeviceId == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Please pair with your TV first using the TV icon at the top.'),
+                          backgroundColor: Colors.orangeAccent,
+                        ),
+                      );
+                      return;
+                    }
+                    final task = DownloadManager.getTask(movie.id);
+                    final downloadUrl = task?.downloadUrl ?? movie.videoSource;
+
+                    if (downloadUrl == null || downloadUrl.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('No valid stream source link found for this media.'),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                      return;
+                    }
+
+                    final success = await SyncService.sendRemoteDownload(
+                      title: movie.title,
+                      downloadUrl: downloadUrl,
+                      posterUrl: movie.posterUrl,
+                      tmdbId: movie.tmdbId,
+                      description: movie.description,
+                      genre: movie.genre,
+                      language: movie.language,
+                    );
+
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(success
+                              ? 'Request to download "${movie.title}" sent to TV successfully!'
+                              : 'Failed to send remote download request. Please check connections.'),
+                          backgroundColor: success ? AppColors.accent : Colors.redAccent,
+                        ),
+                      );
+                    }
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                  onPressed: () => _showDeleteConfirmDialog(movie),
+                ),
+              ],
             ),
             onTap: () {
               Navigator.of(context).push(
@@ -331,6 +425,324 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ]
             ],
           ),
+        );
+      },
+    );
+  }
+
+  void _showPairingDialog() {
+    final codeController = TextEditingController();
+    bool pairing = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  Icon(Icons.tv_rounded, color: AppColors.accentBright),
+                  const SizedBox(width: 10),
+                  Text(
+                    'TV Pairing Setup',
+                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_pairedTvDeviceId != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.green.withOpacity(0.2)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Paired with TV Device:\n${_pairedTvDeviceId!.length > 12 ? _pairedTvDeviceId!.substring(0, 12) + "..." : _pairedTvDeviceId}',
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'You can now send any completed download link directly to your TV.',
+                      style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.4),
+                    ),
+                  ] else ...[
+                    const Text(
+                      'Enter the 6-digit pairing code shown on your TV Local Library screen to connect:',
+                      style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: codeController,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2),
+                      maxLength: 6,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: InputDecoration(
+                        hintText: 'SYNC CODE (e.g. A1B2C3)',
+                        hintStyle: TextStyle(color: Colors.white24, letterSpacing: 0, fontSize: 13),
+                        counterText: '',
+                        filled: true,
+                        fillColor: Colors.black26,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white10),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: AppColors.accentBright),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                ),
+                if (_pairedTvDeviceId != null)
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.remove('paired_tv_device_id');
+                      await _loadPairedTv();
+                      if (mounted) Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Unpaired TV successfully.'), backgroundColor: Colors.orangeAccent),
+                      );
+                    },
+                    child: const Text('Unpair', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  )
+                else
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accentBright,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: pairing
+                        ? null
+                        : () async {
+                            final code = codeController.text.trim().toUpperCase();
+                            if (code.length != 6) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Please enter a valid 6-digit sync code.')),
+                              );
+                              return;
+                            }
+                            setDialogState(() => pairing = true);
+                            final success = await SyncService.pairWithTv(code);
+                            setDialogState(() => pairing = false);
+                            
+                            if (success) {
+                              await _loadPairedTv();
+                              if (mounted) Navigator.of(context).pop();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: const Text('Paired with TV successfully!'), backgroundColor: AppColors.accent),
+                              );
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Pairing failed. Please check the sync code and try again.'), backgroundColor: Colors.redAccent),
+                              );
+                            }
+                          },
+                    child: pairing
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                        : const Text('Pair Device', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showAddManualDownloadDialog() {
+    final titleController = TextEditingController();
+    final urlController = TextEditingController();
+    bool sendToTv = _pairedTvDeviceId != null;
+
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  Icon(Icons.add_circle_outline_rounded, color: AppColors.accentBright),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Add Manual Download',
+                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                ],
+              ),
+              content: Form(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: titleController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          labelText: 'Title (Optional)',
+                          labelStyle: const TextStyle(color: Colors.white60),
+                          filled: true,
+                          fillColor: Colors.black26,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.white10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: urlController,
+                        style: const TextStyle(color: Colors.white),
+                        maxLines: 2,
+                        decoration: InputDecoration(
+                          labelText: 'Download / Video Stream URL',
+                          labelStyle: const TextStyle(color: Colors.white60),
+                          filled: true,
+                          fillColor: Colors.black26,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.white10),
+                          ),
+                        ),
+                      ),
+                      if (_pairedTvDeviceId != null) ...[
+                        const SizedBox(height: 16),
+                        CheckboxListTile(
+                          title: const Text('Send request to paired TV', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                          subtitle: const Text('Adds link to TV queue instead of downloading locally', style: TextStyle(color: Colors.white30, fontSize: 10)),
+                          value: sendToTv,
+                          activeColor: AppColors.accentBright,
+                          checkColor: Colors.black,
+                          contentPadding: EdgeInsets.zero,
+                          onChanged: (val) {
+                            setDialogState(() {
+                              sendToTv = val ?? false;
+                            });
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accentBright,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () async {
+                    final downloadUrl = urlController.text.trim();
+                    if (downloadUrl.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please enter a valid video stream URL.')),
+                      );
+                      return;
+                    }
+
+                    String rawTitle = titleController.text.trim();
+                    if (rawTitle.isEmpty) {
+                      rawTitle = 'Link Download ${DateTime.now().toString().substring(11, 16)}';
+                    }
+
+                    Navigator.of(context).pop();
+
+                    if (sendToTv) {
+                      final success = await SyncService.sendRemoteDownload(
+                        title: rawTitle,
+                        downloadUrl: downloadUrl,
+                        posterUrl: '',
+                        genre: 'Manual Link',
+                      );
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(success
+                                ? 'Manual link request sent to TV successfully!'
+                                : 'Failed sending link to TV.'),
+                            backgroundColor: success ? AppColors.accent : Colors.redAccent,
+                          ),
+                        );
+                      }
+                    } else {
+                      final mockMovie = Movie(
+                        id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
+                        title: rawTitle,
+                        genre: 'Manual Link',
+                        rating: 8.0,
+                        posterUrl: '',
+                        backdropUrl: '',
+                        description: 'Manually added video link.',
+                        year: DateTime.now().year,
+                        runtime: 'Unknown',
+                        contentRating: 'PG',
+                        tags: ['Manual Link'],
+                        cast: [],
+                        director: '',
+                        videoSource: downloadUrl,
+                        trailerUrl: '',
+                        castMembers: [],
+                        language: 'English',
+                        streamSources: [
+                          StreamSource(name: 'Manual Download', url: downloadUrl)
+                        ],
+                      );
+
+                      await DownloadManager.downloadMovie(mockMovie, downloadUrl);
+                      _loadCompleted();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Added manual download link: "$rawTitle"'),
+                            backgroundColor: AppColors.accent,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  child: Text(
+                    sendToTv ? 'Send to TV' : 'Download',
+                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );

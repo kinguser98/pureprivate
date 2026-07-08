@@ -221,6 +221,9 @@ abstract final class DownloadManager {
           await downloadsDir.create(recursive: true);
         }
         String ext = p.extension(Uri.parse(downloadUrl).path);
+        if (ext.contains('?')) {
+          ext = ext.split('?').first;
+        }
         if (ext.isEmpty) ext = '.mp4';
         localPath = p.join(downloadsDir.path, 'movie_${movie.id}$ext');
       } else {
@@ -286,7 +289,7 @@ abstract final class DownloadManager {
             await file.delete();
           }
         } catch (e) {
-          debugPrint('Error deleting local files: $e');
+          debugPrint('Error deleting local file: $e');
         }
       }
       downloadTasks.value = List.from(downloadTasks.value)..removeWhere((t) => t.movie.id == movieId);
@@ -357,100 +360,252 @@ abstract final class DownloadManager {
         return;
       }
 
-      // Native platform download with range support
-      final file = File(task.localPath);
-      int fileLength = 0;
-      if (await file.exists()) {
-        fileLength = await file.length();
-      }
-
+      // Native platform download with multi-thread range support (4 segments)
       final client = http.Client();
       _activeClients[movieId] = client;
 
-      final request = http.Request('GET', Uri.parse(task.downloadUrl));
-      if (fileLength > 0) {
-        request.headers['Range'] = 'bytes=$fileLength-';
-      }
-      if (task.headers != null) {
-        request.headers.addAll(task.headers!);
-      }
-
-      final response = await client.send(request);
-      final isRangeResponse = response.statusCode == 206;
-
-      if (response.statusCode != 200 && response.statusCode != 206) {
-        throw Exception('Server returned error status code: ${response.statusCode}');
-      }
-
-      IOSink sink;
-      if (isRangeResponse) {
-        sink = file.openWrite(mode: FileMode.append);
-        task.receivedBytes = fileLength;
-        task.totalBytes = fileLength + (response.contentLength ?? 0);
-      } else {
-        sink = file.openWrite(mode: FileMode.write);
-        task.receivedBytes = 0;
-        task.totalBytes = response.contentLength ?? 0;
-      }
-
-      // Stream loop with manual pause checking
-      int lastNotifyTime = DateTime.now().millisecondsSinceEpoch;
-      double lastProgress = -1.0;
-      final sessionStartBytes = task.receivedBytes;
-      final sessionStartTimeMs = DateTime.now().millisecondsSinceEpoch;
-      final baselineElapsedTime = task.elapsedTime;
+      // 1. Fetch content length and check Range support via a quick request
+      int totalBytes = 0;
+      bool supportsRange = false;
       try {
-        await for (final chunk in response.stream) {
-          if (task.status != DownloadStatus.downloading) {
-            break;
+        final checkReq = http.Request('GET', Uri.parse(task.downloadUrl));
+        checkReq.headers['Range'] = 'bytes=0-0';
+        if (task.headers != null) {
+          checkReq.headers.addAll(task.headers!);
+        }
+        final checkRes = await client.send(checkReq).timeout(const Duration(seconds: 8));
+        if (checkRes.statusCode == 206) {
+          supportsRange = true;
+          final rangeHeader = checkRes.headers['content-range'];
+          if (rangeHeader != null) {
+            final totalStr = rangeHeader.split('/').last.trim();
+            totalBytes = int.tryParse(totalStr) ?? 0;
           }
-          sink.add(chunk);
-          task.receivedBytes += chunk.length;
-          if (task.totalBytes > 0) {
-            task.progress = (task.receivedBytes / task.totalBytes).clamp(0.0, 1.0);
+        }
+        checkRes.stream.listen((_) {}).cancel(); // Clean up response stream
+      } catch (e) {
+        debugPrint('DownloadManager: Range support check failed: $e. Falling back to single thread.');
+      }
+
+      if (supportsRange && totalBytes > 0) {
+        // Multi-threaded segmented download (4 threads)
+        task.totalBytes = totalBytes;
+        const threadCount = 4;
+        final chunkSize = totalBytes ~/ threadCount;
+        final List<Future<void>> segmentFutures = [];
+        final List<http.Client> segmentClients = [];
+        final sessionStartTimeMs = DateTime.now().millisecondsSinceEpoch;
+        final baselineElapsedTime = task.elapsedTime;
+        final startBytes = task.receivedBytes;
+
+        // Tracks progress notifier timing
+        int lastNotifyTime = DateTime.now().millisecondsSinceEpoch;
+        double lastProgress = -1.0;
+
+        for (int i = 0; i < threadCount; i++) {
+          final int segmentIndex = i;
+          final int segmentStart = segmentIndex * chunkSize;
+          final int segmentEnd = (segmentIndex == threadCount - 1) ? totalBytes - 1 : (segmentIndex + 1) * chunkSize - 1;
+
+          final partFile = File('${task.localPath}.part$segmentIndex');
+          int partFileLength = 0;
+          if (await partFile.exists()) {
+            partFileLength = await partFile.length();
           }
-          
-          final now = DateTime.now().millisecondsSinceEpoch;
-          final elapsedMs = now - sessionStartTimeMs;
-          if (elapsedMs > 0) {
-            final sessionBytes = task.receivedBytes - sessionStartBytes;
-            task.speedBytesPerSecond = (sessionBytes * 1000) ~/ elapsedMs;
-            task.elapsedTime = baselineElapsedTime + Duration(milliseconds: elapsedMs);
-            
-            final remainingBytes = task.totalBytes - task.receivedBytes;
-            if (task.speedBytesPerSecond > 0 && remainingBytes > 0) {
-              final etaSeconds = remainingBytes / task.speedBytesPerSecond;
-              task.eta = Duration(seconds: etaSeconds.round());
-            } else {
-              task.eta = Duration.zero;
+
+          final int threadStart = segmentStart + partFileLength;
+          if (threadStart >= segmentEnd) {
+            // Already downloaded this segment
+            continue;
+          }
+
+          final segmentClient = http.Client();
+          segmentClients.add(segmentClient);
+
+          final segmentFuture = Future<void>(() async {
+            final req = http.Request('GET', Uri.parse(task.downloadUrl));
+            req.headers['Range'] = 'bytes=$threadStart-$segmentEnd';
+            if (task.headers != null) {
+              req.headers.addAll(task.headers!);
+            }
+
+            final res = await segmentClient.send(req);
+            if (res.statusCode != 200 && res.statusCode != 206) {
+              throw Exception('Segment $segmentIndex returned error status: ${res.statusCode}');
+            }
+
+            final sink = partFile.openWrite(mode: FileMode.append);
+            try {
+              await for (final chunk in res.stream) {
+                if (task.status != DownloadStatus.downloading) {
+                  break;
+                }
+                sink.add(chunk);
+                task.receivedBytes += chunk.length;
+                
+                if (task.totalBytes > 0) {
+                  task.progress = (task.receivedBytes / task.totalBytes).clamp(0.0, 1.0);
+                }
+
+                final now = DateTime.now().millisecondsSinceEpoch;
+                final elapsedMs = now - sessionStartTimeMs;
+                if (elapsedMs > 0) {
+                  final sessionBytes = task.receivedBytes - startBytes;
+                  task.speedBytesPerSecond = (sessionBytes * 1000) ~/ elapsedMs;
+                  task.elapsedTime = baselineElapsedTime + Duration(milliseconds: elapsedMs);
+
+                  final remainingBytes = task.totalBytes - task.receivedBytes;
+                  if (task.speedBytesPerSecond > 0 && remainingBytes > 0) {
+                    final etaSeconds = remainingBytes / task.speedBytesPerSecond;
+                    task.eta = Duration(seconds: etaSeconds.round());
+                  } else {
+                    task.eta = Duration.zero;
+                  }
+                }
+
+                if (now - lastNotifyTime > 500 || task.progress >= 1.0 || (task.progress - lastProgress).abs() >= 0.01) {
+                  _notify();
+                  lastNotifyTime = now;
+                  lastProgress = task.progress;
+                }
+              }
+            } finally {
+              await sink.close();
+            }
+          });
+
+          segmentFutures.add(segmentFuture);
+        }
+
+        // Wait for all active segments
+        if (segmentFutures.isNotEmpty) {
+          await Future.wait(segmentFutures);
+        }
+
+        // Close segment clients
+        for (final sc in segmentClients) {
+          sc.close();
+        }
+
+        if (task.status == DownloadStatus.downloading) {
+          // Re-assemble segments into single localPath file
+          debugPrint('DownloadManager: Merging segments for $movieId...');
+          final finalFile = File(task.localPath);
+          final sink = finalFile.openWrite(mode: FileMode.write);
+          try {
+            for (int i = 0; i < threadCount; i++) {
+              final partFile = File('${task.localPath}.part$i');
+              if (await partFile.exists()) {
+                await sink.addStream(partFile.openRead());
+                await partFile.delete();
+              }
+            }
+          } finally {
+            await sink.close();
+          }
+
+          task.status = DownloadStatus.completed;
+          task.progress = 1.0;
+          _notify();
+          await saveTasksToPrefs();
+
+          // Save metadata
+          await _saveMetadata(task.movie, task.localPath);
+        }
+      } else {
+        // Fallback to single thread download stream
+        final file = File(task.localPath);
+        int fileLength = 0;
+        if (await file.exists()) {
+          fileLength = await file.length();
+        }
+
+        final request = http.Request('GET', Uri.parse(task.downloadUrl));
+        if (fileLength > 0) {
+          request.headers['Range'] = 'bytes=$fileLength-';
+        }
+        if (task.headers != null) {
+          request.headers.addAll(task.headers!);
+        }
+
+        final response = await client.send(request);
+        final isRangeResponse = response.statusCode == 206;
+
+        if (response.statusCode != 200 && response.statusCode != 206) {
+          throw Exception('Server returned error status code: ${response.statusCode}');
+        }
+
+        IOSink sink;
+        if (isRangeResponse) {
+          sink = file.openWrite(mode: FileMode.append);
+          task.receivedBytes = fileLength;
+          task.totalBytes = fileLength + (response.contentLength ?? 0);
+        } else {
+          sink = file.openWrite(mode: FileMode.write);
+          task.receivedBytes = 0;
+          task.totalBytes = response.contentLength ?? 0;
+        }
+
+        // Stream loop with manual pause checking
+        int lastNotifyTime = DateTime.now().millisecondsSinceEpoch;
+        double lastProgress = -1.0;
+        final sessionStartBytes = task.receivedBytes;
+        final sessionStartTimeMs = DateTime.now().millisecondsSinceEpoch;
+        final baselineElapsedTime = task.elapsedTime;
+        try {
+          await for (final chunk in response.stream) {
+            if (task.status != DownloadStatus.downloading) {
+              break;
+            }
+            sink.add(chunk);
+            task.receivedBytes += chunk.length;
+            if (task.totalBytes > 0) {
+              task.progress = (task.receivedBytes / task.totalBytes).clamp(0.0, 1.0);
+            }
+
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final elapsedMs = now - sessionStartTimeMs;
+            if (elapsedMs > 0) {
+              final sessionBytes = task.receivedBytes - sessionStartBytes;
+              task.speedBytesPerSecond = (sessionBytes * 1000) ~/ elapsedMs;
+              task.elapsedTime = baselineElapsedTime + Duration(milliseconds: elapsedMs);
+
+              final remainingBytes = task.totalBytes - task.receivedBytes;
+              if (task.speedBytesPerSecond > 0 && remainingBytes > 0) {
+                final etaSeconds = remainingBytes / task.speedBytesPerSecond;
+                task.eta = Duration(seconds: etaSeconds.round());
+              } else {
+                task.eta = Duration.zero;
+              }
+            }
+
+            if (now - lastNotifyTime > 500 || task.progress >= 1.0 || (task.progress - lastProgress).abs() >= 0.01) {
+              _notify();
+              lastNotifyTime = now;
+              lastProgress = task.progress;
             }
           }
-          
-          if (now - lastNotifyTime > 500 || task.progress >= 1.0 || (task.progress - lastProgress).abs() >= 0.01) {
-            _notify();
-            lastNotifyTime = now;
-            lastProgress = task.progress;
+        } catch (e) {
+          if (task.status == DownloadStatus.downloading) {
+            rethrow;
           }
+        } finally {
+          await sink.close();
         }
-      } catch (e) {
+
         if (task.status == DownloadStatus.downloading) {
-          rethrow;
+          task.status = DownloadStatus.completed;
+          task.progress = 1.0;
+          _notify();
+          await saveTasksToPrefs();
+
+          // Save metadata
+          await _saveMetadata(task.movie, task.localPath);
         }
-      } finally {
-        await sink.close();
       }
 
       _activeClients.remove(movieId);
-
-      if (task.status == DownloadStatus.downloading) {
-        task.status = DownloadStatus.completed;
-        task.progress = 1.0;
-        _notify();
-        await saveTasksToPrefs();
-
-        // Save metadata for local library
-        await _saveMetadata(task.movie, task.localPath);
-      }
+      client.close();
 
     } catch (e) {
       debugPrint('Download error for movie $movieId: $e');
@@ -559,7 +714,7 @@ abstract final class DownloadManager {
           await file.delete();
         }
       } catch (e) {
-        debugPrint('Error deleting local movie file: $e');
+        debugPrint('Error deleting local file: $e');
       }
     }
 

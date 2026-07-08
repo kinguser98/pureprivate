@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +10,7 @@ import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -21,8 +24,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _torrentioUrlController;
   late final TextEditingController _stravoUrlController;
   late final TextEditingController _netmirrorDomainsController;
+
   bool _isSyncing = false;
   String _syncMessage = '';
+
+
 
   @override
   void initState() {
@@ -52,6 +58,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     }
   }
+
+
 
   Future<void> _loadTorrentioUrl() async {
     final prefs = await SharedPreferences.getInstance();
@@ -774,207 +782,211 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+                  // 2.5. Expansion Addon Settings
+                  Theme(
+                    data: Theme.of(context).copyWith(
+                      dividerColor: Colors.transparent,
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
+                    ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: ExpansionTile(
+                        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        title: Text(
+                          'Addon & Provider Configurations',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        leading: Icon(Icons.extension_rounded, color: AppColors.accentBright),
+                        childrenPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        children: [
+                          // Torrentio Addon URL
+                          Text(
+                            'Torrentio Addon URL',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _torrentioUrlController,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontFamily: 'Consolas',
+                                  ),
+                                  decoration: const InputDecoration(
+                                    hintText: 'https://torrentio.strem.fun',
+                                    hintStyle: TextStyle(color: Colors.white30),
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                  ),
+                                  onSubmitted: _saveTorrentioUrl,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
+                                onPressed: () => _saveTorrentioUrl(_torrentioUrlController.text),
+                                tooltip: 'Save URL',
+                              ),
+                            ],
+                          ),
+                          const Text(
+                            'Customize Torrentio stream provider URL, e.g. when configured with RealDebrid API keys.',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 11,
+                              height: 1.3,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 12),
 
-                  // 2.5. Torrent Settings
-                  _buildSectionHeader('Stremio & Torrent Addons'),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Torrentio Addon URL',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
+                          // Stravo Addon URL
+                          Text(
+                            'Stravo Addon URL',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _torrentioUrlController,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontFamily: 'Consolas',
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _stravoUrlController,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontFamily: 'Consolas',
+                                  ),
+                                  decoration: const InputDecoration(
+                                    hintText: 'https://stravo-clfk.onrender.com/default',
+                                    hintStyle: TextStyle(color: Colors.white30),
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                  ),
+                                  onSubmitted: _saveStravoUrl,
                                 ),
-                                decoration: const InputDecoration(
-                                  hintText: 'https://torrentio.strem.fun',
-                                  hintStyle: TextStyle(color: Colors.white30),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
-                                onSubmitted: _saveTorrentioUrl,
                               ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.save_rounded, color: Colors.white70),
-                              onPressed: () => _saveTorrentioUrl(_torrentioUrlController.text),
-                              tooltip: 'Save URL',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Customize Torrentio stream provider URL, e.g. when configured with RealDebrid API keys.',
-                          style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                            height: 1.4,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Divider(color: Colors.white10),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Stravo Addon URL',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _stravoUrlController,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontFamily: 'Consolas',
-                                ),
-                                decoration: const InputDecoration(
-                                  hintText: 'https://stravo-clfk.onrender.com/default',
-                                  hintStyle: TextStyle(color: Colors.white30),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
-                                onSubmitted: _saveStravoUrl,
+                              IconButton(
+                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
+                                onPressed: () => _saveStravoUrl(_stravoUrlController.text),
+                                tooltip: 'Save URL',
                               ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.save_rounded, color: Colors.white70),
-                              onPressed: () => _saveStravoUrl(_stravoUrlController.text),
-                              tooltip: 'Save URL',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Customize Stravo stream provider base URL.',
-                          style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                            height: 1.4,
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Divider(color: Colors.white10),
-                        const SizedBox(height: 16),
-                        Text(
-                          'NetMirror Domains',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _netmirrorDomainsController,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontFamily: 'Consolas',
-                                ),
-                                decoration: const InputDecoration(
-                                  hintText: 'e.g. https://mobiledetects.com, https://mobiledetect.app',
-                                  hintStyle: TextStyle(color: Colors.white30),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                ),
-                                onSubmitted: _saveNetmirrorDomains,
-                              ),
+                          const Text(
+                            'Customize Stravo stream provider base URL.',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 11,
+                              height: 1.3,
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.save_rounded, color: Colors.white70),
-                              onPressed: () => _saveNetmirrorDomains(_netmirrorDomainsController.text),
-                              tooltip: 'Save Domains',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Comma-separated list of active NetMirror search fallback domains (overrides default domains list).',
-                          style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                            height: 1.4,
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 12),
 
-                  // 2.7. IPTV Sync Settings
-                  _buildSectionHeader('IPTV & Stalker Portal'),
-                  const SizedBox(height: 12),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: Column(
-                      children: [
-                        ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          leading: const Icon(Icons.sync_rounded, color: Colors.greenAccent),
-                          title: Text(
-                            'Sync Stalker Live TV',
-                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                          // NetMirror Domains
+                          Text(
+                            'NetMirror Domains',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                          subtitle: const Text('Fetch and upload all live TV channels to your admin panel', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          onTap: () => _runStalkerSync(false),
-                        ),
-                        const Divider(color: Colors.white10, height: 1),
-                        ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          leading: const Icon(Icons.movie_filter_rounded, color: Colors.indigoAccent),
-                          title: Text(
-                            'Sync Stalker VOD Movies',
-                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _netmirrorDomainsController,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontFamily: 'Consolas',
+                                  ),
+                                  decoration: const InputDecoration(
+                                    hintText: 'e.g. https://mobiledetects.com, https://mobiledetect.app',
+                                    hintStyle: TextStyle(color: Colors.white30),
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                  ),
+                                  onSubmitted: _saveNetmirrorDomains,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
+                                onPressed: () => _saveNetmirrorDomains(_netmirrorDomainsController.text),
+                                tooltip: 'Save Domains',
+                              ),
+                            ],
                           ),
-                          subtitle: const Text('Fetch and upload all portal VOD movies to your admin panel database', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          onTap: () => _runStalkerSync(true),
-                        ),
-                        const Divider(color: Colors.white10, height: 1),
-                        ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          leading: const Icon(Icons.network_check_rounded, color: Colors.orangeAccent),
-                          title: Text(
-                            'Test Portal Connectivity',
-                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                          const Text(
+                            'Comma-separated list of active NetMirror search fallback domains (overrides default domains list).',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 11,
+                              height: 1.3,
+                            ),
                           ),
-                          subtitle: const Text('Test handshake from this device for all portals', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          onTap: _testPortalConnectivity,
-                        ),
-                      ],
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 12),
+
+                          // Stalker Portals Sync
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.sync_rounded, color: Colors.greenAccent, size: 20),
+                            title: Text(
+                              'Sync Stalker Live TV',
+                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            subtitle: const Text('Fetch and upload all live TV channels to your admin panel', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            onTap: () => _runStalkerSync(false),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.movie_filter_rounded, color: Colors.indigoAccent, size: 20),
+                            title: Text(
+                              'Sync Stalker VOD Movies',
+                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            subtitle: const Text('Fetch and upload all portal VOD movies to your admin database', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            onTap: () => _runStalkerSync(true),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.network_check_rounded, color: Colors.orangeAccent, size: 20),
+                            title: Text(
+                              'Test Portal Connectivity',
+                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            subtitle: const Text('Test handshake from this device for all portals', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            onTap: _testPortalConnectivity,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -1017,10 +1029,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           subtitle: const Text('Reset watch records and local cache', style: TextStyle(color: Colors.white38, fontSize: 12)),
                           onTap: _clearCache,
                         ),
+                        const Divider(color: Colors.white10, height: 1),
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          leading: const Icon(Icons.cached_rounded, color: Colors.orangeAccent),
+                          title: Text(
+                            'Reset Scraper Cache',
+                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text('Force re-download of all scraper scripts', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                          onTap: () async {
+                            await WebViewScraperExecutor.clearScriptCache();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Scraper cache cleared')),
+                              );
+                            }
+                          },
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 24),
+
+
 
                   // About Branding
                   Center(
@@ -1099,7 +1131,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
 }
+
+
 
 class MobileCategoryPickerDialog extends StatefulWidget {
   final List<Map<String, String>> categories;
@@ -1215,6 +1250,7 @@ class _MobileCategoryPickerDialogState extends State<MobileCategoryPickerDialog>
       ],
     );
   }
+
 }
 
 class MobilePortalPickerDialog extends StatelessWidget {
@@ -1266,3 +1302,18 @@ class MobilePortalPickerDialog extends StatelessWidget {
     );
   }
 }
+
+class BorderBorder extends ShapeBorder {
+  const BorderBorder();
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => Path();
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) => Path();
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+  @override
+  ShapeBorder scale(double t) => this;
+}
+

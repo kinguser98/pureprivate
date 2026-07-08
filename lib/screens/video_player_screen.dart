@@ -228,7 +228,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _bindStreams() {
     _player.stream.playing.listen((v) {
-      if (mounted) setState(() => _playing = v);
+      if (mounted) {
+        setState(() => _playing = v);
+        if (v) {
+          _armHideControls();
+        }
+      }
     });
     _player.stream.position.listen((v) {
       if (mounted) {
@@ -251,7 +256,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (mounted) setState(() => _duration = v);
     });
     _player.stream.buffering.listen((v) {
-      if (mounted) setState(() => _buffering = v);
+      if (mounted) {
+        setState(() => _buffering = v);
+        if (!v && _playing) {
+          _armHideControls();
+        }
+      }
     });
     _player.stream.volume.listen((v) {
       if (mounted) setState(() => _volume = v);
@@ -986,12 +996,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _showOnlineSubtitleImportDialog() {
     final textController = TextEditingController();
+    final manualSearchController = TextEditingController();
     int activeTab = 0; // 0: OpenSubtitles Search, 1: Manual URL
     bool loading = false;
+    bool isSearchingTmdb = false;
+    List<dynamic> tmdbResults = [];
     List<dynamic> subtitleTracks = [];
     Map<String, List<dynamic>> groupedTracks = {};
     String? expandedLang;
     String errorMsg = '';
+    String? currentImdbId = widget.imdbId;
+    String currentMovieTitle = widget.title ?? 'Current Video';
 
     final langNames = {
       'eng': 'English',
@@ -1043,10 +1058,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             Future<void> fetchSubtitles() async {
-              final imdb = widget.imdbId;
+              final imdb = currentImdbId;
               if (imdb == null || imdb.isEmpty || imdb == 'null') {
                 setDialogState(() {
-                  errorMsg = 'No IMDb ID available for this movie.';
+                  errorMsg = 'No IMDb ID available. Search movie title above.';
                 });
                 return;
               }
@@ -1054,10 +1069,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               setDialogState(() {
                 loading = true;
                 errorMsg = '';
+                subtitleTracks = [];
+                groupedTracks = {};
               });
 
               try {
-                final url = 'https://opensubtitles-v3.strem.io/subtitles/movie/$imdb.json';
+                String type = 'movie';
+                String finalImdb = imdb;
+                if (imdb.contains(':')) {
+                  type = 'series';
+                }
+                final url = 'https://opensubtitles-v3.strem.io/subtitles/$type/$finalImdb.json';
                 debugPrint('Querying subtitles from stremio API: $url');
                 final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
                 if (response.statusCode == 200) {
@@ -1090,8 +1112,148 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               }
             }
 
+            Future<void> searchTmdb(String query) async {
+              setDialogState(() {
+                isSearchingTmdb = true;
+                errorMsg = '';
+                tmdbResults = [];
+              });
+
+              try {
+                final searchUrl = 'https://api.themoviedb.org/3/search/multi?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=${Uri.encodeComponent(query)}';
+                final res = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 8));
+                if (res.statusCode == 200) {
+                  final searchData = jsonDecode(res.body);
+                  final results = searchData['results'] as List<dynamic>? ?? [];
+                  setDialogState(() {
+                    tmdbResults = results.where((item) => item['media_type'] == 'movie' || item['media_type'] == 'tv').toList();
+                    isSearchingTmdb = false;
+                    if (tmdbResults.isEmpty) {
+                      errorMsg = 'No matches found on TMDB for "$query".';
+                    }
+                  });
+                } else {
+                  throw Exception('TMDB error ${res.statusCode}');
+                }
+              } catch (e) {
+                debugPrint('TMDB Search failed: $e');
+                setDialogState(() {
+                  isSearchingTmdb = false;
+                  errorMsg = 'Search failed: $e';
+                });
+              }
+            }
+
+            Future<void> selectTmdbItem(dynamic item) async {
+              setDialogState(() {
+                loading = true;
+                errorMsg = '';
+                tmdbResults = [];
+              });
+
+              final tmdbId = item['id']?.toString();
+              final isTv = item['media_type'] == 'tv';
+              final title = item['title'] ?? item['name'] ?? 'Selected Title';
+              final release = item['release_date'] ?? item['first_air_date'] ?? '';
+              final year = release.length >= 4 ? release.substring(0, 4) : '';
+
+              try {
+                String? imdb;
+                if (isTv) {
+                  // Prompt for season/episode
+                  final formKey = GlobalKey<FormState>();
+                  final seasonController = TextEditingController(text: '1');
+                  final episodeController = TextEditingController(text: '1');
+                  final confirmed = await showDialog<bool>(
+                    context: this.context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: AppColors.surface,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      title: const Text('TV Series Episode Details', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                      content: Form(
+                        key: formKey,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: seasonController,
+                                keyboardType: TextInputType.number,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(labelText: 'Season', labelStyle: TextStyle(color: Colors.white70)),
+                                validator: (v) => (v == null || int.tryParse(v) == null) ? 'Invalid' : null,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: TextFormField(
+                                controller: episodeController,
+                                keyboardType: TextInputType.number,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(labelText: 'Episode', labelStyle: TextStyle(color: Colors.white70)),
+                                validator: (v) => (v == null || int.tryParse(v) == null) ? 'Invalid' : null,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentBright),
+                          onPressed: () {
+                            if (formKey.currentState!.validate()) Navigator.of(ctx).pop(true);
+                          },
+                          child: const Text('Confirm', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (confirmed != true) {
+                    setDialogState(() => loading = false);
+                    return;
+                  }
+
+                  final season = int.parse(seasonController.text.trim());
+                  final episode = int.parse(episodeController.text.trim());
+
+                  final extUrl = 'https://api.themoviedb.org/3/tv/$tmdbId/external_ids?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
+                  final res = await http.get(Uri.parse(extUrl)).timeout(const Duration(seconds: 8));
+                  if (res.statusCode == 200) {
+                    final extData = jsonDecode(res.body);
+                    final showImdb = extData['imdb_id']?.toString();
+                    if (showImdb != null && showImdb.isNotEmpty && showImdb != 'null') {
+                      imdb = '$showImdb:$season:$episode';
+                    }
+                  }
+                } else {
+                  final detailUrl = 'https://api.themoviedb.org/3/movie/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
+                  final res = await http.get(Uri.parse(detailUrl)).timeout(const Duration(seconds: 8));
+                  if (res.statusCode == 200) {
+                    final detailData = jsonDecode(res.body);
+                    imdb = detailData['imdb_id']?.toString();
+                  }
+                }
+
+                if (imdb != null && imdb.isNotEmpty && imdb != 'null') {
+                  currentImdbId = imdb;
+                  currentMovieTitle = year.isNotEmpty ? '$title ($year)' : title;
+                  await fetchSubtitles();
+                } else {
+                  throw Exception('IMDb ID not found for this title.');
+                }
+              } catch (e) {
+                debugPrint('Resolving IMDb ID failed: $e');
+                setDialogState(() {
+                  loading = false;
+                  errorMsg = 'Could not resolve IMDb ID: $e';
+                });
+              }
+            }
+
             // Auto-trigger subtitles fetch on first load of the OpenSubtitles search tab
-            if (activeTab == 0 && subtitleTracks.isEmpty && !loading && errorMsg.isEmpty) {
+            if (activeTab == 0 && currentImdbId != null && subtitleTracks.isEmpty && !loading && errorMsg.isEmpty && tmdbResults.isEmpty && !isSearchingTmdb) {
               Future.microtask(() => fetchSubtitles());
             }
 
@@ -1155,31 +1317,144 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 ],
               ),
               content: SizedBox(
-                width: 450,
-                height: 180, // Landscape compatible size
+                width: 500,
+                height: 250,
                 child: activeTab == 0
-                    ? _buildOpenSubtitlesTab(
-                        loading: loading,
-                        errorMsg: errorMsg,
-                        groupedTracks: groupedTracks,
-                        expandedLang: expandedLang,
-                        langNames: langNames,
-                        onRetry: fetchSubtitles,
-                        onLangTap: (lang) {
-                          setDialogState(() {
-                            expandedLang = expandedLang == lang ? null : lang;
-                          });
-                        },
-                        onTrackSelected: (track, displayLang) {
-                          final subUrl = track['url']?.toString() ?? '';
-                          if (subUrl.isNotEmpty) {
-                            _player.setSubtitleTrack(SubtitleTrack.uri(subUrl, title: 'OpenSubtitles: $displayLang', language: displayLang));
-                            Navigator.of(context).pop();
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              SnackBar(content: Text('OpenSubtitles ($displayLang) loaded successfully.')),
-                            );
-                          }
-                        },
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Search row
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: manualSearchController,
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  decoration: InputDecoration(
+                                    hintText: 'Search movie/show title manually...',
+                                    hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                                    filled: true,
+                                    fillColor: Colors.black26,
+                                    isDense: true,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  ),
+                                  onSubmitted: (q) {
+                                    if (q.trim().isNotEmpty) searchTmdb(q.trim());
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                constraints: const BoxConstraints(),
+                                padding: EdgeInsets.zero,
+                                icon: const Icon(Icons.search_rounded, color: Colors.tealAccent, size: 22),
+                                onPressed: () {
+                                  final q = manualSearchController.text.trim();
+                                  if (q.isNotEmpty) searchTmdb(q);
+                                },
+                              ),
+                              if (tmdbResults.isNotEmpty || manualSearchController.text.isNotEmpty)
+                                IconButton(
+                                  constraints: const BoxConstraints(),
+                                  padding: const EdgeInsets.only(left: 8),
+                                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 22),
+                                  onPressed: () {
+                                    manualSearchController.clear();
+                                    setDialogState(() {
+                                      tmdbResults = [];
+                                      errorMsg = '';
+                                    });
+                                    fetchSubtitles();
+                                  },
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          // Content list
+                          Expanded(
+                            child: isSearchingTmdb
+                                ? const Center(
+                                    child: CircularProgressIndicator(color: Colors.tealAccent),
+                                  )
+                                : (tmdbResults.isNotEmpty
+                                    ? ListView.separated(
+                                        itemCount: tmdbResults.length,
+                                        separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
+                                        itemBuilder: (context, index) {
+                                          final item = tmdbResults[index];
+                                          final title = item['title'] ?? item['name'] ?? 'Untitled';
+                                          final release = item['release_date'] ?? item['first_air_date'] ?? '';
+                                          final year = release.length >= 4 ? release.substring(0, 4) : 'N/A';
+                                          final poster = item['poster_path']?.toString() ?? '';
+                                          final type = item['media_type'] == 'tv' ? 'TV' : 'Movie';
+
+                                          return ListTile(
+                                            dense: true,
+                                            contentPadding: EdgeInsets.zero,
+                                            leading: poster.isNotEmpty
+                                                ? ClipRRect(
+                                                    borderRadius: BorderRadius.circular(4),
+                                                    child: Image.network(
+                                                      'https://image.tmdb.org/t/p/w92$poster',
+                                                      width: 32,
+                                                      height: 48,
+                                                      fit: BoxFit.cover,
+                                                      errorBuilder: (_, __, ___) => const Icon(Icons.movie, size: 32, color: Colors.white24),
+                                                    ),
+                                                  )
+                                                : const Icon(Icons.movie, size: 32, color: Colors.white24),
+                                            title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                            subtitle: Text('$type • $year', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                            onTap: () => selectTmdbItem(item),
+                                          );
+                                        },
+                                      )
+                                    : Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                                        children: [
+                                          if (currentImdbId != null && currentImdbId!.isNotEmpty)
+                                            Padding(
+                                              padding: const EdgeInsets.only(bottom: 6),
+                                              child: Text(
+                                                'Subtitles for: $currentMovieTitle',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          Expanded(
+                                            child: _buildOpenSubtitlesTab(
+                                              loading: loading,
+                                              errorMsg: errorMsg,
+                                              groupedTracks: groupedTracks,
+                                              expandedLang: expandedLang,
+                                              langNames: langNames,
+                                              onRetry: fetchSubtitles,
+                                              onLangTap: (lang) {
+                                                setDialogState(() {
+                                                  expandedLang = expandedLang == lang ? null : lang;
+                                                });
+                                              },
+                                              onTrackSelected: (track, displayLang) {
+                                                final subUrl = track['url']?.toString() ?? '';
+                                                if (subUrl.isNotEmpty) {
+                                                  _player.setSubtitleTrack(SubtitleTrack.uri(subUrl, title: 'OpenSubtitles: $displayLang', language: displayLang));
+                                                  Navigator.of(context).pop();
+                                                  ScaffoldMessenger.of(this.context).showSnackBar(
+                                                    SnackBar(content: Text('OpenSubtitles ($displayLang) loaded successfully.')),
+                                                  );
+                                                }
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      )),
+                          ),
+                        ],
                       )
                     : Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -1199,9 +1474,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                               filled: true,
                               fillColor: Colors.black26,
                               border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide.none,
-                              ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: BorderSide.none),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                             ),
                           ),

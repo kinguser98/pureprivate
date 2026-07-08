@@ -20,7 +20,8 @@ import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final Function(int)? onSwitchTab;
+  const HomeScreen({super.key, this.onSwitchTab});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -40,8 +41,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _carouselTimer;
   final PageController _carouselController = PageController(viewportFraction: 0.62);
 
-  final List<String> _categoryTabs = const ['New', 'Top Rated', 'Movies'];
-  String _selectedCategoryTab = 'New';
+  final List<String> _categoryTabs = const ['Movies', 'Live TV', 'Series', 'Library'];
+  String _selectedCategoryTab = 'Movies';
 
   @override
   void initState() {
@@ -417,30 +418,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<Movie> _getCarouselMovies() {
-    List<Movie> list;
-    switch (_selectedCategoryTab) {
-      case 'Top Rated':
-        list = MockCatalog.topRated;
-        break;
-      case 'Movies':
-        list = MockCatalog.allMovies;
-        break;
-      case 'New':
-      default:
-        list = MockCatalog.recentlyReleased.isNotEmpty ? MockCatalog.recentlyReleased : _featuredMovies;
-        break;
-    }
-    return list.take(6).toList();
+    return MockCatalog.recentlyReleased.isNotEmpty ? MockCatalog.recentlyReleased : _featuredMovies;
   }
 
   void _onCategoryTabSelected(String tab) {
-    if (_selectedCategoryTab == tab) return;
-    setState(() {
-      _selectedCategoryTab = tab;
-      _carouselIndex = 0;
-    });
-    if (_carouselController.hasClients) {
-      _carouselController.jumpToPage(0);
+    if (tab == 'Movies') {
+      widget.onSwitchTab?.call(1);
+    } else if (tab == 'Live TV') {
+      widget.onSwitchTab?.call(2);
+    } else if (tab == 'Series') {
+      showDialog<void>(
+        context: context,
+        builder: (context) => const SpecialSearchDialog(isSeriesSearch: true),
+      );
+    } else if (tab == 'Library') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+      );
     }
   }
 
@@ -580,18 +574,16 @@ class _HomeScreenState extends State<HomeScreen> {
               itemCount: _categoryTabs.length,
               itemBuilder: (context, index) {
                 final tab = _categoryTabs[index];
-                final isSelected = _selectedCategoryTab == tab;
                 return GestureDetector(
                   onTap: () => _onCategoryTabSelected(tab),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
+                  child: Container(
                     margin: const EdgeInsets.only(right: 10),
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                     decoration: BoxDecoration(
-                      color: isSelected ? Colors.white : Colors.transparent,
+                      color: Colors.white.withOpacity(0.04),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
-                        color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.08),
+                        color: Colors.white.withOpacity(0.08),
                         width: 1,
                       ),
                     ),
@@ -599,9 +591,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Text(
                         tab,
                         style: GoogleFonts.outfit(
-                          color: isSelected ? Colors.black : Colors.white,
+                          color: Colors.white,
                           fontSize: 14,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
@@ -665,17 +657,23 @@ class _HomeScreenState extends State<HomeScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(
-            carouselMovies.length,
-            (i) => AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              width: _carouselIndex == i ? 16 : 6,
-              height: 6,
-              margin: const EdgeInsets.symmetric(horizontal: 3.0),
-              decoration: BoxDecoration(
-                color: _carouselIndex == i ? Colors.white : Colors.white.withValues(alpha: 0.24),
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
+            carouselMovies.length > 5 ? 5 : carouselMovies.length,
+            (index) {
+              final actualIndex = carouselMovies.length > 5
+                  ? index + (_carouselIndex - 2).clamp(0, carouselMovies.length - 5)
+                  : index;
+              final isSelected = _carouselIndex == actualIndex;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: isSelected ? 16 : 6,
+                height: 6,
+                margin: const EdgeInsets.symmetric(horizontal: 3.0),
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.24),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              );
+            },
           ),
         ),
       ],

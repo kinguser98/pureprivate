@@ -18,12 +18,21 @@ class NavigationHolder extends StatefulWidget {
 class _NavigationHolderState extends State<NavigationHolder> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    HomeScreen(key: ValueKey('home')),
-    AllMoviesScreen(key: ValueKey('search')),
-    LiveTvScreen(key: ValueKey('livetv')),
-    FavoritesScreen(key: ValueKey('favorites')),
-    SettingsScreen(key: ValueKey('settings')),
+  List<Widget> get _screens => [
+    HomeScreen(
+      key: const ValueKey('home'),
+      onSwitchTab: (index) {
+        if (mounted) {
+          setState(() {
+            _currentIndex = index;
+          });
+        }
+      },
+    ),
+    const AllMoviesScreen(key: ValueKey('search')),
+    const LiveTvScreen(key: ValueKey('livetv')),
+    const FavoritesScreen(key: ValueKey('favorites')),
+    const SettingsScreen(key: ValueKey('settings')),
   ];
 
   @override
