@@ -1474,12 +1474,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
       try {
         if (source.startsWith('stalker://')) {
-          final uri = Uri.parse(source);
-          portalId = int.tryParse(uri.host) ?? 1;
-          stalkerCmd = uri.path;
-          if (uri.query.isNotEmpty) {
-            stalkerCmd += '?${uri.query}';
-          }
+          final withoutScheme = source.substring(9);
+          final portalMatch = RegExp(r'^(\d+)').firstMatch(withoutScheme);
+          portalId = int.tryParse(portalMatch?.group(1) ?? '1') ?? 1;
+          stalkerCmd = portalMatch != null ? withoutScheme.substring(portalMatch.group(0)!.length) : withoutScheme;
         }
         final stalkerStream = await StalkerResolver.resolveStream(
           stalkerCmd,

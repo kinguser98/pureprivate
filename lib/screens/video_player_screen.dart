@@ -193,10 +193,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _loadFavoriteStatus();
     
     // Force Landscape for video player
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    });
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _player = Player();
