@@ -48,6 +48,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   StreamSourceType? _activeGroupType; // server grouping selection
   String? _selectedAddonSubGroup;
   int _maxSourceSizeMb = 0;
+  List<String> _sourceOrder = [];
 
   // Series state and dynamic episode loaders
   bool _isSeriesSearch = false;
@@ -72,18 +73,25 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _loadSourceVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _showVidlink = prefs.getBool('source_show_vidlink') ?? true;
-        _showNetmirror = prefs.getBool('source_show_netmirror') ?? true;
-        _showStravo = prefs.getBool('source_show_stravo') ?? true;
-        _showStalker = prefs.getBool('source_show_stalker') ?? true;
-        _showCinemm = prefs.getBool('source_show_cinemm') ?? true;
-        _showCastle = prefs.getBool('source_show_castle') ?? true;
-        _showTorrent = prefs.getBool('source_show_torrent') ?? true;
-        _showStremioAddon = prefs.getBool('source_show_stremioAddon') ?? true;
-        _maxSourceSizeMb = prefs.getInt('max_source_size_mb') ?? 0;
+        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon'];
+        _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
+        _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
+        _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
+        _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
+        _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
+        _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
+        _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
+        _showStremioAddon = cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true);
+        _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
       });
+    }
+    // Load source order from cloud
+    final order = await SyncService.fetchSourceOrder();
+    if (order.isNotEmpty && mounted) {
+      setState(() => _sourceOrder = order);
     }
   }
 
@@ -753,33 +761,48 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(utf8.decode(response.bodyBytes));
-        final movies = data['movies'] as List<dynamic>? ?? [];
+        var movies = data['movies'] as List<dynamic>? ?? [];
+
+        if (movies.isEmpty && title.isNotEmpty) {
+          try {
+            const fallbackUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&category=General&page=1';
+            final fallRes = await http.get(Uri.parse(fallbackUrl)).timeout(const Duration(seconds: 8));
+            if (fallRes.statusCode == 200) {
+              final fallData = json.decode(utf8.decode(fallRes.bodyBytes));
+              final fallMovies = fallData['movies'] as List<dynamic>? ?? [];
+              if (fallMovies.isNotEmpty) {
+                movies = fallMovies;
+              }
+            }
+          } catch (_) {}
+        }
+
         final List<StreamSourceInfo> sources = [];
 
         for (final item in movies) {
-          final portalId =
-              int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
+          final rawPortalId = item['portal_id'];
+          final portalId = rawPortalId != null 
+              ? (int.tryParse(rawPortalId.toString()) ?? 1) 
+              : 1;
           final cmd = item['cmd']?.toString() ?? '';
           final name = item['name']?.toString() ?? 'Stalker VOD';
-          final portalName = item['portal_name']?.toString() ?? 'Portal $portalId';
+          final rawPortalName = item['portal_name']?.toString() ?? '';
+          final portalName = rawPortalName.isNotEmpty ? rawPortalName : (rawPortalId != null ? 'Portal $portalId' : 'Stalker');
 
           if (cmd.isNotEmpty) {
-            // As requested, focus on Portal 2 VODs only (Airtel)
-            if (true) {
-              final isDup =
-                  _resolvedSources.any(
-                    (s) => s.url == 'stalker://$portalId$cmd',
-                  ) ||
-                  sources.any((s) => s.url == 'stalker://$portalId$cmd');
-              if (!isDup) {
-                sources.add(
-                  StreamSourceInfo(
-                    name: '[$portalName] $name',
-                    url: 'stalker://$portalId$cmd',
-                    type: StreamSourceType.stalker,
-                  ),
-                );
-              }
+            final isDup =
+                _resolvedSources.any(
+                  (s) => s.url == 'stalker://$portalId$cmd',
+                ) ||
+                sources.any((s) => s.url == 'stalker://$portalId$cmd');
+            if (!isDup) {
+              sources.add(
+                StreamSourceInfo(
+                  name: '[$portalName] $name',
+                  url: 'stalker://$portalId$cmd',
+                  type: StreamSourceType.stalker,
+                ),
+              );
             }
           }
         }
@@ -1059,7 +1082,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveStremioAddons(String imdbId, {int? season, int? episode}) async {
     try {
-      final List<String> addonUrls = await SyncService.fetchStremioAddons();
+      final List<String> addonUrls = await SyncService.fetchMergedStremioAddons();
       if (addonUrls.isEmpty) return;
 
       final List<StreamSourceInfo> sources = [];
@@ -1113,7 +1136,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     int? episode,
   }) async {
     try {
-      final List<Map<String, dynamic>> addons = await SyncService.fetchNuveoAddons();
+      final List<Map<String, dynamic>> addons = await SyncService.fetchMergedNuveoAddons();
       if (addons.isEmpty) return;
 
       final List<StreamSourceInfo> sources = [];
@@ -2721,6 +2744,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Widget _buildStreamSelectionContent(String movieTitle, String? posterPath) {
     final filteredSources = _applySizeFilter(_resolvedSources);
+    final Set<String> enabledKeys = _sourceOrder.toSet();
+    final Map<String, int> orderPos = {};
+    for (int i = 0; i < _sourceOrder.length; i++) {
+      orderPos[_sourceOrder[i]] = i + 1;
+    }
+    int pos(String key) => orderPos[key] ?? 99;
     final stravoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stravo)
         .toList();
@@ -2764,10 +2793,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     if (_activeGroupType == null) {
       final List<Widget> groupCards = [];
 
-      // 1. VidLink
-      if (_showVidlink && (_resolvingStreams || vidlinkStreams.isNotEmpty)) {
+      // VidLink
+      if (_showVidlink && (_resolvingStreams || vidlinkStreams.isNotEmpty) && enabledKeys.contains('vidlink')) {
         groupCards.add(_buildServerGroupCard(
-          title: '1. Vidlink Server',
+          title: '${pos('vidlink')}. Vidlink Server',
           subtitle: _resolvingStreams && vidlinkStreams.isEmpty
               ? 'Resolving stream...'
               : (vidlinkStreams.isNotEmpty
@@ -2782,10 +2811,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 2. NetMirror
-      if (_showNetmirror && (_resolvingStreams || netmirrorStreams.isNotEmpty)) {
+      // NetMirror
+      if (_showNetmirror && (_resolvingStreams || netmirrorStreams.isNotEmpty) && enabledKeys.contains('netmirror')) {
         groupCards.add(_buildServerGroupCard(
-          title: '2. NetMirror Server (NF/PV/HS)',
+          title: '${pos('netmirror')}. NetMirror Server',
           subtitle: _resolvingStreams && netmirrorStreams.isEmpty
               ? 'Searching NetMirror...'
               : (netmirrorStreams.isNotEmpty
@@ -2801,10 +2830,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 3. Stravo
-      if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty)) {
+      // Stravo
+      if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
         groupCards.add(_buildServerGroupCard(
-          title: '3. Stravo Server',
+          title: '${pos('stravo')}. Stravo Server',
           subtitle: _resolvingStreams && stravoStreams.isEmpty
               ? 'Searching streams...'
               : '${stravoStreams.length} links available',
@@ -2818,10 +2847,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 4. Stalker
-      if (_showStalker && (_resolvingStreams || stalkerStreams.isNotEmpty)) {
+      // Stalker
+      if (_showStalker && (_resolvingStreams || stalkerStreams.isNotEmpty) && enabledKeys.contains('stalker')) {
         groupCards.add(_buildServerGroupCard(
-          title: '4. Stalker VOD Server (Portal 2)',
+          title: '${pos('stalker')}. Stalker VOD Server',
           subtitle: _resolvingStreams && stalkerStreams.isEmpty
               ? 'Searching local library...'
               : (stalkerStreams.isNotEmpty
@@ -2837,10 +2866,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 5. CineMM
-      if (_showCinemm && (_resolvingStreams || cinemmStreams.isNotEmpty)) {
+      // CineMM
+      if (_showCinemm && (_resolvingStreams || cinemmStreams.isNotEmpty) && enabledKeys.contains('cinemm')) {
         groupCards.add(_buildServerGroupCard(
-          title: '5. CineMM Server',
+          title: '${pos('cinemm')}. CineMM Server',
           subtitle: _resolvingStreams && cinemmStreams.isEmpty
               ? 'Searching CineMM...'
               : (cinemmStreams.isNotEmpty
@@ -2856,10 +2885,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 6. Castle (movies only)
-      if (_showCastle && !widget.isSeriesSearch && (_resolvingStreams || castleStreams.isNotEmpty)) {
+      // Castle (movies only)
+      if (_showCastle && !widget.isSeriesSearch && (_resolvingStreams || castleStreams.isNotEmpty) && enabledKeys.contains('castle')) {
         groupCards.add(_buildServerGroupCard(
-          title: '6. Castle TV Server',
+          title: '${pos('castle')}. Castle TV Server',
           subtitle: _resolvingStreams && castleStreams.isEmpty
               ? 'Searching Castle...'
               : (castleStreams.isNotEmpty
@@ -2875,10 +2904,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 7. Torrent
-      if (_showTorrent && (_resolvingStreams || torrentStreams.isNotEmpty)) {
+      // Torrent
+      if (_showTorrent && (_resolvingStreams || torrentStreams.isNotEmpty) && enabledKeys.contains('torrent')) {
         groupCards.add(_buildServerGroupCard(
-          title: '7. Torrent Server',
+          title: '${pos('torrent')}. Torrent Server',
           subtitle: _resolvingStreams && torrentStreams.isEmpty
               ? 'Scraping torrents...'
               : '${torrentStreams.length} links available',
@@ -2892,10 +2921,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 8. Stremio Addons
-      if (_showStremioAddon && (_resolvingStreams || stremioStreams.isNotEmpty)) {
+      // Stremio Addons
+      if (_showStremioAddon && (_resolvingStreams || stremioStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
         groupCards.add(_buildServerGroupCard(
-          title: '8. Stremio Addons',
+          title: '${pos('stremioAddon')}. Stremio Addons',
           subtitle: _resolvingStreams && stremioStreams.isEmpty
               ? 'Searching addons...'
               : '${stremioStreams.length} links available',
@@ -2910,10 +2939,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ));
       }
 
-      // 9. Nuveo Addons
-      if (_resolvingStreams || nuveoStreams.isNotEmpty) {
+      // Nuveo Addons
+      if ((_resolvingStreams || nuveoStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
         groupCards.add(_buildServerGroupCard(
-          title: '9. Nuveo Addons',
+          title: '${pos('stremioAddon')}. Nuveo Addons',
           subtitle: _resolvingStreams && nuveoStreams.isEmpty
               ? 'Searching scrapers...'
               : '${nuveoStreams.length} links available',

@@ -26,6 +26,8 @@ import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
+import 'package:private_cinema_mobile/data/webtorrent_service.dart';
+import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -71,12 +73,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
   bool _resolvingNuveo = false;
+  bool _resolvingTorrent = false;
+
+  bool _showVidlink = true;
+  bool _showNetmirror = true;
+  bool _showCinemm = true;
+  bool _showStalker = true;
+  bool _showStravo = true;
+  bool _showTorrent = true;
+  bool _showStremioAddon = true;
+  bool _showNuveoAddon = true;
+  List<String> _sourceOrder = [];
 
   StateSetter? _modalSetState;
 
   @override
   void initState() {
     super.initState();
+    _loadSourceVisibilities();
     _loadFavoriteStatus();
     _loadWatchlistState();
     _loadTmdbDetails();
@@ -97,6 +111,28 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _loadSourceVisibilities() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cloud = await SyncService.fetchAppSettings();
+    if (mounted) {
+      setState(() {
+        _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
+        _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
+        _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
+        _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
+        _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
+        _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
+        _showStremioAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['stremio_addons_enabled'] ?? 'true') == 'true';
+        _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
+      });
+    }
+    // Load source order from cloud
+    final order = await SyncService.fetchSourceOrder();
+    if (order.isNotEmpty && mounted) {
+      setState(() => _sourceOrder = order);
+    }
+  }
+
   void _resolveAllLiveSources() {
     final activeId =
         (movie.imdbId != null &&
@@ -110,18 +146,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               ? movie.tmdbId
               : null);
 
-    if (activeId != null) {
+    if (_showVidlink && activeId != null) {
       _resolveLiveVidlink(activeId);
     }
 
-    _resolveLiveNetmirror(movie.title);
-    _resolveLiveCinemm(movie.title);
-    _resolveLiveStalker(movie.title);
+    if (_showNetmirror) _resolveLiveNetmirror(movie.title);
+    if (_showCinemm) _resolveLiveCinemm(movie.title);
+    if (_showStalker) _resolveLiveStalker(movie.title);
 
     final imdbId = movie.imdbId;
     if (imdbId != null && imdbId.isNotEmpty && imdbId != 'null') {
-      _resolveLiveStravo(imdbId);
-      _resolveLiveStremioAddons(imdbId);
+      if (_showStravo) _resolveLiveStravo(imdbId);
+      if (_showStremioAddon) _resolveLiveStremioAddons(imdbId);
     }
 
     if (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') {
@@ -209,16 +245,56 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           .get(Uri.parse(url))
           .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        final movies = data['movies'] as List<dynamic>? ?? [];
+        final responseBody = utf8.decode(response.bodyBytes);
+        final data = json.decode(responseBody);
+        var movies = data['movies'] as List<dynamic>? ?? [];
+        var totalItems = data['total_items'] ?? 0;
+
+        debugPrint('StalkerResolver: API returned ${movies.length} movies (total: $totalItems) for "$title"');
+
+        if ((movies.isEmpty || totalItems == 0) && title.isNotEmpty) {
+          try {
+            final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title.substring(0, title.length > 3 ? title.length ~/ 2 : title.length))}';
+            final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 8));
+            if (allRes.statusCode == 200) {
+              final allData = json.decode(utf8.decode(allRes.bodyBytes));
+              final allMovies = allData['movies'] as List<dynamic>? ?? [];
+              if (allMovies.isNotEmpty) {
+                debugPrint('StalkerResolver: Partial-title search returned ${allMovies.length} movies');
+                movies = allMovies;
+                totalItems = allData['total_items'] ?? 0;
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (movies.isEmpty) {
+          // Last resort: fetch first page of any category
+          try {
+            const fallbackUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&category=General&page=1';
+            final fallRes = await http.get(Uri.parse(fallbackUrl)).timeout(const Duration(seconds: 8));
+            if (fallRes.statusCode == 200) {
+              final fallData = json.decode(utf8.decode(fallRes.bodyBytes));
+              final fallMovies = fallData['movies'] as List<dynamic>? ?? [];
+              if (fallMovies.isNotEmpty) {
+                debugPrint('StalkerResolver: Fallback (no search) returned ${fallMovies.length} movies');
+                movies = fallMovies;
+              }
+            }
+          } catch (_) {}
+        }
+
         final List<StreamSource> sources = [];
 
         for (final item in movies) {
-          final portalId =
-              int.tryParse(item['portal_id']?.toString() ?? '') ?? 1;
+          final rawPortalId = item['portal_id'];
+          final portalId = rawPortalId != null 
+              ? (int.tryParse(rawPortalId.toString()) ?? 1) 
+              : 1;
           final cmd = item['cmd']?.toString() ?? '';
           final name = item['name']?.toString() ?? 'Stalker VOD';
-          final portalName = item['portal_name']?.toString() ?? 'Portal $portalId';
+          final rawPortalName = item['portal_name']?.toString() ?? '';
+          final portalName = rawPortalName.isNotEmpty ? rawPortalName : (rawPortalId != null ? 'Portal $portalId' : 'Stalker');
 
           if (cmd.isNotEmpty) {
             final isDup = sources.any(
@@ -323,8 +399,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   Future<void> _resolveLiveStremioAddons(String imdbId) async {
     if (mounted) setState(() => _resolvingStremio = true);
     try {
-      final addonUrls = await SyncService.fetchStremioAddons();
-      if (addonUrls.isEmpty) return;
+      final addonUrls = await SyncService.fetchMergedStremioAddons();
+      if (addonUrls.isEmpty) {
+        debugPrint('StremioAddonResolver: No addon URLs configured (global + device empty)');
+        return;
+      }
 
       final List<Future<List<StremioStream>>> tasks = [];
       for (final url in addonUrls) {
@@ -363,7 +442,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   Future<void> _resolveLiveNuveoAddons(String tmdbId) async {
     if (mounted) setState(() => _resolvingNuveo = true);
     try {
-      final addons = await SyncService.fetchNuveoAddons();
+      final addons = await SyncService.fetchMergedNuveoAddons();
       if (addons.isEmpty) return;
 
       final List<Future<List<dynamic>>> tasks = [];
@@ -442,6 +521,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _loadTorrentioStreams() async {
+    // Ensure source order is loaded before checking
+    if (_sourceOrder.isEmpty) {
+      final order = await SyncService.fetchSourceOrder();
+      if (order.isNotEmpty && mounted) setState(() => _sourceOrder = order);
+    }
+    if (!_showTorrent || !_sourceOrder.contains('torrent')) return;
     // Start scraping custom magnets
     final customMagnets = movie.streamSources.where(_isMagnetSource).toList();
     for (final source in customMagnets) {
@@ -1108,17 +1193,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     Map<String, String>? headers,
     String? originalEmbedUrl,
   }) async {
-    if (!source.startsWith('magnet:') && !source.startsWith('stalker://') && !_isYoutubeUrl(source) && !_isEmbedUrl(source)) {
-      try {
-        final hlsResult = await runHlsPreflight(
-          context: context,
-          url: source,
-          movieTitle: movie.title,
-          headers: headers,
-        );
-        if (hlsResult?.url != null) source = hlsResult!.url;
-      } catch (_) {}
-    }
     final List<String> parts = [];
     if (movie.year != null) parts.add(movie.year.toString());
     if (movie.runtime != null) parts.add(movie.runtime!);
@@ -1437,7 +1511,42 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     source = _sanitizeUrl(source);
 
     if (source.startsWith('magnet:')) {
+      // Show dialog IMMEDIATELY before any async
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => SeedrCountdownDialog(title: movie.title),
+      );
       if (mounted) {
+        final prefs = await SharedPreferences.getInstance();
+        final seedrToken = prefs.getString('seedr_auth_token');
+        if (seedrToken != null && seedrToken.isNotEmpty && WebTorrentService.isUnderLimit(source)) {
+          try {
+            final downloadUrl = await WebTorrentService.startTorrent(source,
+                authToken: seedrToken, name: movie.title);
+            if (mounted) Navigator.of(context).pop();
+            if (downloadUrl != null && mounted) {
+              // Audio selection: try HLS preflight first, then fallback to language picker
+              String playUrl = downloadUrl;
+              final hlsResult = await runHlsPreflight(context: context, url: downloadUrl, movieTitle: movie.title, headers: headers);
+              if (hlsResult != null && hlsResult.url != downloadUrl) {
+                playUrl = hlsResult.url;
+              } else if (!downloadUrl.contains('.m3u8')) {
+                // Non-HLS: show language picker
+                final lang = await _showLanguagePicker(context);
+                if (lang != null) playUrl += '${downloadUrl.contains('?') ? '&' : '?'}lang=$lang';
+              }
+              _play(playUrl, resumeDirectly: resumeDirectly, headers: headers);
+              return;
+            }
+          } catch (e) {
+            if (mounted) Navigator.of(context).pop();
+            debugPrint('Seedr error: $e');
+          }
+        } else {
+          if (mounted) Navigator.of(context).pop();
+        }
+        // Fallback to WebView
         Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => WebViewPlayerScreen(
@@ -1474,10 +1583,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
       try {
         if (source.startsWith('stalker://')) {
-          final withoutScheme = source.substring(9);
-          final portalMatch = RegExp(r'^(\d+)').firstMatch(withoutScheme);
-          portalId = int.tryParse(portalMatch?.group(1) ?? '1') ?? 1;
-          stalkerCmd = portalMatch != null ? withoutScheme.substring(portalMatch.group(0)!.length) : withoutScheme;
+          final uri = Uri.parse(source);
+          portalId = int.tryParse(uri.host) ?? 1;
+          stalkerCmd = uri.path;
+          if (uri.query.isNotEmpty) {
+            stalkerCmd += '?${uri.query}';
+          }
         }
         final stalkerStream = await StalkerResolver.resolveStream(
           stalkerCmd,
@@ -1752,12 +1863,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
     } else {
+      // Show resolving dialog
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Resolving stream...',
+          ),
+        );
+      }
       final result = await runHlsPreflight(
         context: context,
         url: source,
         movieTitle: movie.title,
         headers: headers,
       );
+      if (mounted) Navigator.of(context).pop();
       final playUrl = result?.url ?? source;
       final uri = Uri.tryParse(playUrl);
       final Map<String, String> finalHeaders = {};
@@ -1814,14 +1937,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 .where(_isMagnetSource)
                 .toList();
 
+            // Build order lookup from admin panel settings
+            final Set<String> enabledKeys = _sourceOrder.toSet();
+            final Map<String, int> orderPos = {};
+            for (int i = 0; i < _sourceOrder.length; i++) {
+              orderPos[_sourceOrder[i]] = i + 1;
+            }
+            int pos(String key) => orderPos[key] ?? 99;
+
             final List<Widget> items = [];
 
-            // 1. MP4/MKV Link
+            // Direct MP4/MKV Link (not in admin order, always shown if sources exist)
             if (dbMp4Sources.isNotEmpty) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.video_file_rounded,
-                  title: '1. Direct MP4/MKV Link',
+                  title: '${pos('vidlink')}. Direct MP4/MKV Link',
                   subtitle: dbMp4Sources.length == 1
                         ? dbMp4Sources.first.name
                         : '${dbMp4Sources.length} files available',
@@ -1848,11 +1979,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 2. Vidlink Server
-            if (_resolvingVidlink || _liveVidlinkSources.isNotEmpty) {
+            if ((_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.play_arrow_rounded,
-                  title: '2. Vidlink Server',
+                  title: '${pos('vidlink')}. Vidlink Server',
                   subtitle: _resolvingVidlink
                       ? 'Checking live...'
                       : '1 native link available',
@@ -1870,11 +2001,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 3. NetMirror Server
-            if (_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) {
+            if ((_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) && enabledKeys.contains('netmirror')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.language_rounded,
-                  title: '3. NetMirror Server (NF/PV/HS)',
+                  title: '${pos('netmirror')}. NetMirror Server',
                   subtitle: _resolvingNetmirror
                       ? 'Searching NetMirror...'
                       : '${_liveNetmirrorSources.length} links available',
@@ -1929,11 +2060,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 5. CineMM Server
-            if (_resolvingCinemm || _liveCinemmSources.isNotEmpty) {
+            if ((_resolvingCinemm || _liveCinemmSources.isNotEmpty) && enabledKeys.contains('cinemm')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.local_movies_rounded,
-                  title: '5. CineMM Server',
+                  title: '${pos('cinemm')}. CineMM Server',
                   subtitle: _resolvingCinemm
                       ? 'Searching CineMM...'
                       : '${_liveCinemmSources.length} links available',
@@ -1961,7 +2092,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 6. Stalker VOD Server
-            if (_resolvingStalker || _liveStalkerSources.isNotEmpty) {
+            if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
               final uniquePortals = _liveStalkerSources.map((s) {
                 final stripped = s.url.replaceAll('stalker://', '');
                 final portalMatch = RegExp(r'^(\d+)').firstMatch(stripped);
@@ -2000,11 +2131,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 7. Stravo Server
-            if (_resolvingStravo || _liveStravoSources.isNotEmpty) {
+            if ((_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.rocket_launch_rounded,
-                  title: '7. Stravo Server',
+                  title: '${pos('stravo')}. Stravo Server',
                   subtitle: _resolvingStravo
                       ? 'Searching streams...'
                       : '${_liveStravoSources.length} links available',
@@ -2025,18 +2156,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             // 8. Torrent Server
             final totalTorrents =
                 _torrentioSources.length + customMagnets.length;
-            if (totalTorrents > 0) {
+            if (totalTorrents > 0 && enabledKeys.contains('torrent')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.cloud_circle_rounded,
-                  title: '8. Torrent Server',
+                  title: '${pos('torrent')}. Torrent Server',
                   subtitle: '$totalTorrents links available',
                   disabled: false,
                   onTap: () {
                     Navigator.of(context).pop();
                     _showTorrentSourceSelector([
-                      ...customMagnets,
-                      ..._torrentioSources,
+                      ...customMagnets.where((s) => _isUnderLimitBySize(s)),
+                      ..._torrentioSources.where((s) => _isUnderLimitBySize(s)),
                     ], resumeDirectly: resumeDirectly);
                   },
                 ),
@@ -2044,11 +2175,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 9. Stremio Addons
-            if (_resolvingStremio || _liveStremioSources.isNotEmpty) {
+            if ((_resolvingStremio || _liveStremioSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.extension_rounded,
-                  title: '9. Stremio Addons',
+                  title: '${pos('stremioAddon')}. Stremio Addons',
                   subtitle: _resolvingStremio
                       ? 'Searching...'
                       : '${_liveStremioSources.length} links available',
@@ -2057,6 +2188,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     Navigator.of(context).pop();
                     _showAddonGroupedSelector(
                       context,
+                      'STREMIO ADDON STREAMS',
+                      _liveStremioSources,
                       resumeDirectly: resumeDirectly,
                     );
                   },
@@ -2064,12 +2197,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
-            // 10. Nuveo Addons
-            if (_resolvingNuveo || _liveNuveoSources.isNotEmpty) {
+            // Nuveo Addons (uses stremioAddon key)
+            if ((_resolvingNuveo || _liveNuveoSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.auto_awesome_rounded,
-                  title: '10. Nuveo Addons',
+                  title: '${pos('stremioAddon')}. Nuveo Addons',
                   subtitle: _resolvingNuveo
                       ? 'Searching...'
                       : '${_liveNuveoSources.length} links available',
@@ -2078,6 +2211,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     Navigator.of(context).pop();
                     _showAddonGroupedSelector(
                       context,
+                      'NUVEO ADDON STREAMS',
+                      _liveNuveoSources,
                       resumeDirectly: resumeDirectly,
                     );
                   },
@@ -2674,11 +2809,44 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
+  Future<String?> _showLanguagePicker(BuildContext context) async {
+    final langs = ['Hindi', 'English', 'Tamil', 'Telugu', 'Malayalam', 'Kannada', 'Bengali', 'Punjabi'];
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Select Audio', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: langs.length,
+            itemBuilder: (_, i) => ListTile(
+              leading: const Icon(Icons.audiotrack_rounded, color: Colors.white54),
+              title: Text(langs[i], style: const TextStyle(color: Colors.white)),
+              onTap: () => Navigator.of(ctx).pop(langs[i]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _isUnderLimitBySize(StreamSource s) {
+    final name = s.name.toLowerCase();
+    final match = RegExp(r'([\d.]+)\s*(gb|gib)').firstMatch(name);
+    if (match == null) return true;
+    final gb = double.tryParse(match.group(1)!) ?? 0;
+    return gb <= 4;
+  }
+
   void _showStalkerGroupedSelector(
     BuildContext context,
     List<StreamSource> sources, {
     bool resumeDirectly = false,
   }) {
+    // Group sources by portal ID extracted from url
     final Map<String, List<StreamSource>> grouped = {};
     for (final s in sources) {
       final stripped = s.url.replaceAll('stalker://', '');
@@ -2787,19 +2955,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   void _showAddonGroupedSelector(
-    BuildContext context, {
+    BuildContext context,
+    String title,
+    List<StreamSource> sources, {
     bool resumeDirectly = false,
   }) {
-    final List<StreamSource> allSources = [
-      ..._liveStremioSources,
-      ..._liveNuveoSources,
-    ];
-
+    // Group by addon name extracted from source name (format: "AddonName - Quality")
     final Map<String, List<StreamSource>> grouped = {};
-    for (final s in allSources) {
-      final addonName = s.name.contains(' - ')
-          ? s.name.split(' - ').first.trim()
-          : s.name;
+    for (final s in sources) {
+      final addonName = s.name.contains(' - ') ? s.name.split(' - ').first : s.name;
       grouped.putIfAbsent(addonName, () => []);
       grouped[addonName]!.add(s);
     }
@@ -2810,8 +2974,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) {
-        final allEntries = grouped.entries.toList();
+      builder: (ctx) {
+        final entries = grouped.entries.toList();
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -2819,80 +2983,31 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'STREMIO / NUVEO ADDON STREAMS',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.0,
-                  ),
-                ),
+                Text(title,
+                  style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
                 const SizedBox(height: 16),
                 Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: allEntries.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, groupIdx) {
-                      final entry = allEntries[groupIdx];
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(left: 4, bottom: 6),
-                            child: Text(
-                              entry.key,
-                              style: GoogleFonts.outfit(
-                                color: AppColors.accentBright,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          ...entry.value.map((source) => Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: ListTile(
-                              leading: Icon(
-                                Icons.play_circle_outline_rounded,
-                                color: AppColors.accentBright,
-                              ),
-                              title: Text(
-                                source.name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              subtitle: Text(
-                                source.url,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white30,
-                                  fontSize: 11,
-                                ),
-                              ),
+                  child: entries.length == 1
+                      ? _buildFlatSourceList(entries.first.value, resumeDirectly)
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: entries.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (_, i) {
+                            final entry = entries[i];
+                            return ListTile(
+                              leading: Icon(Icons.folder_rounded, color: AppColors.accentBright),
+                              title: Text(entry.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                              subtitle: Text('${entry.value.length} links', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                              trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white24),
                               tileColor: Colors.white.withValues(alpha: 0.03),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               onTap: () {
-                                Navigator.of(context).pop();
-                                _playWithResolution(
-                                  source.url,
-                                  resumeDirectly: resumeDirectly,
-                                  sourceName: source.name,
-                                  headers: source.headers,
-                                );
+                                _showSubSourceSelector(ctx, entry.key.toUpperCase(), entry.value, resumeDirectly: resumeDirectly);
                               },
-                            ),
-                          )),
-                        ],
-                      );
-                    },
-                  ),
+                            );
+                          },
+                        ),
                 ),
               ],
             ),
@@ -2902,11 +3017,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  List<StreamSource> _buildFlatSourceList() {
-    return [
-      ..._liveStremioSources,
-      ..._liveNuveoSources,
-    ];
+  Widget _buildFlatSourceList(List<StreamSource> sources, bool resumeDirectly) {
+    return ListView.separated(
+      shrinkWrap: true,
+      itemCount: sources.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final s = sources[i];
+        return ListTile(
+          leading: Icon(Icons.play_circle_outline_rounded, color: AppColors.accentBright),
+          title: Text(s.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+          subtitle: Text(s.url, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white30, fontSize: 11)),
+          tileColor: Colors.white.withValues(alpha: 0.03),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          onTap: () {
+            Navigator.of(context).pop();
+            _playWithResolution(s.url, resumeDirectly: resumeDirectly, sourceName: s.name, headers: s.headers);
+          },
+        );
+      },
+    );
   }
 
   void _showTorrentSourceSelector(
@@ -3241,7 +3371,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         if (!_resolvingStalker && _liveStalkerSources.isNotEmpty) {
           items.add(_buildSourceTile(
             icon: Icons.movie_filter_rounded,
-            title: '6. Stalker VOD Server (Portal 2)',
+            title: '6. Stalker VOD Server',
             subtitle: '${_liveStalkerSources.length} links available',
             disabled: false,
             onTap: () {
@@ -3256,7 +3386,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         } else if (_resolvingStalker) {
           items.add(_buildSourceTile(
             icon: Icons.movie_filter_rounded,
-            title: '6. Stalker VOD Server (Portal 2)',
+            title: '6. Stalker VOD Server',
             subtitle: 'Searching Portal...',
             disabled: true,
             onTap: () {},

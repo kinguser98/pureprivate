@@ -133,10 +133,8 @@ class StremioAddonResolver {
           final streamUrl = item['url']?.toString() ?? '';
           if (streamUrl.isEmpty) continue;
           
-          // Filter out actual P2P magnets. Do NOT filter out Debrid HTTP/HTTPS links containing "torrent".
-          if (streamUrl.startsWith('magnet:')) {
-            continue;
-          }
+          // Keep magnet links for P2P streaming via dart_torrent (WebTorrent).
+          // Magnet URLs are kept and passed to the player which handles them.
 
           final headers = <String, String>{};
           final reqHeaders = item['behaviorHints']?['proxyHeaders']?['request'] as Map?;

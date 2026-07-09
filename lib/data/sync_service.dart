@@ -344,7 +344,11 @@ class SyncService {
       try {
         final decoded = json.decode(raw);
         if (decoded is List) {
-          return decoded.map((e) {
+          return decoded.where((e) {
+            if (e is String) return true;
+            if (e is Map) return e['enabled'] != false;
+            return false;
+          }).map((e) {
             if (e is String) return e;
             if (e is Map) return e['url']?.toString() ?? '';
             return '';

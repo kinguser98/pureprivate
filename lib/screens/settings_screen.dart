@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
@@ -27,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _isSyncing = false;
   String _syncMessage = '';
+  final TextEditingController _seedrTokenController = TextEditingController();
 
 
 
@@ -40,6 +42,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadTorrentioUrl();
     _loadStravoUrl();
     _loadNetmirrorDomains();
+    _loadSeedrToken();
   }
 
   @override
@@ -47,6 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _torrentioUrlController.dispose();
     _stravoUrlController.dispose();
     _netmirrorDomainsController.dispose();
+    _seedrTokenController.dispose();
     super.dispose();
   }
 
@@ -97,6 +101,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     final domains = prefs.getString('netmirror_domains') ?? '';
     _netmirrorDomainsController.text = domains;
+  }
+
+  Future<void> _loadSeedrToken() async {
+    final saved = await WebTorrentService.getToken();
+    if (saved != null && mounted) {
+      setState(() => _seedrTokenController.text = saved);
+    }
   }
 
   Future<void> _saveNetmirrorDomains(String value) async {
@@ -1053,6 +1064,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 24),
 
 
+
+                  // Seedr.cc Auth
+                  _buildSectionHeader('Seedr.cc Torrent'),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.02),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _seedrTokenController,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            decoration: InputDecoration(
+                              hintText: 'Paste Seedr.cc auth token',
+                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                              filled: true, fillColor: Colors.white.withValues(alpha: 0.03),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white10)),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 38,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.accentBright,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            ),
+                            onPressed: () async {
+                              final t = _seedrTokenController.text.trim();
+                              if (t.isNotEmpty) {
+                                await WebTorrentService.saveToken(t);
+                                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Token saved'), backgroundColor: Colors.green));
+                              }
+                            },
+                            child: const Text('Save', style: TextStyle(fontSize: 12)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
 
                   // About Branding
                   Center(

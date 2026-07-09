@@ -1003,144 +1003,112 @@ class StalkerResolver {
           final Set<String> seenIdsThisCategory = {};
           int currentPage = 1;
           bool hasMore = true;
-          int consecutiveFailures = 0;
+          const int batchSize = 5;
           
-          while (hasMore && currentPage <= 3000) { // Limit to 3000 pages to prevent infinite loops
-            dynamic moviesData;
-            dynamic rawMoviesList;
-            
-            try {
-              var moviesUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=$currentPage';
-              moviesUrl = _appendDeviceParams(moviesUrl, deviceId);
+          while (hasMore && currentPage <= 3000) {
+            // Fetch pages in batches concurrently
+            final List<Future<List<Map<String, dynamic>>>> batchFutures = [];
+            for (int b = 0; b < batchSize && hasMore; b++) {
+              final pageNum = currentPage + b;
               
-              final moviesResponse = await getWithRetry(moviesUrl);
-              final responseBody = moviesResponse.body;
-              moviesData = json.decode(responseBody);
-              rawMoviesList = [];
-              
-              if (moviesData is Map) {
-                rawMoviesList = moviesData['result'] ?? [];
-                if (rawMoviesList is! List && moviesData['result'] is Map) {
-                  rawMoviesList = moviesData['result']['data'] ?? [];
-                }
-                if (rawMoviesList is! List || rawMoviesList.isEmpty) {
-                  if (moviesData['js'] is Map) {
-                    rawMoviesList = moviesData['js']['data'] ?? [];
-                  } else if (moviesData['js'] is List) {
-                    rawMoviesList = moviesData['js'];
+              batchFutures.add(Future(() async {
+                try {
+                  var pageUrl = '$portalUrl?type=vod&action=get_ordered_list&category=$catId&p=$pageNum';
+                  pageUrl = _appendDeviceParams(pageUrl, deviceId);
+                  final response = await getWithRetry(pageUrl);
+                  final data = json.decode(response.body);
+                  
+                  List raw = [];
+                  if (data is Map) {
+                    raw = data['result'] ?? [];
+                    if (raw is! List && data['result'] is Map) raw = data['result']['data'] ?? [];
+                    if (raw is! List || raw.isEmpty) {
+                      if (data['js'] is Map) raw = data['js']['data'] ?? [];
+                      else if (data['js'] is List) raw = data['js'];
+                    }
+                  } else if (data is List) {
+                    raw = data;
                   }
+                  if (raw is! List) raw = [];
+                  
+                  final List<Map<String, dynamic>> pageMovies = [];
+                  for (final m in raw) {
+                    if (m is Map) {
+                      final id = m['id']?.toString() ?? '';
+                      if (id.isNotEmpty && !seenIds.contains(id)) {
+                        pageMovies.add({
+                          'id': id,
+                          'name': m['name']?.toString() ?? m['title']?.toString() ?? '',
+                          'logo': m['logo']?.toString() ?? m['logo_url']?.toString() ?? '',
+                          'cmd': m['cmd']?.toString() ?? m['path']?.toString() ?? '',
+                        });
+                      }
+                    }
+                  }
+                  
+                  // Track total items for hasMore calculation (only from first page in batch)
+                  if (b == 0 && data is Map) {
+                    final jsVal = data['js'];
+                    final resultVal = data['result'];
+                    dynamic totalItems;
+                    if (jsVal is Map) totalItems = jsVal['total_items'];
+                    if (totalItems == null && resultVal is Map) totalItems = resultVal['total_items'];
+                    if (totalItems != null) {
+                      totalPagesVal = ((int.tryParse(totalItems.toString()) ?? 0) + 13) ~/ 14;
+                    }
+                    if (raw.length < 14 || (totalPagesVal > 0 && pageNum >= totalPagesVal)) {
+                      hasMore = false;
+                    }
+                  }
+                  
+                  return pageMovies;
+                } catch (e) {
+                  debugPrint('StalkerSync: Page $pageNum error: $e');
+                  return [];
                 }
-              } else if (moviesData is List) {
-                rawMoviesList = moviesData;
-              }
-              consecutiveFailures = 0; // Reset count on success
-            } catch (pageError) {
-              consecutiveFailures++;
-              debugPrint('Error syncing page $currentPage of category $catTitle: $pageError. Consecutive failures: $consecutiveFailures');
-              if (consecutiveFailures >= 3) {
-                debugPrint('Too many consecutive failures on page $currentPage. Skipping page.');
-                currentPage++;
-                consecutiveFailures = 0;
-              } else {
-                await Future.delayed(const Duration(seconds: 1));
-              }
-              continue;
+              }));
             }
             
-            if (rawMoviesList is! List || rawMoviesList.isEmpty) {
-              hasMore = false;
-              break;
-            }
+            final List<List<Map<String, dynamic>>> batchResults = await Future.wait(batchFutures);
             
-            int newItemsThisCategoryCount = 0;
-            for (final m in rawMoviesList) {
-              final id = m['id']?.toString() ?? '';
-              final name = m['name']?.toString() ?? m['title']?.toString() ?? m['o_name']?.toString() ?? '';
-              final logo = m['logo']?.toString() ?? 
-                           m['logo_url']?.toString() ?? 
-                           m['pic']?.toString() ?? 
-                           m['screenshot_uri']?.toString() ?? '';
-              final cmd = m['cmd']?.toString() ?? m['path']?.toString() ?? '';
-              
-              final logoUrl = resolveStalkerLogo(logo, portalUrl);
-              
-              if (id.isNotEmpty && name.isNotEmpty && cmd.isNotEmpty) {
-                if (!seenIdsThisCategory.contains(id)) {
-                  seenIdsThisCategory.add(id);
-                }
-                if (!seenIds.contains(id)) {
-                  seenIds.add(id);
-                  newItemsThisCategoryCount++;
-                  categoryPayload.add({
-                    'id': id,
-                    'name': name,
-                    'logo_url': logoUrl,
-                    'cmd': cmd,
-                    'category_name': catTitle,
-                  });
-                }
+            int newInBatch = 0;
+            for (final pageMovies in batchResults) {
+              for (final m in pageMovies) {
+                final id = m['id']!;
+                if (seenIds.contains(id)) continue;
+                seenIds.add(id);
+                seenIdsThisCategory.add(id);
+                newInBatch++;
+                categoryPayload.add({
+                  'id': id,
+                  'name': m['name'],
+                  'logo_url': resolveStalkerLogo(m['logo'] ?? '', portalUrl),
+                  'cmd': m['cmd'],
+                  'category_name': catTitle,
+                });
               }
             }
             
-            // If we didn't find any new items for this CATEGORY on this page, it means we are looping
-            // or we reached the end of the category VODs.
-            if (newItemsThisCategoryCount == 0) {
-              hasMore = false;
-              break;
-            }
+            currentPage += batchSize;
             
-            // Check if we retrieved all items or reached end of pagination
-            if (moviesData is Map) {
-              final jsVal = moviesData['js'];
-              final resultVal = moviesData['result'];
-              dynamic totalItems;
-              if (jsVal is Map) {
-                totalItems = jsVal['total_items'];
-              }
-              if (totalItems == null && resultVal is Map) {
-                totalItems = resultVal['total_items'];
-              }
-              if (totalItems != null) {
-                final totalCount = int.tryParse(totalItems.toString()) ?? 0;
-                totalPagesVal = (totalCount / 14).ceil();
-                if (currentPage >= totalPagesVal) {
-                  hasMore = false;
-                }
-              }
-            }
-            
-            if (rawMoviesList.length < 14) {
-              hasMore = false;
-            }
-            
-            // Notify page progress
-            onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
-
-            // Incremental Upload in chunks of 300 to prevent OOM
-            if (categoryPayload.isNotEmpty && categoryPayload.length >= 300) {
-              final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client&portal_id=$portalId';
-              final uploadResponse = await http.post(
-                Uri.parse(uploadUrl),
-                headers: {'Content-Type': 'application/json'},
-                body: json.encode(categoryPayload),
-              ).timeout(const Duration(seconds: 25));
-
-              if (uploadResponse.statusCode == 200) {
-                final uploadResult = json.decode(uploadResponse.body);
-                if (uploadResult is Map && uploadResult['success'] == true) {
-                  final importedThisBatch = (uploadResult['imported'] as num?)?.toInt() ?? categoryPayload.length;
-                  totalImported += importedThisBatch;
+            // Upload when payload gets large
+            if (categoryPayload.length >= 300) {
+              try {
+                final uploadUrl = '${ApiService.apiUrl}?action=import_stalker_vods_client&portal_id=$portalId';
+                final uploadResponse = await http.post(Uri.parse(uploadUrl),
+                  headers: {'Content-Type': 'application/json'},
+                  body: json.encode(categoryPayload),
+                ).timeout(const Duration(seconds: 30));
+                if (uploadResponse.statusCode == 200) {
+                  final result = json.decode(uploadResponse.body);
+                  totalImported += (result['imported'] as num?)?.toInt() ?? categoryPayload.length;
                   onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
                 }
-              }
+              } catch (_) {}
               categoryPayload.clear();
             }
             
-            if (hasMore) {
-              currentPage++;
-              // Pause slightly between requests (200ms is safe and fast)
-              await Future.delayed(const Duration(milliseconds: 200));
-            }
+            onProgress?.call(catTitle, currentPage, totalPagesVal, totalImported);
           }
 
           // Upload remaining VOD movies for this category
