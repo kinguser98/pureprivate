@@ -14,6 +14,7 @@ import 'package:private_cinema_mobile/data/dns_proxy.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
+import 'package:private_cinema_mobile/data/epg_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -52,6 +53,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _buffering = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  bool _showInitialTrackSelector = false;
+  bool _trackSelectorScheduled = false;
   bool _hasStartedPlaying = false;
   bool _hasError = false;
   bool _isSeeking = false;
@@ -88,6 +91,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   double _subtitleFontSize = 32.0; // Increased by 2x
   bool _isFavorite = false;
   double _playbackSpeed = 1.0;
+
+  EpgProgram? _currentProgram;
+  EpgProgram? _nextProgram;
+  List<EpgProgram> _upcomingPrograms = [];
+  Timer? _epgRefreshTimer;
 
   Future<void> _loadSubtitleSize() async {
     final prefs = await SharedPreferences.getInstance();
@@ -193,18 +201,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _loadFavoriteStatus();
     
     // Force Landscape for video player
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    });
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _player = Player();
     _controller = VideoController(_player);
     _bindStreams();
     _open();
+    
+    _loadEPG();
+    _epgRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) => _loadEPG());
     
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
@@ -215,6 +224,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _hideControlsTimer?.cancel();
     _hudTimer?.cancel();
     _clockTimer?.cancel();
+    _epgRefreshTimer?.cancel();
     _player.dispose();
     
     // Reset orientations when exiting player
@@ -243,6 +253,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _position = v;
           if (v.inMilliseconds > 0 && !_hasStartedPlaying) {
             _hasStartedPlaying = true;
+            // Schedule track selector ~1s after playback actually starts (tracks are populated by then)
+            if (!_trackSelectorScheduled) {
+              _trackSelectorScheduled = true;
+              Future.delayed(const Duration(milliseconds: 1200), () {
+                if (mounted && _hasMultipleTracks) {
+                  // Pre-select 2nd audio track by default if available
+                  final realAudio = _realAudioTracks;
+                  if (realAudio.length > 1) {
+                    _player.setAudioTrack(realAudio[1]);
+                  }
+                  setState(() => _showInitialTrackSelector = true);
+                }
+              });
+            }
           }
         });
 
@@ -269,7 +293,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (mounted) setState(() => _volume = v);
     });
     _player.stream.track.listen((_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        if (!_trackSelectorScheduled && _hasStartedPlaying && _hasMultipleTracks) {
+          _trackSelectorScheduled = true;
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted) setState(() => _showInitialTrackSelector = true);
+          });
+        }
+      }
     });
     _player.stream.error.listen((e) {
       debugPrint('VideoPlayerScreen player error: $e');
@@ -577,8 +609,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   void _revealControls() {
-    setState(() => _showControls = true);
-    _armHideControls();
+    if (_showControls) {
+      setState(() => _showControls = false);
+      _hideControlsTimer?.cancel();
+    } else {
+      setState(() => _showControls = true);
+      _armHideControls();
+    }
   }
 
   void _togglePlay() {
@@ -772,7 +809,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               onScaleStart: widget.isLive ? null : _handleScaleStart,
               onScaleUpdate: widget.isLive ? null : (details) => _handleScaleUpdate(details, screenWidth),
               onScaleEnd: widget.isLive ? null : _handleScaleEnd,
-              onTap: widget.isLive ? _togglePlay : _revealControls,
+              onTap: _revealControls,
               onDoubleTapDown: widget.isLive ? null : (details) {
                 if (_controlsLocked) return;
                 final x = details.localPosition.dx;
@@ -804,7 +841,116 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
           // 6. UI Overlays (Control Bar controls)
           if (_showControls) _buildControlsLayout(context),
+
+          // 7. Initial Track Selector (big popup at 00:00:01)
+          if (_showInitialTrackSelector) _buildInitialTrackSelector(),
         ],
+      ),
+    );
+  }
+
+  List<AudioTrack> get _realAudioTracks => _player.state.tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList();
+  List<VideoTrack> get _realVideoTracks => _player.state.tracks.video.where((t) => t.id != 'auto' && t.id != 'no').toList();
+  bool get _hasMultipleTracks => _realAudioTracks.length > 1 || _realVideoTracks.length > 1;
+
+  Widget _buildInitialTrackSelector() {
+    final audioTracks = _realAudioTracks;
+    final videoTracks = _realVideoTracks;
+    final currentAudio = _player.state.track.audio;
+    final currentVideo = _player.state.track.video;
+    final hasMultiple = _hasMultipleTracks;
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black87,
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(32),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 500),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1D27),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white12),
+              ),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Text('Audio & Quality', style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    if (!hasMultiple)
+                      TextButton(onPressed: () => setState(() => _showInitialTrackSelector = false),
+                        child: const Text('Skip', style: TextStyle(color: Colors.white54))),
+                  ]),
+                  const SizedBox(height: 16),
+                  // Audio tracks
+                  if (audioTracks.length > 1) ...[
+                    Text('AUDIO TRACKS', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                    const SizedBox(height: 8),
+                    ...audioTracks.map((t) => _buildTrackTile(
+                      label: t.title ?? t.language ?? 'Track ${t.id}',
+                      isSelected: t.id == currentAudio.id,
+                      onTap: () => _player.setAudioTrack(t),
+                    )),
+                    const SizedBox(height: 16),
+                  ],
+                  // Video quality
+                  if (videoTracks.length > 1) ...[
+                    Text('VIDEO QUALITY', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                    const SizedBox(height: 8),
+                    ...videoTracks.map((t) => _buildTrackTile(
+                      label: t.h != null ? '${t.h}p' : (t.title ?? 'Track ${t.id}'),
+                      isSelected: t.id == currentVideo.id,
+                      onTap: () => _player.setVideoTrack(t),
+                    )),
+                  ],
+                  if (!hasMultiple) ...[
+                    const SizedBox(height: 8),
+                    const Text('Single audio/video track — no selection needed.', style: TextStyle(color: Colors.white38, fontSize: 13)),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accentBright, foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => setState(() => _showInitialTrackSelector = false),
+                      child: const Text('Start Playing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrackTile({required String label, required bool isSelected, required VoidCallback onTap}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: isSelected ? AppColors.accent.withOpacity(0.2) : Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              Icon(isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
+                color: isSelected ? AppColors.accentBright : Colors.white38, size: 20),
+              const SizedBox(width: 12),
+              Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.white70, fontSize: 14, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+            ]),
+          ),
+        ),
       ),
     );
   }
@@ -1081,9 +1227,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 if (imdb.contains(':')) {
                   type = 'series';
                 }
-                final url = 'https://opensubtitles-v3.strem.io/subtitles/$type/$finalImdb.json';
-                debugPrint('Querying subtitles from stremio API: $url');
-                final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+                final url = 'https://opensubtitles.pizzapip.net/subtitles/$type/$finalImdb.json';
+                debugPrint('Querying subtitles: $url');
+                final response = await http.get(
+                  Uri.parse(url),
+                  headers: {'User-Agent': 'GoXio/1.0'},
+                ).timeout(const Duration(seconds: 8));
                 if (response.statusCode == 200) {
                   final data = jsonDecode(response.body);
                   final List<dynamic> subs = data['subtitles'] as List<dynamic>? ?? [];
@@ -1913,6 +2062,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (widget.isLive) ...[
+                        _buildLiveTvEpgLayout(theme),
+                        const SizedBox(height: 16),
+                      ],
                       // Seek bar + Duration on the right (hidden for Live TV)
                       if (!widget.isLive) ...[
                         Row(
@@ -2228,6 +2381,383 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       return '${currentVideo.h}P';
     }
     return 'Track ${currentVideo.id}'.toUpperCase();
+  }
+
+  Widget _buildLiveTvEpgLayout(dynamic theme) {
+    if (_currentProgram == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.black38,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.live_tv_rounded, color: Colors.white70, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Live Streaming (No EPG program schedule available)',
+                style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final currentFmt = '${_formatEpgTime(_currentProgram!.startTime)} - ${_formatEpgTime(_currentProgram!.stopTime)}';
+    final nextFmt = _nextProgram != null
+        ? '${_formatEpgTime(_nextProgram!.startTime)} - ${_formatEpgTime(_nextProgram!.stopTime)}'
+        : '';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.accentBright.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'NOW',
+                        style: GoogleFonts.outfit(
+                          color: AppColors.accentBright,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      currentFmt,
+                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _currentProgram!.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (_currentProgram!.description.isNotEmpty && _currentProgram!.description != 'No description available') ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    _currentProgram!.description,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+                if (_nextProgram != null) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8.0),
+                    child: Divider(color: Colors.white10, height: 1),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'NEXT',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _nextProgram!.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              nextFmt,
+                              style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Material(
+            color: Colors.black.withValues(alpha: 0.45),
+            child: InkWell(
+              onTap: _showUpcomingProgramsBottomSheet,
+              child: Container(
+                height: 52,
+                width: 52,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+                child: const Icon(
+                  Icons.calendar_month_rounded,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatEpgTime(DateTime dt) {
+    final local = dt.toLocal();
+    final hour = local.hour;
+    final min = local.minute.toString().padLeft(2, '0');
+    final isAm = hour < 12;
+    final hr = hour % 12 == 0 ? 12 : hour % 12;
+    final amPm = isAm ? 'AM' : 'PM';
+    return '$hr:$min $amPm';
+  }
+
+  void _loadEPG() {
+    if (!widget.isLive) return;
+    setState(() {
+      _currentProgram = EpgService.getCurrentProgram(widget.movieId, widget.title);
+      _nextProgram = EpgService.getNextProgram(widget.movieId, widget.title);
+      _upcomingPrograms = EpgService.getUpcomingPrograms(widget.movieId, widget.title);
+    });
+  }
+
+  void _showUpcomingProgramsBottomSheet() {
+    setState(() => _showControls = false);
+    _hideControlsTimer?.cancel();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      isScrollControlled: true,
+      builder: (context) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            height: MediaQuery.of(context).size.height * 0.75,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFF16161A).withValues(alpha: 0.95),
+                  const Color(0xFF0F0F12).withValues(alpha: 0.95),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(32),
+                topRight: Radius.circular(32),
+              ),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+                width: 1.5,
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 48,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Icon(Icons.calendar_month_rounded, color: AppColors.accentBright, size: 24),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'UPCOMING PROGRAM GUIDE',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.title ?? 'Channel Schedule',
+                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12.0),
+                  child: Divider(color: Colors.white10, height: 1),
+                ),
+                Expanded(
+                  child: _upcomingPrograms.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.event_busy_rounded, color: Colors.white24, size: 48),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No upcoming schedules available',
+                                style: GoogleFonts.outfit(color: Colors.white38, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: _upcomingPrograms.length,
+                          itemBuilder: (context, index) {
+                            final p = _upcomingPrograms[index];
+                            final time = '${_formatEpgTime(p.startTime)} - ${_formatEpgTime(p.stopTime)}';
+                            final isNow = DateTime.now().isAfter(p.startTime) && DateTime.now().isBefore(p.stopTime);
+                            
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: isNow ? AppColors.accentBright.withValues(alpha: 0.06) : Colors.white.withValues(alpha: 0.02),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: isNow ? AppColors.accentBright.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.05),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      if (isNow) ...[
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                          margin: const EdgeInsets.only(right: 8),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.accentBright,
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: const Text(
+                                            'NOW',
+                                            style: TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      ],
+                                      Text(
+                                        time,
+                                        style: TextStyle(
+                                          color: isNow ? AppColors.accentBright : Colors.white54,
+                                          fontSize: 11.5,
+                                          fontWeight: isNow ? FontWeight.bold : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    p.title,
+                                    style: GoogleFonts.outfit(
+                                      color: isNow ? Colors.white : Colors.white70,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  if (p.description.isNotEmpty && p.description != 'No description available') ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      p.description,
+                                      style: TextStyle(
+                                        color: isNow ? Colors.white70 : Colors.white38,
+                                        fontSize: 11,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ).then((_) {
+      if (mounted) {
+        setState(() => _showControls = true);
+        _armHideControls();
+      }
+    });
   }
 
   void _showSettingsSheet() {
@@ -2671,6 +3201,7 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
       }),
     );
   }
+
 }
 
 class GradientCircularProgressIndicator extends StatefulWidget {

@@ -12,6 +12,7 @@ import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
+import 'package:private_cinema_mobile/screens/send_to_tv_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -1110,6 +1111,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Send to TV
+                  _buildSectionHeader('Share Files'),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.02), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white10)),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SendToTvScreen())),
+                      child: Row(children: [
+                        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.accentBright.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
+                          child: Icon(Icons.wifi_tethering_rounded, color: AppColors.accentBright, size: 22)),
+                        const SizedBox(width: 14),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('Send to TV', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                          Text('Transfer files over WiFi/hotspot to your TV', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                        ])),
+                        const Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
+                      ]),
                     ),
                   ),
                   const SizedBox(height: 24),

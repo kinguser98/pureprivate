@@ -130,11 +130,24 @@ class StremioAddonResolver {
         final List<StremioStream> results = [];
         
         for (final item in streamsList) {
-          final streamUrl = item['url']?.toString() ?? '';
+          var streamUrl = item['url']?.toString() ?? '';
+          final infoHash = item['infoHash']?.toString() ?? '';
+          
+          // Convert infoHash to magnet URL if no direct URL (used by AIOStreams, Torrentio etc.)
+          if (streamUrl.isEmpty && infoHash.isNotEmpty) {
+            final dn = item['title']?.toString() ?? '';
+            streamUrl = 'magnet:?xt=urn:btih:$infoHash&dn=${Uri.encodeComponent(dn)}';
+          }
           if (streamUrl.isEmpty) continue;
           
-          // Keep magnet links for P2P streaming via dart_torrent (WebTorrent).
-          // Magnet URLs are kept and passed to the player which handles them.
+          // Filter by size from magnet xl= parameter
+          if (streamUrl.startsWith('magnet:')) {
+            final xlMatch = RegExp(r'xl=(\d+)').firstMatch(streamUrl);
+            if (xlMatch != null) {
+              final xlBytes = int.tryParse(xlMatch.group(1)!) ?? 0;
+              if (xlBytes > 4 * 1024 * 1024 * 1024) continue;
+            }
+          }
 
           final headers = <String, String>{};
           final reqHeaders = item['behaviorHints']?['proxyHeaders']?['request'] as Map?;

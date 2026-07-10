@@ -2791,11 +2791,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         .toList();
 
     if (_activeGroupType == null) {
-      final List<Widget> groupCards = [];
+      final Map<String, Widget> sourceWidgets = {};
 
       // VidLink
       if (_showVidlink && (_resolvingStreams || vidlinkStreams.isNotEmpty) && enabledKeys.contains('vidlink')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['vidlink'] = _buildServerGroupCard(
           title: '${pos('vidlink')}. Vidlink Server',
           subtitle: _resolvingStreams && vidlinkStreams.isEmpty
               ? 'Resolving stream...'
@@ -2808,12 +2808,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               ? null
               : () =>
                     _playStream(vidlinkStreams.first, movieTitle, posterPath),
-        ));
+        );
       }
 
       // NetMirror
       if (_showNetmirror && (_resolvingStreams || netmirrorStreams.isNotEmpty) && enabledKeys.contains('netmirror')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['netmirror'] = _buildServerGroupCard(
           title: '${pos('netmirror')}. NetMirror Server',
           subtitle: _resolvingStreams && netmirrorStreams.isEmpty
               ? 'Searching NetMirror...'
@@ -2827,12 +2827,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.netmirror,
                 ),
-        ));
+        );
       }
 
       // Stravo
       if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['stravo'] = _buildServerGroupCard(
           title: '${pos('stravo')}. Stravo Server',
           subtitle: _resolvingStreams && stravoStreams.isEmpty
               ? 'Searching streams...'
@@ -2844,12 +2844,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.stravo,
                 ),
-        ));
+        );
       }
 
       // Stalker
       if (_showStalker && (_resolvingStreams || stalkerStreams.isNotEmpty) && enabledKeys.contains('stalker')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['stalker'] = _buildServerGroupCard(
           title: '${pos('stalker')}. Stalker VOD Server',
           subtitle: _resolvingStreams && stalkerStreams.isEmpty
               ? 'Searching local library...'
@@ -2863,12 +2863,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.stalker,
                 ),
-        ));
+        );
       }
 
       // CineMM
       if (_showCinemm && (_resolvingStreams || cinemmStreams.isNotEmpty) && enabledKeys.contains('cinemm')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['cinemm'] = _buildServerGroupCard(
           title: '${pos('cinemm')}. CineMM Server',
           subtitle: _resolvingStreams && cinemmStreams.isEmpty
               ? 'Searching CineMM...'
@@ -2882,12 +2882,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.cinemm,
                 ),
-        ));
+        );
       }
 
       // Castle (movies only)
       if (_showCastle && !widget.isSeriesSearch && (_resolvingStreams || castleStreams.isNotEmpty) && enabledKeys.contains('castle')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['castle'] = _buildServerGroupCard(
           title: '${pos('castle')}. Castle TV Server',
           subtitle: _resolvingStreams && castleStreams.isEmpty
               ? 'Searching Castle...'
@@ -2901,14 +2901,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.castle,
                 ),
-        ));
+        );
       }
 
       // Torrent
       if (_showTorrent && (_resolvingStreams || torrentStreams.isNotEmpty) && enabledKeys.contains('torrent')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['torrent'] = _buildServerGroupCard(
           title: '${pos('torrent')}. Torrent Server',
-          subtitle: _resolvingStreams && torrentStreams.isEmpty
+          subtitle: _resolvingStreams && torrentStreams.isNotEmpty
               ? 'Scraping torrents...'
               : '${torrentStreams.length} links available',
           icon: Icons.cloud_circle_rounded,
@@ -2918,12 +2918,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.torrent,
                 ),
-        ));
+        );
       }
 
       // Stremio Addons
       if (_showStremioAddon && (_resolvingStreams || stremioStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['stremioAddon'] = _buildServerGroupCard(
           title: '${pos('stremioAddon')}. Stremio Addons',
           subtitle: _resolvingStreams && stremioStreams.isEmpty
               ? 'Searching addons...'
@@ -2936,12 +2936,12 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                   _activeGroupType = StreamSourceType.stremioAddon;
                   _selectedStremioResolution = null;
                 }),
-        ));
+        );
       }
 
       // Nuveo Addons
       if ((_resolvingStreams || nuveoStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
-        groupCards.add(_buildServerGroupCard(
+        sourceWidgets['nuveoAddon'] = _buildServerGroupCard(
           title: '${pos('stremioAddon')}. Nuveo Addons',
           subtitle: _resolvingStreams && nuveoStreams.isEmpty
               ? 'Searching scrapers...'
@@ -2954,8 +2954,24 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                   _activeGroupType = StreamSourceType.nuveoAddon;
                   _selectedStremioResolution = null;
                 }),
-        ));
+        );
       }
+
+      final List<Widget> groupCards = [];
+      for (final key in _sourceOrder) {
+        if (key == 'stremioAddon') {
+          if (sourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
+            groupCards.add(sourceWidgets['stremioAddon']!);
+          }
+          if (sourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
+            groupCards.add(sourceWidgets['nuveoAddon']!);
+          }
+        } else {
+          if (sourceWidgets.containsKey(key) && enabledKeys.contains(key)) {
+            groupCards.add(sourceWidgets[key]!);
+          }
+      }
+    }
 
       if (groupCards.isEmpty && !_resolvingStreams) {
         return Center(

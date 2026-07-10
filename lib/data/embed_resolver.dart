@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 
 class EmbedResolver {
   static bool _isValidVideoResource(Uri? uri) {
@@ -144,55 +145,9 @@ class EmbedResolver {
             }
             dismissed = true;
           },
-          child: AlertDialog(
-            backgroundColor: const Color(0xFF16161A),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            title: Row(
-              children: [
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    color: Color(0xFFFF2E93),
-                    strokeWidth: 2,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Text(
-                        'RESOLVING STREAM LINK',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Resolving stream in the background...',
-                        style: TextStyle(color: Colors.white38, fontSize: 10.5),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            content: const SizedBox(
-              height: 24,
-              child: Center(
-                child: Text(
-                  'Please wait while the direct link is resolved.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12.5),
-                ),
-              ),
-            ),
+          child: const ResolvingProgressDialog(
+            title: 'RESOLVING STREAM LINK',
+            subtitle: 'Extracting video source...',
           ),
         );
       },
