@@ -26,29 +26,26 @@ jobs:
         run: |
           flutter pub get
 
-      - name: Build iOS IPA (Unsigned)
+      - name: Build iOS Project (Unsigned)
         run: |
-          mkdir -p build/ios/ipa
-          flutter build ipa --release --no-codesign
-          
-          # Rename the generated IPA to PrivateCinema.ipa
-          mv build/ios/ipa/*.ipa build/ios/ipa/PrivateCinema.ipa
-        continue-on-error: true
+          flutter build ios --release --no-codesign
 
-      - name: Fallback to manual clean Payload packaging if build ipa failed
+      - name: Package App and Strip Headers/Modules
         run: |
-          if [ ! -f build/ios/ipa/PrivateCinema.ipa ]; then
-            echo "flutter build ipa failed or did not produce an IPA, falling back to flutter build ios..."
-            flutter build ios --release --no-codesign
-            
-            mkdir -p Payload
-            cp -R build/ios/iphoneos/Runner.app Payload/
-            
-            mkdir -p build/ios/ipa
-            zip -r build/ios/ipa/PrivateCinema.ipa Payload
-          else
-            echo "Successfully generated IPA using flutter build ipa."
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          
+          # Strip Headers, PrivateHeaders, and Modules from embedded frameworks to prevent ldid crash
+          if [ -d "Payload/Runner.app/Frameworks" ]; then
+            echo "=== Stripping Headers and Modules from frameworks ==="
+            find Payload/Runner.app/Frameworks -name "Headers" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "PrivateHeaders" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "Modules" -type d -exec rm -rf {} +
+            echo "Embedded frameworks cleaned successfully."
           fi
+          
+          mkdir -p build/ios/ipa
+          zip -r build/ios/ipa/PrivateCinema.ipa Payload
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
