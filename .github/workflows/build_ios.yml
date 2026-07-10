@@ -26,33 +26,29 @@ jobs:
         run: |
           flutter pub get
 
-      - name: Build iOS Project (Unsigned)
+      - name: Build iOS IPA (Unsigned)
         run: |
-          flutter build ios --release --no-codesign
-
-      - name: Package App into IPA Payload
-        run: |
-          mkdir -p Payload
-          
-          # Diagnostics: Print all compiled frameworks in the build directory
-          echo "=== SEARCHING FOR ALL COMPILED FRAMEWORKS ==="
-          find build -name "*.framework"
-          
-          # Ensure the Frameworks folder exists inside Runner.app
-          mkdir -p build/ios/iphoneos/Runner.app/Frameworks
-          
-          # Find and copy all compiled dynamic frameworks recursively to Runner.app/Frameworks
-          find build/ios -name "*.framework" -not -path "*/Runner.app/*" -exec cp -R {} build/ios/iphoneos/Runner.app/Frameworks/ \;
-          
-          # Diagnostics: Print what was successfully copied into the app
-          echo "=== FILES COPIED TO RUNNER.APP/FRAMEWORKS ==="
-          ls -la build/ios/iphoneos/Runner.app/Frameworks/
-          
-          # Move Runner.app into the Payload folder and compress it as a ZIP renamed to .ipa
-          mv build/ios/iphoneos/Runner.app Payload/
-          zip -r PrivateCinema.ipa Payload
           mkdir -p build/ios/ipa
-          mv PrivateCinema.ipa build/ios/ipa/PrivateCinema.ipa
+          flutter build ipa --release --no-codesign
+          
+          # Rename the generated IPA to PrivateCinema.ipa
+          mv build/ios/ipa/*.ipa build/ios/ipa/PrivateCinema.ipa
+        continue-on-error: true
+
+      - name: Fallback to manual clean Payload packaging if build ipa failed
+        run: |
+          if [ ! -f build/ios/ipa/PrivateCinema.ipa ]; then
+            echo "flutter build ipa failed or did not produce an IPA, falling back to flutter build ios..."
+            flutter build ios --release --no-codesign
+            
+            mkdir -p Payload
+            cp -R build/ios/iphoneos/Runner.app Payload/
+            
+            mkdir -p build/ios/ipa
+            zip -r build/ios/ipa/PrivateCinema.ipa Payload
+          else
+            echo "Successfully generated IPA using flutter build ipa."
+          fi
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
