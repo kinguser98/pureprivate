@@ -2,17 +2,17 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/webtorrent_service.dart';
-import 'package:private_cinema_mobile/screens/downloads_screen.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
-import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
-import 'package:private_cinema_mobile/screens/send_to_tv_screen.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/webtorrent_service.dart';
+import 'package:private_cinema_ios/screens/downloads_screen.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
+import 'package:private_cinema_ios/screens/send_to_tv_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});

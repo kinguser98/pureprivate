@@ -6,10 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:private_cinema_mobile/data/dns_proxy.dart';
-import 'package:private_cinema_mobile/data/download_manager.dart';
-import 'package:private_cinema_mobile/screens/navigation_holder.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
+import 'package:private_cinema_ios/data/download_manager.dart';
+import 'package:private_cinema_ios/screens/navigation_holder.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
 
 Future<void> fetchHotConfig() async {
   try {

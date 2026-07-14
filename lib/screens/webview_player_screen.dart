@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:private_cinema_mobile/data/dns_proxy.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
 
 class WebViewPlayerScreen extends StatefulWidget {
   const WebViewPlayerScreen({

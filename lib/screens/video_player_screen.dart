@@ -9,12 +9,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/dns_proxy.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/widgets/glass_panel.dart';
-import 'package:private_cinema_mobile/data/epg_service.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/widgets/glass_panel.dart';
+import 'package:private_cinema_ios/data/epg_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -91,6 +91,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   double _subtitleFontSize = 32.0; // Increased by 2x
   bool _isFavorite = false;
   double _playbackSpeed = 1.0;
+  double _audioDelay = 0.0;
+  double _subtitleDelay = 0.0;
 
   EpgProgram? _currentProgram;
   EpgProgram? _nextProgram;
@@ -112,6 +114,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('subtitle_font_size', size);
+  }
+
+  Future<void> _changeAudioDelay(double delay) async {
+    setState(() {
+      _audioDelay = double.parse(delay.toStringAsFixed(3));
+    });
+    if (_player.platform is NativePlayer) {
+      final nativePlayer = _player.platform as NativePlayer;
+      await nativePlayer.setProperty('audio-delay', _audioDelay.toString());
+      debugPrint('Set audio-delay: $_audioDelay');
+    }
+  }
+
+  Future<void> _changeSubtitleDelay(double delay) async {
+    setState(() {
+      _subtitleDelay = double.parse(delay.toStringAsFixed(3));
+    });
+    if (_player.platform is NativePlayer) {
+      final nativePlayer = _player.platform as NativePlayer;
+      await nativePlayer.setProperty('sub-delay', _subtitleDelay.toString());
+      debugPrint('Set sub-delay: $_subtitleDelay');
+    }
   }
 
   Future<void> _loadFavoriteStatus() async {
@@ -361,8 +385,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (widget.videoSource.startsWith('http')) {
         try {
           final uri = Uri.parse(widget.videoSource);
-          if (uri.queryParameters.containsKey('local_proxy_headers')) {
-            final jsonHeaders = jsonDecode(uri.queryParameters['local_proxy_headers']!);
+          if (uri.queryParameters.containsKey('headers')) {
+            final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
             if (jsonHeaders is Map) {
               jsonHeaders.forEach((key, value) {
                 playHeaders[key.toString()] = value.toString();
@@ -476,14 +500,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
       }
 
-      // If we are NOT routing through the local proxy, we must strip the 'local_proxy_headers' query parameter
+      // If we are NOT routing through the local proxy, we must strip the 'headers' query parameter
       // here so the player directly requests the clean URL without corrupting CDN signatures.
       if (!isProxied && resolvedSource.startsWith('http')) {
         try {
           final sourceUri = Uri.parse(resolvedSource);
-          if (sourceUri.queryParameters.containsKey('local_proxy_headers')) {
+          if (sourceUri.queryParameters.containsKey('headers')) {
             final cleanParams = Map<String, String>.from(sourceUri.queryParameters);
-            cleanParams.remove('local_proxy_headers');
+            cleanParams.remove('headers');
             if (cleanParams.isEmpty) {
               resolvedSource = sourceUri.replace(query: '').toString();
               if (resolvedSource.endsWith('?')) {
@@ -2811,6 +2835,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           aspectRatios: _aspectRatios,
           initialAspectRatioIndex: _aspectRatioIndex,
           subtitleFontSize: _subtitleFontSize,
+          audioDelay: _audioDelay,
+          subtitleDelay: _subtitleDelay,
+          onAudioDelayChanged: (delay) {
+            _changeAudioDelay(delay);
+          },
+          onSubtitleDelayChanged: (delay) {
+            _changeSubtitleDelay(delay);
+          },
           onSubtitleFontSizeChanged: (newSize) {
             _changeSubtitleSize(newSize);
           },
@@ -2831,6 +2863,10 @@ class _SettingsPopover extends StatefulWidget {
   final List<double?> aspectRatios;
   final int initialAspectRatioIndex;
   final double subtitleFontSize;
+  final double audioDelay;
+  final double subtitleDelay;
+  final Function(double) onAudioDelayChanged;
+  final Function(double) onSubtitleDelayChanged;
   final Function(double) onSubtitleFontSizeChanged;
   final Function(int) onAspectRatioChanged;
   final String Function(int) getAspectRatioName;
@@ -2840,6 +2876,10 @@ class _SettingsPopover extends StatefulWidget {
     required this.aspectRatios,
     required this.initialAspectRatioIndex,
     required this.subtitleFontSize,
+    required this.audioDelay,
+    required this.subtitleDelay,
+    required this.onAudioDelayChanged,
+    required this.onSubtitleDelayChanged,
     required this.onSubtitleFontSizeChanged,
     required this.onAspectRatioChanged,
     required this.getAspectRatioName,
@@ -2852,11 +2892,15 @@ class _SettingsPopover extends StatefulWidget {
 class _SettingsPopoverState extends State<_SettingsPopover> {
   int _currentPane = 0; // 0: Main, 1: Aspect Ratio, 2: Audio, 3: Subtitle
   late int _aspectRatioIndex;
+  late double _audioDelay;
+  late double _subtitleDelay;
 
   @override
   void initState() {
     super.initState();
     _aspectRatioIndex = widget.initialAspectRatioIndex;
+    _audioDelay = widget.audioDelay;
+    _subtitleDelay = widget.subtitleDelay;
   }
 
   @override
@@ -3037,6 +3081,22 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
     );
   }
 
+  void _adjustAudioDelay(double delta) {
+    setState(() {
+      _audioDelay += delta;
+      _audioDelay = double.parse(_audioDelay.toStringAsFixed(3));
+    });
+    widget.onAudioDelayChanged(_audioDelay);
+  }
+
+  void _adjustSubtitleDelay(double delta) {
+    setState(() {
+      _subtitleDelay += delta;
+      _subtitleDelay = double.parse(_subtitleDelay.toStringAsFixed(3));
+    });
+    widget.onSubtitleDelayChanged(_subtitleDelay);
+  }
+
   Widget _buildAspectRatioMenu() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -3074,42 +3134,90 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
     final tracks = widget.player.state.tracks.audio;
     final current = widget.player.state.track.audio;
 
+    final String delayText = _audioDelay == 0.0 
+        ? '0 ms' 
+        : (_audioDelay > 0.0 ? '+${(_audioDelay * 1000).round()} ms' : '${(_audioDelay * 1000).round()} ms');
+
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: List.generate(tracks.length, (index) {
-        final track = tracks[index];
-        final isSelected = track.id == current.id;
-        
-        String name = track.title ?? track.language ?? 'Track ${track.id}';
-        if (track.id == 'auto') name = 'Auto';
-        if (track.id == 'no') name = 'Off';
-
-        return ListTile(
-          dense: true,
-          visualDensity: VisualDensity.compact,
-          title: Text(
-            name.toUpperCase(),
-            style: TextStyle(
-              color: isSelected ? AppColors.accentBright : Colors.white,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              fontSize: 13,
-            ),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'SYNC DELAY',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline_rounded, color: Colors.white, size: 20),
+                    onPressed: () => _adjustAudioDelay(-0.1),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    delayText,
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 20),
+                    onPressed: () => _adjustAudioDelay(0.1),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ],
           ),
-          trailing: isSelected
-              ? Icon(Icons.check_rounded, color: AppColors.accentBright, size: 16)
-              : null,
-          onTap: () {
-            widget.player.setAudioTrack(track);
-            Navigator.of(context).pop();
-          },
-        );
-      }),
+        ),
+        const Divider(color: Colors.white10, height: 1),
+        ...List.generate(tracks.length, (index) {
+          final track = tracks[index];
+          final isSelected = track.id == current.id;
+          
+          String name = track.title ?? track.language ?? 'Track ${track.id}';
+          if (track.id == 'auto') name = 'Auto';
+          if (track.id == 'no') name = 'Off';
+
+          return ListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            title: Text(
+              name.toUpperCase(),
+              style: TextStyle(
+                color: isSelected ? AppColors.accentBright : Colors.white,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 13,
+              ),
+            ),
+            trailing: isSelected
+                ? Icon(Icons.check_rounded, color: AppColors.accentBright, size: 16)
+                : null,
+            onTap: () {
+              widget.player.setAudioTrack(track);
+              Navigator.of(context).pop();
+            },
+          );
+        }),
+      ],
     );
   }
 
   Widget _buildSubtitleMenu() {
     final tracks = widget.player.state.tracks.subtitle;
     final current = widget.player.state.track.subtitle;
+
+    final String delayText = _subtitleDelay == 0.0 
+        ? '0 ms' 
+        : (_subtitleDelay > 0.0 ? '+${(_subtitleDelay * 1000).round()} ms' : '${(_subtitleDelay * 1000).round()} ms');
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -3153,6 +3261,46 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
                         setState(() {});
                       }
                     },
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const Divider(color: Colors.white10, height: 1),
+
+        // Sync Subtitle Delay Row
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'SYNC DELAY',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline_rounded, color: Colors.white, size: 20),
+                    onPressed: () => _adjustSubtitleDelay(-0.1),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    delayText,
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 20),
+                    onPressed: () => _adjustSubtitleDelay(0.1),
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),

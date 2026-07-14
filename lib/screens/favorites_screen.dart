@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/data/mock_catalog.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/widgets/movie_card.dart';
-import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
+import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/mock_catalog.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/widgets/movie_card.dart';
+import 'package:private_cinema_ios/screens/movie_detail_screen.dart';
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});

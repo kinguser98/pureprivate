@@ -8,26 +8,26 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/data/download_manager.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/youtube_service.dart';
-import 'package:private_cinema_mobile/data/embed_resolver.dart';
-import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/widgets/movie_image.dart';
-import 'package:private_cinema_mobile/screens/video_player_screen.dart';
-import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
-import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
-import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
-import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
-import 'package:private_cinema_mobile/data/sync_service.dart';
-import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
-import 'package:private_cinema_mobile/data/hls_preflight.dart';
-import 'package:private_cinema_mobile/data/webtorrent_service.dart';
-import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/download_manager.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/youtube_service.dart';
+import 'package:private_cinema_ios/data/embed_resolver.dart';
+import 'package:private_cinema_ios/data/cinemm_resolver.dart';
+import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/widgets/movie_image.dart';
+import 'package:private_cinema_ios/screens/video_player_screen.dart';
+import 'package:private_cinema_ios/widgets/resolving_dialog.dart';
+import 'package:private_cinema_ios/screens/webview_player_screen.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/netmirror_resolver.dart';
+import 'package:private_cinema_ios/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
+import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
+import 'package:private_cinema_ios/data/hls_preflight.dart';
+import 'package:private_cinema_ios/data/webtorrent_service.dart';
+import 'package:private_cinema_ios/widgets/seedr_countdown_dialog.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -1713,7 +1713,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
 
         if (resolved != null && resolved.isNotEmpty) {
-          _play(resolved, resumeDirectly: resumeDirectly);
+          _play(
+            resolved,
+            resumeDirectly: resumeDirectly,
+            headers: {
+              'Referer': 'https://streamtape.com/',
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          );
         } else {
           throw Exception(
             'Failed to resolve Streamtape direct URL. Please check your credentials.',
@@ -3671,7 +3679,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (mounted) Navigator.of(context).pop();
 
       if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
-        await DownloadManager.downloadMovie(movie, resolvedUrl);
+        await DownloadManager.downloadMovie(
+          movie,
+          resolvedUrl,
+          headers: {
+            'Referer': 'https://streamtape.com/',
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        );
         await _checkDownloadStatus();
         ScaffoldMessenger.of(this.context).showSnackBar(
           SnackBar(content: Text('"${movie.title}" added to downloads queue.')),

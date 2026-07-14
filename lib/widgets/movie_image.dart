@@ -1,6 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
 
 class MovieImage extends StatelessWidget {
   const MovieImage({
