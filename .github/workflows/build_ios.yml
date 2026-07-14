@@ -30,52 +30,49 @@ jobs:
           pod install --repo-update
           cd ..
 
-      - name: Build iOS App
+      - name: Build with xcodebuild archive (full codesign bypass)
+        # We skip `flutter build ios` entirely because Flutter 3.44+ deletes the compiled
+        # binary during its post-build "Development Team" validation cleanup.
+        # xcodebuild runs Flutter's embedded Xcode build scripts (xcode_backend.sh) directly,
+        # which compile Dart and embed the Flutter framework — without Flutter's cleanup step.
         run: |
-          set +o pipefail
-          flutter build ios --release --no-codesign 2>&1 | tee flutter_build.log || true
+          set -o pipefail
+          xcodebuild archive \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tail -80
 
-      - name: Locate Runner binary (diagnostic)
+      - name: Extract and package Runner.app into IPA
         run: |
-          echo "=== All Runner.app directories in build/ ==="
-          find build -name "Runner.app" -type d 2>/dev/null | grep -v dSYM || echo "None in build/"
+          ARCHIVE="build/ios/archive/Runner.xcarchive"
+          APP_PATH="$ARCHIVE/Products/Applications/Runner.app"
 
-          echo "=== All Runner.app directories in DerivedData ==="
-          find ~/Library/Developer/Xcode/DerivedData -name "Runner.app" -type d 2>/dev/null | grep -v dSYM || echo "None in DerivedData"
+          echo "=== Archive contents ==="
+          find "$ARCHIVE" -maxdepth 4 -type d 2>/dev/null || true
 
-          echo "=== Searching for Runner binary file anywhere ==="
-          find build ~/Library/Developer/Xcode/DerivedData -name "Runner" -type f 2>/dev/null | head -20 || echo "No Runner binary found"
-
-          echo "=== Top-level build directory structure ==="
-          find build -maxdepth 5 -type d 2>/dev/null | head -80 || echo "build dir empty"
-
-          echo "=== Finding any .app with executable inside ==="
-          find build ~/Library/Developer/Xcode/DerivedData -name "Runner.app" -type d 2>/dev/null | grep -v dSYM | while read app; do
-            echo "--- $app ---"
-            ls "$app/" 2>/dev/null | head -5
-          done
-
-      - name: Package Runner.app into IPA
-        run: |
-          # Find the first Runner.app that actually contains a compiled Runner binary
-          APP_PATH=""
-          while IFS= read -r candidate; do
-            if [ -f "$candidate/Runner" ]; then
-              APP_PATH="$candidate"
-              echo "Found complete app at: $APP_PATH"
-              break
-            fi
-          done < <(find build ~/Library/Developer/Xcode/DerivedData -name "Runner.app" -type d 2>/dev/null | grep -v dSYM)
-
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No Runner.app with compiled binary found. Check diagnostic output above."
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: Runner.app not found in xcarchive!"
             exit 1
           fi
 
-          ls -lah "$APP_PATH/Runner"
+          echo "=== Runner.app contents ==="
+          ls -lah "$APP_PATH"
+          ls -lah "$APP_PATH/Runner" 2>/dev/null && echo "Binary found!" || echo "WARNING: No binary!"
+
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
 
+          # Clean _CodeSignature to allow LiveContainer installation
           rm -rf Payload/Runner.app/_CodeSignature
           if [ -d "Payload/Runner.app/Frameworks" ]; then
             find Payload/Runner.app/Frameworks -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
@@ -85,7 +82,7 @@ jobs:
           fi
 
           zip -r PrivateCinema.ipa Payload/
-          echo "IPA created:"
+          echo "=== IPA size ==="
           ls -lh PrivateCinema.ipa
 
       - name: Upload IPA Artifact
