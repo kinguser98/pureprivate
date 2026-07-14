@@ -22,81 +22,34 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Install Flutter Dependencies
-        run: flutter pub get
-
-      - name: Generate Flutter iOS Artifacts (pod install + xcconfig)
+      - name: Install Dependencies
         run: |
-          # This generates Flutter.framework, Generated.xcconfig, and runs pod install.
-          # The post-build team validation error is expected and safely ignored.
-          flutter build ios --release --no-codesign 2>&1 || echo "Flutter post-build check failed (expected) — continuing"
+          flutter pub get
 
-      - name: Verify generated Flutter artifacts exist
+      - name: Build iOS Project (Unsigned)
         run: |
-          echo "=== Checking ios/Flutter/Generated.xcconfig ==="
-          cat ios/Flutter/Generated.xcconfig
-          echo "=== Checking Flutter ephemeral packages ==="
-          ls ios/Flutter/ephemeral/ || echo "No ephemeral dir yet"
-          echo "=== Checking workspace ==="
-          ls ios/Runner.xcworkspace/
-
-      - name: Build Release with xcodebuild (full codesign bypass)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build/ios/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            build 2>&1 | tail -100
-          echo "xcodebuild exit code: $?"
-
-      - name: Locate Runner.app
-        run: |
-          echo "=== Searching for Runner.app in DerivedData ==="
-          find build/ios/DerivedData -name "Runner.app" -type d 2>/dev/null || echo "Not found in DerivedData"
-          
-          echo "=== Searching for Runner.app in build/ios/iphoneos ==="
-          ls build/ios/iphoneos/ 2>/dev/null || echo "Not found in iphoneos"
-          
-          # Find from both possible locations and pick first match
-          APP_PATH=$(find build/ios -name "Runner.app" -type d 2>/dev/null | grep -v "dSYM" | head -1)
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Runner.app not found anywhere!"
-            find build/ios -type d -name "*.app" 2>/dev/null || true
-            exit 1
-          fi
-          echo "Found Runner.app at: $APP_PATH"
-          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          flutter build ios --release --no-codesign
 
       - name: Package App and Clean Signatures/Headers
         run: |
           mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
-
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          
           # Clean up any existing _CodeSignature folders in the main app and nested frameworks
           echo "=== Removing pre-existing _CodeSignature metadata ==="
           rm -rf Payload/Runner.app/_CodeSignature
           if [ -d "Payload/Runner.app/Frameworks" ]; then
-            find Payload/Runner.app/Frameworks -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
+            find Payload/Runner.app/Frameworks -name "_CodeSignature" -type d -exec rm -rf {} +
           fi
-
+          
           # Strip Headers, PrivateHeaders, and Modules from embedded frameworks to prevent ldid crash
           if [ -d "Payload/Runner.app/Frameworks" ]; then
             echo "=== Stripping Headers and Modules from frameworks ==="
-            find Payload/Runner.app/Frameworks -name "Headers" -type d -exec rm -rf {} + 2>/dev/null || true
-            find Payload/Runner.app/Frameworks -name "PrivateHeaders" -type d -exec rm -rf {} + 2>/dev/null || true
-            find Payload/Runner.app/Frameworks -name "Modules" -type d -exec rm -rf {} + 2>/dev/null || true
+            find Payload/Runner.app/Frameworks -name "Headers" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "PrivateHeaders" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "Modules" -type d -exec rm -rf {} +
           fi
-
+          
           echo "App bundle cleaned successfully."
           mkdir -p build/ios/ipa
           zip -r build/ios/ipa/PrivateCinema.ipa Payload
