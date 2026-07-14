@@ -23,33 +23,70 @@ jobs:
           cache: true
 
       - name: Install Dependencies
-        run: |
-          flutter pub get
+        run: flutter pub get
 
       - name: Build iOS Project (Unsigned)
+        # Flutter 3.44+ throws a post-build team validation error even with --no-codesign.
+        # Xcode still compiles successfully (Runner.app is built).
+        # We capture the exit and recover the app from Flutter's build output below.
+        run: flutter build ios --release --no-codesign || true
+
+      - name: Locate Runner.app from Flutter build output
         run: |
-          flutter build ios --release --no-codesign
+          echo "=== Scanning all possible output locations ==="
+          find build/ios -name "Runner.app" -type d 2>/dev/null | grep -v dSYM || true
+
+          # Flutter 3.44+ may leave Runner.app in Release-iphoneos SYMROOT before post-build fails
+          LOCATIONS=(
+            "build/ios/iphoneos/Runner.app"
+            "build/ios/Release-iphoneos/Runner.app"
+            "build/ios/Build/Products/Release-iphoneos/Runner.app"
+          )
+
+          APP_PATH=""
+          for LOC in "${LOCATIONS[@]}"; do
+            if [ -d "$LOC" ]; then
+              APP_PATH="$LOC"
+              echo "Found Runner.app at: $APP_PATH"
+              break
+            fi
+          done
+
+          # Fallback: deep search
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH=$(find build/ios -name "Runner.app" -type d 2>/dev/null | grep -v dSYM | head -1)
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Runner.app not found in any expected location. Build may have failed entirely."
+            exit 1
+          fi
+
+          echo "Using: $APP_PATH"
+          # Ensure standard location exists for packaging step
+          if [ "$APP_PATH" != "build/ios/iphoneos/Runner.app" ]; then
+            mkdir -p build/ios/iphoneos
+            cp -R "$APP_PATH" build/ios/iphoneos/Runner.app
+          fi
 
       - name: Package App and Clean Signatures/Headers
         run: |
           mkdir -p Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
-          
-          # Clean up any existing _CodeSignature folders in the main app and nested frameworks
+
           echo "=== Removing pre-existing _CodeSignature metadata ==="
           rm -rf Payload/Runner.app/_CodeSignature
           if [ -d "Payload/Runner.app/Frameworks" ]; then
-            find Payload/Runner.app/Frameworks -name "_CodeSignature" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
           fi
-          
-          # Strip Headers, PrivateHeaders, and Modules from embedded frameworks to prevent ldid crash
+
           if [ -d "Payload/Runner.app/Frameworks" ]; then
             echo "=== Stripping Headers and Modules from frameworks ==="
-            find Payload/Runner.app/Frameworks -name "Headers" -type d -exec rm -rf {} +
-            find Payload/Runner.app/Frameworks -name "PrivateHeaders" -type d -exec rm -rf {} +
-            find Payload/Runner.app/Frameworks -name "Modules" -type d -exec rm -rf {} +
+            find Payload/Runner.app/Frameworks -name "Headers" -type d -exec rm -rf {} + 2>/dev/null || true
+            find Payload/Runner.app/Frameworks -name "PrivateHeaders" -type d -exec rm -rf {} + 2>/dev/null || true
+            find Payload/Runner.app/Frameworks -name "Modules" -type d -exec rm -rf {} + 2>/dev/null || true
           fi
-          
+
           echo "App bundle cleaned successfully."
           mkdir -p build/ios/ipa
           zip -r build/ios/ipa/PrivateCinema.ipa Payload
