@@ -28,7 +28,7 @@ jobs:
 
       - name: Build iOS Project (Unsigned)
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign CODE_SIGNING_ALLOWED=NO CODE_SIGN_SIGNING_REQUIRED=NO
 
       - name: Package App and Clean Signatures/Headers
         run: |
