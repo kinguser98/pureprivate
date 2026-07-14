@@ -69,6 +69,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showCastle = true;
   bool _showTorrent = true;
   bool _showStremioAddon = true;
+  bool _showFilmu = true;
   String? _selectedStremioResolution;
 
   Future<void> _loadSourceVisibilitySettings() async {
@@ -76,7 +77,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon'];
+        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu'];
         _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
         _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
@@ -91,7 +92,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
-      setState(() => _sourceOrder = order);
+      final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
+      setState(() => _sourceOrder = mergedOrder);
     }
   }
 
@@ -416,6 +419,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // Resolve Nuveo Addons
     tasks.add(_resolveNuveoAddons(tmdbId, season: season, episode: episode));
 
+    // Resolve FilmU API Scraper
+    tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
+
     // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
     if (tmdbId != null && tmdbId.isNotEmpty) {
       final vidsrcUrl = _isSeriesSearch && season != null && episode != null
@@ -430,20 +436,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       );
     }
 
-    // 9. Add SuperEmbed Auto-Resolving Stream (requires TMDB ID)
-    if (tmdbId != null && tmdbId.isNotEmpty) {
-      final superembedUrl = _isSeriesSearch && season != null && episode != null
-          ? 'https://multiembed.to/embed.php?tmdb=1&s=$season&e=$episode&id=$tmdbId'
-          : 'https://multiembed.to/embed.php?tmdb=1&id=$tmdbId';
-      _resolvedSources.add(
-        StreamSourceInfo(
-          name: 'SuperEmbed Server (Direct Native Play)',
-          url: superembedUrl,
-          type: StreamSourceType.vidsrc,
-        ),
-      );
-    }
-
+    // No Superembed and FilmU
     await Future.wait(tasks);
 
     if (mounted) {
@@ -1199,6 +1192,91 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  Future<void> _resolveFilmuScraper(
+    String tmdbId,
+    String title, {
+    int? season,
+    int? episode,
+  }) async {
+    try {
+      final mediaType = _isSeriesSearch ? 'tv' : 'movie';
+      final year = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
+      
+      final queryParams = {
+        'apikey': 'filmu_moviebox_key_v1',
+        if (title.isNotEmpty) 'title': title,
+        if (_isSeriesSearch && season != null) 'season': season.toString(),
+        if (_isSeriesSearch && episode != null) 'episode': episode.toString(),
+        'tmdbId': tmdbId,
+        if (year.isNotEmpty) 'year': year,
+      };
+
+      final uri = Uri.https('rive.filmu.in', '/scrape/rivestream/$mediaType/$tmdbId', queryParams);
+      debugPrint('[FilmU API] Scraper Request: $uri');
+
+      final client = HttpClient();
+      client.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+      
+      final request = await client.getUrl(uri).timeout(const Duration(seconds: 15));
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      
+      if (response.statusCode == 200) {
+        final body = await response.transform(utf8.decoder).join();
+        final Map<String, dynamic> data = jsonDecode(body);
+        final List<dynamic>? sources = data['sources'];
+        
+        if (sources != null) {
+          final List<StreamSourceInfo> tempSources = [];
+          for (final src in sources) {
+            final name = src['name'] ?? 'FilmU Server';
+            final url = src['workerProxyUrl'] ?? src['url'];
+            final quality = src['quality'] ?? '1080p';
+            final Map<String, dynamic>? headersMap = src['headers'];
+            
+            final String lowerName = name.toString().toLowerCase();
+            if (lowerName.contains('primevid') ||
+                lowerName.contains('hindicast') ||
+                lowerName.contains('vietsub') ||
+                lowerName.contains('thuyet')) {
+              continue;
+            }
+
+            if (url != null && url.toString().isNotEmpty) {
+              final Map<String, String> resolvedHeaders = {};
+              if (headersMap != null) {
+                headersMap.forEach((key, val) {
+                  resolvedHeaders[key] = val.toString();
+                });
+              }
+              // Force referer if missing
+              if (!resolvedHeaders.containsKey('Referer')) {
+                resolvedHeaders['Referer'] = 'https://www.rivestream.app/';
+              }
+
+              tempSources.add(
+                StreamSourceInfo(
+                  name: name.toString(),
+                  url: url.toString(),
+                  type: StreamSourceType.filmu,
+                  headers: resolvedHeaders,
+                  quality: quality.toString(),
+                ),
+              );
+            }
+          }
+          if (mounted && tempSources.isNotEmpty) {
+            setState(() {
+              _resolvedSources.addAll(tempSources);
+            });
+          }
+        }
+      }
+      client.close();
+    } catch (e) {
+      debugPrint('[FilmU API] Scraper Error: $e');
+    }
+  }
+
   void _playStream(
     StreamSourceInfo source,
     String movieTitle,
@@ -1209,6 +1287,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         source.type == StreamSourceType.castle ||
         source.type == StreamSourceType.stremioAddon ||
         source.type == StreamSourceType.nuveoAddon;
+
+    if (source.type == StreamSourceType.filmu) {
+      final Map<String, String> headers = {};
+      if (source.headers != null) {
+        headers.addAll(source.headers!);
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: 'FilmU Premium Server',
+            movieId: 'special_search_${_selectedMovie['id']}',
+            resumeDirectly: false,
+            headers: headers.isNotEmpty ? headers : null,
+          ),
+        ),
+      );
+      return;
+    }
 
     if (source.type == StreamSourceType.cinemm) {
       final Map<String, String> headers = {};
@@ -1632,7 +1730,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           source.url.contains('hgcloud') ||
           source.url.contains('/e/');
 
-      if (isWebEmbed || source.type == StreamSourceType.vidsrc) {
+      if (isWebEmbed ||
+          source.type == StreamSourceType.vidsrc) {
         try {
           final resolvedUrl = await EmbedResolver.resolve(context, source.url);
           if (mounted) {
@@ -1645,10 +1744,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 posterPath,
               );
             } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Failed to resolve direct streaming link.'),
-                  backgroundColor: Colors.redAccent,
+              // Fallback to webview player directly
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => WebViewPlayerScreen(
+                    embedUrl: source.url,
+                    title: movieTitle,
+                    backdropUrl: posterPath != null
+                        ? 'https://image.tmdb.org/t/p/w780$posterPath'
+                        : null,
+                  ),
                 ),
               );
             }
@@ -2789,6 +2894,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final nuveoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.nuveoAddon)
         .toList();
+    final filmuStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.filmu)
+        .toList();
 
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
@@ -2957,6 +3065,23 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
+      // FilmU Card
+      if (_showFilmu && (_resolvingStreams || filmuStreams.isNotEmpty) && enabledKeys.contains('filmu')) {
+        sourceWidgets['filmu'] = _buildServerGroupCard(
+          title: '${pos('filmu')}. FilmU Premium Server',
+          subtitle: _resolvingStreams && filmuStreams.isEmpty
+              ? 'Searching FilmU...'
+              : '${filmuStreams.length} servers available',
+          icon: Icons.hd_rounded,
+          accentColor: Colors.orangeAccent,
+          onTap: filmuStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.filmu;
+                  }),
+        );
+      }
+
       final List<Widget> groupCards = [];
       for (final key in _sourceOrder) {
         if (key == 'stremioAddon') {
@@ -3051,6 +3176,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = nuveoStreams;
         accentColor = Colors.pinkAccent;
         iconData = Icons.settings_input_component_rounded;
+      } else if (_activeGroupType == StreamSourceType.filmu) {
+        activeList = filmuStreams;
+        accentColor = Colors.orangeAccent;
+        iconData = Icons.hd_rounded;
       } else {
         activeList = castleStreams;
         accentColor = Colors.amberAccent;
@@ -3258,7 +3387,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                       child: Icon(iconData, color: accentColor, size: 20),
                     ),
               title: Text(
-                source.name,
+                (source.quality != null && source.quality!.isNotEmpty)
+                    ? '${source.name} (${source.quality})'
+                    : source.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -3344,6 +3475,7 @@ enum StreamSourceType {
   vidsrc,
   stremioAddon,
   nuveoAddon,
+  filmu,
 }
 
 class StreamSourceInfo {

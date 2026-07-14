@@ -630,7 +630,7 @@ class StalkerResolver {
 
   /// Syncs all channels from the Stalker Portal directly to the OTT backend server database.
   /// Bypasses server-side Cloudflare blocks because this runs from a clean client-side IP.
-  static Future<Map<String, dynamic>> syncChannelsToServer(int portalId) async {
+  static Future<Map<String, dynamic>> syncChannelsToServer(int portalId, {List<String>? selectedCategoryIds}) async {
     try {
       final settings = await _getSettings(portalId);
       final token = await _authenticate(portalId, settings);
@@ -721,12 +721,23 @@ class StalkerResolver {
         final cmd = ch['cmd']?.toString() ?? '';
         
         final catId = ch['tv_genre_id']?.toString() ?? '';
+        
+        // Filter by selected categories if provided
+        if (selectedCategoryIds != null && !selectedCategoryIds.contains(catId)) {
+          continue;
+        }
+
         var category = ch['genres_str']?.toString() ?? '';
         if (category.isEmpty && catId.isNotEmpty && genresMap.containsKey(catId)) {
           category = genresMap[catId]!;
         }
         if (category.isEmpty) {
           category = 'General';
+        }
+
+        final suffix = ' ($portalId)';
+        if (!category.endsWith(suffix)) {
+          category = '$category$suffix';
         }
 
         final logoUrl = resolveStalkerLogo(logo, portalUrl);
@@ -768,6 +779,86 @@ class StalkerResolver {
         'error': e.toString(),
       };
     }
+  }
+
+  /// Fetches Live TV genres/categories from Stalker Portal.
+  static Future<List<Map<String, String>>> getLiveCategories(int portalId) async {
+    final settings = await _getSettings(portalId);
+    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+    final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+    var deviceId = (settings['device_id'] ?? '').toString().trim();
+    if (deviceId.contains(' ')) {
+      deviceId = deviceId.split(' ').last.trim();
+    }
+
+    Future<_StalkerHttpResponse> getWithRetry(String url) async {
+      final currentToken = _cachedTokens[portalId] ?? await _authenticate(portalId, settings);
+      final currentHeaders = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookiesMap[portalId]!,
+        'Authorization': 'Bearer $currentToken',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+      
+      var response = await _stalkerGet(url, headers: currentHeaders, portalId: portalId, timeoutSeconds: 15);
+
+      if (response.statusCode == 200) {
+        final body = response.body;
+        if (!body.contains('Authorization failed') && !body.contains('Authorisation failed')) {
+          return response;
+        }
+      }
+      
+      debugPrint('Stalker request failed or unauthorized, retrying handshake...');
+      clearCache(portalId: portalId);
+      
+      final newToken = await _authenticate(portalId, settings);
+      final newHeaders = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookiesMap[portalId]!,
+        'Authorization': 'Bearer $newToken',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+      
+      var responseRetry = await _stalkerGet(url, headers: newHeaders, portalId: portalId, timeoutSeconds: 15);
+
+      if (responseRetry.statusCode != 200 || responseRetry.body.contains('Authorization failed') || responseRetry.body.contains('Authorisation failed')) {
+        throw Exception('Stalker request failed: HTTP ${responseRetry.statusCode}');
+      }
+      
+      return responseRetry;
+    }
+
+    var categoriesUrl = '$portalUrl?type=itv&action=get_genres';
+    categoriesUrl = _appendDeviceParams(categoriesUrl, deviceId);
+    final categoriesResponse = await getWithRetry(categoriesUrl);
+    
+    final List<Map<String, String>> categoriesList = [];
+    if (categoriesResponse.statusCode == 200) {
+      final categoriesData = json.decode(categoriesResponse.body);
+      dynamic rawList = [];
+      if (categoriesData is Map) {
+        rawList = categoriesData['js'] ?? categoriesData['result'] ?? [];
+        if (rawList is! List && categoriesData['js'] is Map) {
+          rawList = categoriesData['js']['data'] ?? [];
+        }
+      } else if (categoriesData is List) {
+        rawList = categoriesData;
+      }
+      
+      if (rawList is List) {
+        for (final item in rawList) {
+          if (item is Map) {
+            final id = item['id']?.toString() ?? '';
+            final title = item['title']?.toString() ?? '';
+            if (id.isNotEmpty && title.isNotEmpty) {
+              categoriesList.add({'id': id, 'title': title});
+            }
+          }
+        }
+      }
+    }
+    return categoriesList;
   }
 
   /// Fetches VOD categories from Stalker Portal.

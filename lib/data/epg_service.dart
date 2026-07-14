@@ -83,7 +83,7 @@ class EpgService {
         final second = int.parse(timeStr.substring(12, 14));
         
         // Handle timezone offset if present (e.g. "+0530")
-        var dt = DateTime(year, month, day, hour, minute, second);
+        var dt = DateTime.utc(year, month, day, hour, minute, second);
         if (timeStr.contains('+') || timeStr.contains('-')) {
           final parts = timeStr.split(' ');
           if (parts.length > 1) {
@@ -99,6 +99,9 @@ class EpgService {
               dt = utcTime.toLocal();
             }
           }
+        } else {
+          // If no offset is specified, treat as UTC and convert to local time
+          dt = dt.toLocal();
         }
         return dt;
       } catch (e) {

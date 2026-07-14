@@ -47,6 +47,7 @@ class Movie {
     this.imdbId,
     this.streamSources = const [],
     this.collection,
+    this.isNew = false,
   });
 
   final String id;
@@ -73,6 +74,7 @@ class Movie {
   final String? imdbId;
   final List<StreamSource> streamSources;
   final String? collection;
+  final bool isNew;
 
   String get displayBackdrop => backdropUrl ?? posterUrl;
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ffi';
@@ -327,8 +328,8 @@ class CustomDnsProxy {
         final Map<String, String> extraHeaders = {};
         try {
           final targetUri = Uri.parse(targetUrl);
-          if (targetUri.queryParameters.containsKey('headers')) {
-            final headersParam = targetUri.queryParameters['headers'];
+          if (targetUri.queryParameters.containsKey('local_proxy_headers')) {
+            final headersParam = targetUri.queryParameters['local_proxy_headers'];
             if (headersParam != null && headersParam.isNotEmpty) {
               final decodedJson = jsonDecode(headersParam);
               if (decodedJson is Map) {
@@ -338,7 +339,7 @@ class CustomDnsProxy {
               }
             }
             final cleanParams = Map<String, String>.from(targetUri.queryParameters);
-            cleanParams.remove('headers');
+            cleanParams.remove('local_proxy_headers');
             if (cleanParams.isEmpty) {
               cleanTargetUrl = targetUri.replace(query: '').toString();
               if (cleanTargetUrl.endsWith('?')) {
@@ -359,7 +360,7 @@ class CustomDnsProxy {
         for (int attempt = 0; attempt < 3; attempt++) {
           try {
             final req = await client.openUrl(request.method, Uri.parse(cleanTargetUrl))
-                .timeout(const Duration(seconds: 8));
+                .timeout(const Duration(seconds: 30));
             req.followRedirects = false;
             
             // Copy headers, inject Host, enforce Connection: close
@@ -397,7 +398,7 @@ class CustomDnsProxy {
               await req.addStream(request);
             }
             
-            resp = await req.close().timeout(const Duration(seconds: 8));
+            resp = await req.close().timeout(const Duration(seconds: 30));
             debugPrint('CustomDnsProxy HTTP Relay: Target returned status ${resp.statusCode} for $cleanTargetUrl');
             break;
           } catch (e) {
@@ -422,12 +423,16 @@ class CustomDnsProxy {
                 final baseUri = Uri.parse(cleanTargetUrl);
                 final locUri = baseUri.resolve(value);
                 final hostWithPort = locUri.hasPort ? '${locUri.host}:${locUri.port}' : locUri.host;
+                final Map<String, String> redirectParams = Map<String, String>.from(locUri.queryParameters);
+                if (extraHeaders.isNotEmpty && !redirectParams.containsKey('local_proxy_headers')) {
+                  redirectParams['local_proxy_headers'] = jsonEncode(extraHeaders);
+                }
                 final proxyRedirectUri = Uri(
                   scheme: 'http',
                   host: '127.0.0.1',
                   port: port,
                   path: '/proxy/${locUri.scheme}/$hostWithPort${locUri.path}',
-                  queryParameters: locUri.queryParameters.isNotEmpty ? locUri.queryParameters : null,
+                  queryParameters: redirectParams.isNotEmpty ? redirectParams : null,
                 );
                 final proxyRedirect = proxyRedirectUri.toString();
                 request.response.headers.set('location', proxyRedirect);
@@ -460,7 +465,7 @@ class CustomDnsProxy {
           }
           
           var bodyStr = utf8.decode(decodedBytes);
-          final incomingHeadersParam = request.uri.queryParameters['headers'];
+          final incomingHeadersParam = request.uri.queryParameters['local_proxy_headers'];
           final selectedAudio = request.uri.queryParameters['selected_audio'];
           final selectedQuality = request.uri.queryParameters['selected_quality'];
           
@@ -572,20 +577,14 @@ class CustomDnsProxy {
                   if (!relativeUrl.contains('127.0.0.1') && !relativeUrl.contains('localhost')) {
                     try {
                       final resolvedUri = baseUri.resolve(relativeUrl);
-                      bool shouldProxyHost = false;
-                      for (final pattern in MyHttpOverrides.blocklist) {
-                        if (resolvedUri.host.toLowerCase().contains(pattern)) {
-                          shouldProxyHost = true;
-                          break;
-                        }
-                      }
+                      bool shouldProxyHost = true; // Always proxy segments of proxied playlists to keep headers
                       
                       if (shouldProxyHost) {
                         final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
                         var rewrittenUri = resolvedUri;
                         if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
                           final newParams = Map<String, String>.from(resolvedUri.queryParameters);
-                          newParams['headers'] = incomingHeadersParam;
+                          newParams['local_proxy_headers'] = incomingHeadersParam;
                           rewrittenUri = resolvedUri.replace(queryParameters: newParams);
                         }
                         
@@ -610,20 +609,14 @@ class CustomDnsProxy {
               if (!line.contains('127.0.0.1') && !line.contains('localhost')) {
                 try {
                   final resolvedUri = baseUri.resolve(line);
-                  bool shouldProxyHost = false;
-                  for (final pattern in MyHttpOverrides.blocklist) {
-                    if (resolvedUri.host.toLowerCase().contains(pattern)) {
-                      shouldProxyHost = true;
-                      break;
-                    }
-                  }
+                  bool shouldProxyHost = true; // Always proxy segments of proxied playlists to keep headers
                   
                   if (shouldProxyHost) {
                     final hostWithPort = resolvedUri.hasPort ? '${resolvedUri.host}:${resolvedUri.port}' : resolvedUri.host;
                     var rewrittenUri = resolvedUri;
                     if (incomingHeadersParam != null && incomingHeadersParam.isNotEmpty) {
                       final newParams = Map<String, String>.from(resolvedUri.queryParameters);
-                      newParams['headers'] = incomingHeadersParam;
+                      newParams['local_proxy_headers'] = incomingHeadersParam;
                       rewrittenUri = resolvedUri.replace(queryParameters: newParams);
                     }
                     
@@ -643,13 +636,17 @@ class CustomDnsProxy {
             }
           }
           bodyStr = lines.join('\n');
-          
           request.response.headers.removeAll('content-encoding');
           final rewrittenBytes = utf8.encode(bodyStr);
+          ProxyStats.addBytes(rewrittenBytes.length);
           request.response.headers.set('content-length', rewrittenBytes.length.toString());
           request.response.add(rewrittenBytes);
         } else {
-          await request.response.addStream(resp);
+          // Relaying chunks of video stream: count bytes to monitor speed and data usage
+          await for (final chunk in resp) {
+            ProxyStats.addBytes(chunk.length);
+            request.response.add(chunk);
+          }
         }
         
         await request.response.close();
@@ -784,5 +781,32 @@ class MyHttpOverrides extends HttpOverrides {
       }
     }
     return 'DIRECT';
+  }
+}
+
+class ProxyStats {
+  static final speedNotifier = ValueNotifier<double>(0.0);
+  static final totalDataNotifier = ValueNotifier<int>(0);
+
+  static int _accumulatedBytes = 0;
+  static int _totalBytes = 0;
+  static Timer? _timer;
+
+  static void reset() {
+    _accumulatedBytes = 0;
+    _totalBytes = 0;
+    speedNotifier.value = 0.0;
+    totalDataNotifier.value = 0;
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      speedNotifier.value = _accumulatedBytes.toDouble();
+      _accumulatedBytes = 0;
+    });
+  }
+
+  static void addBytes(int bytes) {
+    _accumulatedBytes += bytes;
+    _totalBytes += bytes;
+    totalDataNotifier.value = _totalBytes;
   }
 }

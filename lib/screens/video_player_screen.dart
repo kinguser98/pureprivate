@@ -197,6 +197,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    ProxyStats.reset(); // Reset proxy counters
     _loadSubtitleSize();
     _loadFavoriteStatus();
     
@@ -258,11 +259,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               _trackSelectorScheduled = true;
               Future.delayed(const Duration(milliseconds: 1200), () {
                 if (mounted && _hasMultipleTracks) {
-                  // Pre-select 2nd audio track by default if available
-                  final realAudio = _realAudioTracks;
-                  if (realAudio.length > 1) {
-                    _player.setAudioTrack(realAudio[1]);
-                  }
                   setState(() => _showInitialTrackSelector = true);
                 }
               });
@@ -365,8 +361,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (widget.videoSource.startsWith('http')) {
         try {
           final uri = Uri.parse(widget.videoSource);
-          if (uri.queryParameters.containsKey('headers')) {
-            final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
+          if (uri.queryParameters.containsKey('local_proxy_headers')) {
+            final jsonHeaders = jsonDecode(uri.queryParameters['local_proxy_headers']!);
             if (jsonHeaders is Map) {
               jsonHeaders.forEach((key, value) {
                 playHeaders[key.toString()] = value.toString();
@@ -407,14 +403,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           }
         }
         // Enable hardware decoding
-        await nativePlayer.setProperty('hwdec', 'no');
+        if (Platform.isAndroid) {
+          await nativePlayer.setProperty('hwdec', 'mediacodec-copy');
+        } else if (Platform.isIOS || Platform.isMacOS) {
+          await nativePlayer.setProperty('hwdec', 'videotoolbox');
+        } else {
+          await nativePlayer.setProperty('hwdec', 'auto');
+        }
         
         if (widget.isLive) {
-          // Disable cache completely or use minimum readahead buffer for instantaneous live playback
-          await nativePlayer.setProperty('cache', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '1');
-          await nativePlayer.setProperty('cache-secs', '1');
-          await nativePlayer.setProperty('network-timeout', '15');
+          // Live stream optimizations (small buffer to handle network jitter, low latency)
+          await nativePlayer.setProperty('cache', 'yes');
+          await nativePlayer.setProperty('cache-on-disk', 'no');
+          await nativePlayer.setProperty('demuxer-max-bytes', '20971520'); // 20MB buffer limit
+          await nativePlayer.setProperty('demuxer-readahead-secs', '5');   // 5 seconds readahead
+          await nativePlayer.setProperty('cache-secs', '5');               // 5 seconds cache
+          await nativePlayer.setProperty('network-timeout', '20');
           await nativePlayer.setProperty('hr-seek', 'no');
         } else {
           // Increase network timeout to prevent slow proxied sources (like AList/Streamtape on Koyeb) from timing out (default in media_kit is 5s)
@@ -448,25 +452,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final host = uri.host;
           final lowerHost = host.toLowerCase();
           
-          // Force proxy if host is in blocklist OR if there are HLS quality/audio selectors to filter in the proxy
-          bool shouldProxy = uri.queryParameters.containsKey('selected_audio') || uri.queryParameters.containsKey('selected_quality');
-          if (!shouldProxy) {
-            for (final pattern in MyHttpOverrides.blocklist) {
-              if (lowerHost.contains(pattern)) {
-                shouldProxy = true;
-                break;
-              }
-            }
-          }
-          
+          // Always proxy all http/https streams to support real-time network speed & data usage tracking
+          bool shouldProxy = true;
           if (shouldProxy) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {
               var cleanUri = uri;
-              if (!uri.queryParameters.containsKey('headers') && playHeaders.isNotEmpty) {
+              if (!uri.queryParameters.containsKey('local_proxy_headers') && playHeaders.isNotEmpty) {
                 // Encode the playHeaders into the URL parameter so the proxy can extract it
                 final newParams = Map<String, String>.from(uri.queryParameters);
-                newParams['headers'] = jsonEncode(playHeaders);
+                newParams['local_proxy_headers'] = jsonEncode(playHeaders);
                 cleanUri = uri.replace(queryParameters: newParams);
               }
               
@@ -481,14 +476,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
       }
 
-      // If we are NOT routing through the local proxy, we must strip the 'headers' query parameter
+      // If we are NOT routing through the local proxy, we must strip the 'local_proxy_headers' query parameter
       // here so the player directly requests the clean URL without corrupting CDN signatures.
       if (!isProxied && resolvedSource.startsWith('http')) {
         try {
           final sourceUri = Uri.parse(resolvedSource);
-          if (sourceUri.queryParameters.containsKey('headers')) {
+          if (sourceUri.queryParameters.containsKey('local_proxy_headers')) {
             final cleanParams = Map<String, String>.from(sourceUri.queryParameters);
-            cleanParams.remove('headers');
+            cleanParams.remove('local_proxy_headers');
             if (cleanParams.isEmpty) {
               resolvedSource = sourceUri.replace(query: '').toString();
               if (resolvedSource.endsWith('?')) {
@@ -1227,7 +1222,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 if (imdb.contains(':')) {
                   type = 'series';
                 }
-                final url = 'https://opensubtitles.pizzapip.net/subtitles/$type/$finalImdb.json';
+                final url = 'https://opensubtitles-v3.strem.io/subtitles/$type/$finalImdb.json';
                 debugPrint('Querying subtitles: $url');
                 final response = await http.get(
                   Uri.parse(url),
@@ -2168,14 +2163,59 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                   onTap: _changePlaybackSpeed,
                                 ),
                           
-                          // Bottom Center: Live system time
-                          Text(
-                            _timeString,
-                            style: GoogleFonts.outfit(
-                              color: Colors.white54,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          // Bottom Center: Live system time & speed indicator
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _timeString,
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white54,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              ValueListenableBuilder<double>(
+                                valueListenable: ProxyStats.speedNotifier,
+                                builder: (context, speed, _) {
+                                  return ValueListenableBuilder<int>(
+                                    valueListenable: ProxyStats.totalDataNotifier,
+                                    builder: (context, totalBytes, _) {
+                                      final speedBits = speed * 8;
+                                      final speedText = speedBits <= 0
+                                          ? '0 Kb/s'
+                                          : (speedBits < 1024 * 1024
+                                              ? '${(speedBits / 1024).toStringAsFixed(1)} Kb/s'
+                                              : '${(speedBits / (1024 * 1024)).toStringAsFixed(2)} Mb/s');
+                                      
+                                      final totalBits = totalBytes * 8.0;
+                                      final dataText = totalBits < 1024 * 1024
+                                          ? '${(totalBits / 1024).toStringAsFixed(1)} Kb'
+                                          : (totalBits < 1024 * 1024 * 1024
+                                              ? '${(totalBits / (1024 * 1024)).toStringAsFixed(1)} Mb'
+                                              : '${(totalBits / (1024 * 1024 * 1024)).toStringAsFixed(2)} Gb');
+
+                                      return Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            '$speedText | $dataText',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white60,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                           
                           // Bottom Right: Rate (Favorite) button

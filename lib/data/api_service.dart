@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/models/language_item.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/dio_client.dart';
+import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {
   static const String apiUrl = 'http://ott.redapp.space/api.php';
@@ -28,19 +30,31 @@ class ApiService {
     return map;
   }
 
-  /// Fetches raw JSON data from the OTT admin panel API using standard http with retries.
+  /// Fetches raw JSON data from the OTT admin panel API using persistent Dio client.
   static Future<Map<String, dynamic>> fetchRawData() async {
     int attempts = 0;
     const maxAttempts = 3;
     final backoffs = [1500, 3000];
+    final client = DioClient().dio;
 
     while (attempts < maxAttempts) {
       attempts++;
       try {
-        final response = await http.get(Uri.parse(apiUrl)).timeout(const Duration(seconds: 10));
+        final response = await client.get<dynamic>(
+          apiUrl,
+          options: dio_pkg.Options(
+            responseType: dio_pkg.ResponseType.json,
+            receiveTimeout: const Duration(seconds: 10),
+          ),
+        );
         if (response.statusCode == 200) {
-          final jsonString = utf8.decode(response.bodyBytes);
-          return json.decode(jsonString) as Map<String, dynamic>;
+          final data = response.data;
+          if (data is Map<String, dynamic>) {
+            return data;
+          } else if (data is String) {
+            return json.decode(data) as Map<String, dynamic>;
+          }
+          throw Exception('Unexpected response payload type: ${data.runtimeType}');
         } else if (response.statusCode == 429) {
           if (attempts < maxAttempts) {
             final delay = backoffs[attempts - 1];
@@ -69,6 +83,14 @@ class ApiService {
     if (rawLanguages != null) {
       _langMap = _buildLanguageMap(rawLanguages);
     }
+    
+    // Find the maximum ID in the catalogue to determine recency (newly added)
+    int maxId = 0;
+    for (final json in jsonList) {
+      final idVal = int.tryParse(json['id']?.toString() ?? '') ?? 0;
+      if (idVal > maxId) maxId = idVal;
+    }
+
     return jsonList.map((json) {
       final idStr = json['id']?.toString() ?? '0';
       final idInt = int.tryParse(idStr) ?? 0;
@@ -177,6 +199,21 @@ class ApiService {
           ? json['director_photo']!.toString()
           : null;
 
+      // Determine if movie is released in the last 7 days or has recent database insert ID
+      bool isRecentlyAdded = idInt >= maxId - 15;
+      try {
+        if (releaseDate.isNotEmpty) {
+          final parsedDate = DateTime.tryParse(releaseDate);
+          if (parsedDate != null) {
+            final now = DateTime.now();
+            final difference = now.difference(parsedDate).inDays;
+            if (difference >= 0 && difference <= 7) {
+              isRecentlyAdded = true;
+            }
+          }
+        }
+      } catch (_) {}
+
       return Movie(
         id: idStr,
         title: title,
@@ -201,6 +238,7 @@ class ApiService {
         imdbId: imdbId,
         streamSources: streamSources,
         collection: collection,
+        isNew: isRecentlyAdded,
       );
     }).toList();
   }

@@ -39,7 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   
   int _carouselIndex = 0;
   Timer? _carouselTimer;
-  final PageController _carouselController = PageController(viewportFraction: 0.62);
+  final PageController _carouselController = PageController(initialPage: 1000, viewportFraction: 0.62);
 
   final List<String> _categoryTabs = const ['Movies', 'Live TV', 'Series', 'Library'];
   String _selectedCategoryTab = 'Movies';
@@ -62,12 +62,26 @@ class _HomeScreenState extends State<HomeScreen> {
     _carouselTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
       final carouselMovies = _getCarouselMovies();
       if (carouselMovies.isNotEmpty && _carouselController.hasClients) {
-        final next = (_carouselIndex + 1) % carouselMovies.length;
+        final next = _carouselController.page!.round() + 1;
         _carouselController.animateToPage(
           next,
           duration: const Duration(milliseconds: 800),
           curve: Curves.easeInOutCubic,
         );
+      }
+    });
+  }
+
+  void _setupInitialCarouselPage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final carouselMovies = _getCarouselMovies();
+      if (carouselMovies.isNotEmpty && _carouselController.hasClients) {
+        final len = carouselMovies.length;
+        final targetPage = (1000 ~/ len) * len;
+        _carouselController.jumpToPage(targetPage);
+        setState(() {
+          _carouselIndex = 0;
+        });
       }
     });
   }
@@ -154,6 +168,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _isOfflineMode = false;
           _isLoading = false;
         });
+        _setupInitialCarouselPage();
       }
     } catch (e) {
       debugPrint('Error loading API data: $e');
@@ -186,6 +201,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _movieCollections = [];
             _featuredMovies = downs.take(5).toList();
           });
+          _setupInitialCarouselPage();
         }
       } else {
         // Fallback to offline catalog (mock data)
@@ -201,6 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _featuredMovies = MockCatalog.allMovies.take(5).toList();
             _movieGenres = MockCatalog.allMovies.map((m) => m.genre).toSet().toList();
           });
+          _setupInitialCarouselPage();
         }
       }
     }
@@ -745,12 +762,12 @@ class _HomeScreenState extends State<HomeScreen> {
         controller: _carouselController,
         onPageChanged: (idx) {
           setState(() {
-            _carouselIndex = idx;
+            _carouselIndex = idx % carouselMovies.length;
           });
         },
-        itemCount: carouselMovies.length,
+        itemCount: 10000,
         itemBuilder: (context, index) {
-          final movie = carouselMovies[index];
+          final movie = carouselMovies[index % carouselMovies.length];
           return AnimatedBuilder(
             animation: _carouselController,
             builder: (context, child) {
@@ -758,7 +775,8 @@ class _HomeScreenState extends State<HomeScreen> {
               if (_carouselController.position.haveDimensions) {
                 value = index - _carouselController.page!;
               } else {
-                value = (index - _carouselIndex).toDouble();
+                final currentPage = _carouselController.hasClients ? _carouselController.page?.round() ?? 1000 : 1000;
+                value = (index - currentPage).toDouble();
               }
               
               // Apply scaling, translation, and opacity for coverflow stack effect

@@ -50,6 +50,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   String? _directorProfileUrl;
   double? _dynamicRating;
   double? _dynamicPopularity;
+  List<Map<String, dynamic>> _watchProviders = [];
 
   double? _watchProgress;
   int _savedPositionMs = 0;
@@ -65,7 +66,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveStravoSources = [];
   List<StreamSource> _liveStremioSources = [];
   List<StreamSource> _liveNuveoSources = [];
-
+  List<StreamSource> _liveCastleSources = [];
+ 
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
@@ -73,8 +75,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
   bool _resolvingNuveo = false;
+  bool _resolvingCastle = false;
   bool _resolvingTorrent = false;
-
+ 
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showCinemm = true;
@@ -83,6 +86,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showTorrent = true;
   bool _showStremioAddon = true;
   bool _showNuveoAddon = true;
+  bool _showCastle = true;
   List<String> _sourceOrder = [];
 
   StateSetter? _modalSetState;
@@ -124,6 +128,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['stremio_addons_enabled'] ?? 'true') == 'true';
         _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
+        _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
       });
     }
     // Load source order from cloud
@@ -162,6 +167,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') {
       _resolveLiveNuveoAddons(movie.tmdbId!);
+      if (_showCastle) {
+        _resolveLiveCastle(movie.tmdbId!);
+      }
     }
   }
 
@@ -495,6 +503,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       debugPrint('Nuveo addon resolution failed: $e');
     } finally {
       if (mounted) setState(() => _resolvingNuveo = false);
+    }
+  }
+
+  Future<void> _resolveLiveCastle(String tmdbId) async {
+    if (mounted) setState(() => _resolvingCastle = true);
+    try {
+      debugPrint('Castle: Resolving streams for TMDB: $tmdbId...');
+      final streams = await WebViewScraperExecutor.runScraper(
+        'castle',
+        tmdbId,
+        'movie',
+      );
+      final List<StreamSource> resolved = [];
+      for (final s in streams) {
+        resolved.add(StreamSource(
+          name: '${s.name}${s.quality != null ? ' - ${s.quality}' : ''}',
+          url: s.url,
+          headers: s.headers,
+        ));
+      }
+      if (mounted) {
+        setState(() {
+          _liveCastleSources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('Castle resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingCastle = false);
     }
   }
 
@@ -970,6 +1007,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _dynamicDirector = movie.director;
         _directorProfileUrl = movie.directorPhoto;
         _dynamicRating = null;
+        _watchProviders = [];
       });
       return;
     }
@@ -1007,6 +1045,41 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         detailsResponse = await http
             .get(detailsUrl)
             .timeout(const Duration(seconds: 8));
+      }
+
+      // 3. Fetch Watch Providers (Where to Watch)
+      var providersUrl = Uri.parse(
+        'https://api.themoviedb.org/3/movie/$tmdbId/watch/providers?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+      );
+      var providersResponse = await http
+          .get(providersUrl)
+          .timeout(const Duration(seconds: 8));
+
+      if (providersResponse.statusCode == 404) {
+        providersUrl = Uri.parse(
+          'https://api.themoviedb.org/3/tv/$tmdbId/watch/providers?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+        );
+        providersResponse = await http
+            .get(providersUrl)
+            .timeout(const Duration(seconds: 8));
+      }
+
+      List<Map<String, dynamic>> flatrateProviders = [];
+      if (providersResponse.statusCode == 200) {
+        try {
+          final pData = json.decode(utf8.decode(providersResponse.bodyBytes)) as Map<String, dynamic>;
+          final pResults = pData['results'] as Map<String, dynamic>? ?? {};
+          final regionalData = pResults['IN'] as Map<String, dynamic>? ?? pResults['US'] as Map<String, dynamic>?;
+          if (regionalData != null) {
+            final flatrateList = regionalData['flatrate'] as List<dynamic>? ?? [];
+            for (final provider in flatrateList) {
+              flatrateProviders.add({
+                'name': provider['provider_name']?.toString() ?? '',
+                'logo_path': provider['logo_path']?.toString() ?? '',
+              });
+            }
+          }
+        } catch (_) {}
       }
 
       List<CastMember> cast = movie.castMembers;
@@ -1101,6 +1174,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           _directorProfileUrl = directorProfile ?? movie.directorPhoto;
           _dynamicRating = rating;
           _dynamicPopularity = popularity;
+          _watchProviders = flatrateProviders;
         });
       }
     } catch (e) {
@@ -1111,6 +1185,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           _directorProfileUrl = movie.directorPhoto;
           _dynamicRating = null;
           _dynamicPopularity = null;
+          _watchProviders = [];
         });
       }
     }
@@ -2131,9 +2206,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 },
               );
             }
-
+ 
+            // Castle Server
+            if ((_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
+              sourceWidgets['castle'] = _buildSourceTile(
+                icon: Icons.castle_rounded,
+                title: '${pos('castle')}. Castle TV Server',
+                subtitle: _resolvingCastle
+                    ? 'Searching Castle...'
+                    : '${_liveCastleSources.length} links available',
+                disabled: _resolvingCastle,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveCastleSources.length == 1) {
+                    _playWithResolution(
+                      _liveCastleSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveCastleSources.first.name,
+                      headers: _liveCastleSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'CASTLE TV STREAMS',
+                      _liveCastleSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+ 
             final List<Widget> items = [];
-
+ 
             // 1. Direct MP4/MKV Link (always shown at top if exist)
             if (dbMp4Sources.isNotEmpty) {
               items.add(
@@ -2164,7 +2269,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
               );
             }
-
+ 
             // 4. Streamtape Server (always shown at top if exist)
             if (dbStreamtapeSources.isNotEmpty) {
               items.add(
@@ -2195,7 +2300,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
               );
             }
-
+ 
             // Dynamically append other sources in sorted visibility order
             for (final key in _sourceOrder) {
               if (key == 'stremioAddon') {
@@ -2211,9 +2316,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 }
               }
             }
-
+ 
             if (items.isEmpty) {
-              final resolvingAny = _resolvingVidlink || _resolvingNetmirror || _resolvingCinemm || _resolvingStalker || _resolvingStravo || _resolvingStremio || _resolvingNuveo;
+              final resolvingAny = _resolvingVidlink || _resolvingNetmirror || _resolvingCinemm || _resolvingStalker || _resolvingStravo || _resolvingStremio || _resolvingNuveo || _resolvingCastle;
               return SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
@@ -3901,6 +4006,111 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     Share.share(text, subject: 'Check out ${movie.title}');
   }
 
+  void _showWatchProvidersBottomSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF16151A),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(24),
+              topRight: Radius.circular(24),
+            ),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.05),
+              width: 1,
+            ),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'OTT Streaming Providers',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white60),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (_watchProviders.isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24.0),
+                    child: Text(
+                      'No OTT streaming platforms found for this region.',
+                      style: GoogleFonts.outfit(color: Colors.white38, fontSize: 13),
+                    ),
+                  ),
+                )
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: _watchProviders.map((provider) {
+                      final logoPath = provider['logo_path']?.toString() ?? '';
+                      final logoUrl = 'https://image.tmdb.org/t/p/w154$logoPath';
+                      final providerName = provider['provider_name']?.toString() ?? 'OTT';
+                      return Container(
+                        margin: const EdgeInsets.only(right: 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 54,
+                              height: 54,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white10),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Image.network(
+                                logoUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const Icon(Icons.tv_rounded, color: Colors.white60, size: 24),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: 66,
+                              child: Text(
+                                providerName,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   String _formatDuration(int ms) {
     final d = Duration(milliseconds: ms);
     final min = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -4399,9 +4609,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   : null,
                             ),
                             _buildActionButtonCard(
-                              icon: Icons.share_rounded,
-                              label: 'Share',
-                              onTap: _shareMovie,
+                              icon: Icons.tv_rounded,
+                              label: 'Watch OTT',
+                              onTap: () {
+                                if (_watchProviders.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('No OTT streaming platforms found for this movie.'),
+                                      backgroundColor: Colors.orangeAccent,
+                                    ),
+                                  );
+                                } else {
+                                  _showWatchProvidersBottomSheet(context);
+                                }
+                              },
+                              activeColor: _watchProviders.isNotEmpty ? activeTheme.accentBright : null,
                             ),
                           ],
                         ),
@@ -4426,7 +4648,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             height: 1.5,
                           ),
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 20),
+
+                        const SizedBox(height: 20),
+
+                        const SizedBox(height: 4),
 
                         // Director & Cast List
                         if (_dynamicDirector != null) ...[

@@ -534,7 +534,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _isSyncing = true;
-      _syncMessage = isVod ? 'Fetching Stalker VOD Categories...' : 'Syncing Stalker Channels...';
+      _syncMessage = isVod ? 'Fetching Stalker VOD Categories...' : 'Fetching Stalker Live TV Categories...';
     });
 
     List<String>? selectedCategoryIds;
@@ -577,6 +577,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         return;
       }
+    } else {
+      try {
+        final categories = await StalkerResolver.getLiveCategories(selectedPortalId);
+        if (mounted) {
+          setState(() {
+            _isSyncing = false;
+          });
+        }
+        if (categories.isEmpty) {
+          throw Exception('No Live TV categories found on the Stalker Portal.');
+        }
+
+        if (mounted) {
+          final chosenIds = await showDialog<List<String>>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => MobileCategoryPickerDialog(categories: categories, isLive: true),
+          );
+
+          if (chosenIds == null || chosenIds.isEmpty) {
+            return;
+          }
+          selectedCategoryIds = chosenIds;
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isSyncing = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to load Live TV categories: $e'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        return;
+      }
     }
 
     setState(() {
@@ -602,7 +640,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
         );
       } else {
-        result = await StalkerResolver.syncChannelsToServer(selectedPortalId);
+        result = await StalkerResolver.syncChannelsToServer(
+          selectedPortalId,
+          selectedCategoryIds: selectedCategoryIds,
+        );
       }
       
       if (mounted) {
@@ -1221,8 +1262,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 class MobileCategoryPickerDialog extends StatefulWidget {
   final List<Map<String, String>> categories;
+  final bool isLive;
 
-  const MobileCategoryPickerDialog({super.key, required this.categories});
+  const MobileCategoryPickerDialog({super.key, required this.categories, this.isLive = false});
 
   @override
   State<MobileCategoryPickerDialog> createState() => _MobileCategoryPickerDialogState();
@@ -1245,7 +1287,7 @@ class _MobileCategoryPickerDialogState extends State<MobileCategoryPickerDialog>
       backgroundColor: AppColors.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Text(
-        'Select VOD Categories',
+        widget.isLive ? 'Select Live TV Categories' : 'Select VOD Categories',
         style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
       ),
       content: SizedBox(

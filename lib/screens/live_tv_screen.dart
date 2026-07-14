@@ -14,6 +14,7 @@ import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_ios/screens/multi_view_player_screen.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -61,6 +62,16 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     _initPrefs();
     _fetchChannels();
     _loadEPGData();
+    
+    // Initialize mini player early so it is ready for immediate playback
+    _miniPlayer = Player();
+    _miniController = VideoController(_miniPlayer!);
+    _miniPlayer!.stream.playing.listen((playing) {
+      if (mounted) setState(() => _isMiniPlayerPlaying = playing);
+    });
+    _miniPlayer!.stream.volume.listen((vol) {
+      if (mounted) setState(() => _isMiniPlayerMuted = vol == 0.0);
+    });
   }
 
   void _initPrefs() async {
@@ -116,15 +127,9 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
             _errorMessage = null;
           });
 
-          // Fetch and apply local/remote cloud sorting orders
-          _applyLocalAndRemoteSorting().then((_) {
-            if (mounted && _activeMiniChannel == null && _selectedCategory.isNotEmpty) {
-              final chans = _groupedChannels[_selectedCategory];
-              if (chans != null && chans.isNotEmpty) {
-                _playChannel(chans.first);
-              }
-            }
-          });
+          if (_activeMiniChannel == null && _selectedCategory.isNotEmpty) {
+            // Channel loaded — user will tap to play. No auto-play.
+          }
         }
       } else {
         throw Exception('HTTP Error: ${response.statusCode}');
@@ -391,11 +396,20 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       return;
     }
 
+    if (_miniPlayer != null) {
+      try {
+        await _miniPlayer!.stop();
+      } catch (e) {
+        debugPrint('Error stopping mini player: $e');
+      }
+    }
+
     setState(() {
       _isResolvingStream = true;
       _resolvingChannelName = name;
       _selectedChannel = channel;
       _isChannelSelected = true;
+      _activeMiniChannel = null;
     });
 
     try {
@@ -413,6 +427,43 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           _miniPlayer!.stream.volume.listen((vol) {
             if (mounted) setState(() => _isMiniPlayerMuted = vol == 0.0);
           });
+        }
+
+        // Configure properties for live stream optimization
+        if (_miniPlayer!.platform is NativePlayer) {
+          final nativePlayer = _miniPlayer!.platform as NativePlayer;
+          await nativePlayer.setProperty('tls-verify', 'no');
+          if (!Platform.isIOS) {
+            await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
+          }
+          if (resolved.headers.isNotEmpty) {
+            final headerList = <String>[];
+            resolved.headers.forEach((key, value) {
+              headerList.add('$key: $value');
+            });
+            if (headerList.isNotEmpty) {
+              await nativePlayer.setProperty('http-header-fields', headerList.join(','));
+            }
+          }
+          
+          if (Platform.isAndroid) {
+            await nativePlayer.setProperty('hwdec', 'mediacodec-copy');
+          } else if (Platform.isIOS || Platform.isMacOS) {
+            await nativePlayer.setProperty('hwdec', 'videotoolbox');
+          } else {
+            await nativePlayer.setProperty('hwdec', 'auto');
+          }
+          
+          await nativePlayer.setProperty('cache', 'yes');
+          await nativePlayer.setProperty('cache-on-disk', 'no');
+          await nativePlayer.setProperty('demuxer-max-bytes', '104857600'); // 100MB buffer limit
+          await nativePlayer.setProperty('demuxer-readahead-secs', '30');   // 30 seconds readahead
+          await nativePlayer.setProperty('cache-secs', '30');               // 30 seconds cache
+          await nativePlayer.setProperty('network-timeout', '30');
+          await nativePlayer.setProperty('hr-seek', 'no');
+          await nativePlayer.setProperty('video-sync', 'audio');
+          await nativePlayer.setProperty('autosync', '10');
+          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
         }
 
         await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
@@ -455,6 +506,17 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   void _saveFavoriteChannels(List<String> favs) {
     _prefs.setStringList('live_tv_favorites', favs);
+  }
+
+  void _toggleFavorite(String channelId) {
+    final favs = _getFavoriteChannels();
+    if (favs.contains(channelId)) {
+      favs.remove(channelId);
+    } else {
+      favs.add(channelId);
+    }
+    _saveFavoriteChannels(favs);
+    setState(() {});
   }
 
   SharedPreferences get _prefs => _cachedPrefs;
@@ -641,41 +703,22 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   Widget _buildTopActionBar(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           Builder(builder: (ctx) {
             final isFav = _activeMiniChannel != null && _getFavoriteChannels().contains((_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString());
             return _buildTopActionBtn(isFav ? Icons.star_rounded : Icons.star_border_rounded, 'FAV', () {
               if (_activeMiniChannel == null) return;
               final channelId = (_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString();
-              final favs = _getFavoriteChannels();
-              if (favs.contains(channelId)) {
-                favs.remove(channelId);
-              } else {
-                favs.add(channelId);
-              }
-              _saveFavoriteChannels(favs);
-              setState(() {});
-            }, iconColor: isFav ? Colors.amber : null);
-          }),
-          _buildTopActionBtn(Icons.radio_button_checked_rounded, 'REC', () {
-            if (_activeMiniChannel == null) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Select a channel first to start recording.'), duration: Duration(seconds: 2)),
-              );
-              return;
-            }
-            _showRecordingDialog(context);
+              _toggleFavorite(channelId);
+            }, iconColor: isFav ? Colors.yellow : null);
           }),
           _buildTopActionBtn(Icons.format_list_bulleted_rounded, 'EPG', () {
             if (_activeMiniChannel != null) {
               _showEpgGuideModal();
             }
-          }),
-          _buildTopActionBtn(Icons.close_rounded, 'EXIT', () {
-            Navigator.of(context).pop();
           }),
         ],
       ),
@@ -717,7 +760,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       clipBehavior: Clip.antiAlias,
-      child: _activeMiniChannel != null && _miniController != null
+      child: _selectedChannel != null && _miniController != null
           ? Stack(
               fit: StackFit.expand,
               children: [
@@ -725,11 +768,21 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
                   controller: _miniController!,
                   controls: AdaptiveVideoControls,
                 ),
-                if (_isResolvingStream)
+                if (_isResolvingStream || _activeMiniChannel == null)
                   Container(
-                    color: Colors.black87,
+                    color: Colors.black,
                     child: Center(
-                      child: CircularProgressIndicator(color: AppColors.accentBright),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: AppColors.accentBright),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Connecting to $_resolvingChannelName...',
+                            style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
               ],
@@ -940,6 +993,28 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             ),
           ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.splitscreen_rounded, color: Colors.white70, size: 18),
+              onPressed: () {
+                _miniPlayer?.pause();
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => MultiViewPlayerScreen(initialChannels: _allChannels),
+                  ),
+                ).then((_) => _miniPlayer?.play());
+              },
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            ),
+          ),
         ],
       ),
     );
@@ -1107,9 +1182,20 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       ),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         IconButton(
-          icon: const Icon(Icons.star_border_rounded, color: Colors.white30, size: 18),
-          onPressed: () { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Channel added to Favorites'), duration: Duration(seconds: 2))); },
-          padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+          icon: Icon(
+            _getFavoriteChannels().contains(channelId)
+                ? Icons.star_rounded
+                : Icons.star_border_rounded,
+            color: _getFavoriteChannels().contains(channelId)
+                ? Colors.yellow
+                : Colors.white30,
+            size: 20,
+          ),
+          onPressed: () {
+            _toggleFavorite(channelId);
+          },
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
         ),
       ]),
     );

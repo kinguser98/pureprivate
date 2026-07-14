@@ -58,6 +58,36 @@ class MovieCard extends StatelessWidget {
                     fit: BoxFit.cover,
                     fallbackColor: movie.posterColor,
                   ),
+                  if (movie.isNew)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFEC4899), Color(0xFF8B5CF6)],
+                          ),
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF8B5CF6).withValues(alpha: 0.4),
+                              blurRadius: 6,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                        child: const Text(
+                          'NEW',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                    ),
 
                   // Dark Bottom Scrim
                   if (!hideTitle)
@@ -195,6 +225,37 @@ class MovieCard extends StatelessWidget {
                   fit: BoxFit.cover,
                   fallbackColor: movie.posterColor,
                 ),
+
+                if (movie.isNew)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFEC4899), Color(0xFF8B5CF6)],
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF8B5CF6).withValues(alpha: 0.4),
+                            blurRadius: 6,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: const Text(
+                        'NEW',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ),
 
                 // Dark Bottom Scrim
                 if (!hideTitle)
