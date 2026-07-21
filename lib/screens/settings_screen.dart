@@ -12,7 +12,14 @@ import 'package:private_cinema_ios/screens/downloads_screen.dart';
 import 'package:private_cinema_ios/theme/app_colors.dart';
 import 'package:private_cinema_ios/data/stalker_resolver.dart';
 import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
+
+import 'package:private_cinema_ios/screens/telegram_login_screen.dart';
+import 'package:freebuff_core/services/telegram/telegram_service.dart';
+import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
+import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
+import 'package:private_cinema_ios/screens/video_player_screen.dart';
 import 'package:private_cinema_ios/screens/send_to_tv_screen.dart';
+import 'package:private_cinema_ios/admin/admin_shell.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -842,207 +849,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       splashColor: Colors.transparent,
                       highlightColor: Colors.transparent,
                     ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white10),
-                      ),
-                      child: ExpansionTile(
-                        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        title: Text(
-                          'Addon & Provider Configurations',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        leading: Icon(Icons.extension_rounded, color: AppColors.accentBright),
-                        childrenPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        children: [
-                          // Torrentio Addon URL
-                          Text(
-                            'Torrentio Addon URL',
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _torrentioUrlController,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontFamily: 'Consolas',
-                                  ),
-                                  decoration: const InputDecoration(
-                                    hintText: 'https://torrentio.strem.fun',
-                                    hintStyle: TextStyle(color: Colors.white30),
-                                    border: InputBorder.none,
-                                    isDense: true,
-                                  ),
-                                  onSubmitted: _saveTorrentioUrl,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
-                                onPressed: () => _saveTorrentioUrl(_torrentioUrlController.text),
-                                tooltip: 'Save URL',
-                              ),
-                            ],
-                          ),
-                          const Text(
-                            'Customize Torrentio stream provider URL, e.g. when configured with RealDebrid API keys.',
-                            style: TextStyle(
-                              color: Colors.white38,
-                              fontSize: 11,
-                              height: 1.3,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Divider(color: Colors.white10),
-                          const SizedBox(height: 12),
-
-                          // Stravo Addon URL
-                          Text(
-                            'Stravo Addon URL',
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _stravoUrlController,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontFamily: 'Consolas',
-                                  ),
-                                  decoration: const InputDecoration(
-                                    hintText: 'https://stravo-clfk.onrender.com/default',
-                                    hintStyle: TextStyle(color: Colors.white30),
-                                    border: InputBorder.none,
-                                    isDense: true,
-                                  ),
-                                  onSubmitted: _saveStravoUrl,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
-                                onPressed: () => _saveStravoUrl(_stravoUrlController.text),
-                                tooltip: 'Save URL',
-                              ),
-                            ],
-                          ),
-                          const Text(
-                            'Customize Stravo stream provider base URL.',
-                            style: TextStyle(
-                              color: Colors.white38,
-                              fontSize: 11,
-                              height: 1.3,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Divider(color: Colors.white10),
-                          const SizedBox(height: 12),
-
-                          // NetMirror Domains
-                          Text(
-                            'NetMirror Domains',
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _netmirrorDomainsController,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontFamily: 'Consolas',
-                                  ),
-                                  decoration: const InputDecoration(
-                                    hintText: 'e.g. https://mobiledetects.com, https://mobiledetect.app',
-                                    hintStyle: TextStyle(color: Colors.white30),
-                                    border: InputBorder.none,
-                                    isDense: true,
-                                  ),
-                                  onSubmitted: _saveNetmirrorDomains,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.save_rounded, color: Colors.white70, size: 20),
-                                onPressed: () => _saveNetmirrorDomains(_netmirrorDomainsController.text),
-                                tooltip: 'Save Domains',
-                              ),
-                            ],
-                          ),
-                          const Text(
-                            'Comma-separated list of active NetMirror search fallback domains (overrides default domains list).',
-                            style: TextStyle(
-                              color: Colors.white38,
-                              fontSize: 11,
-                              height: 1.3,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Divider(color: Colors.white10),
-                          const SizedBox(height: 12),
-
-                          // Stalker Portals Sync
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.sync_rounded, color: Colors.greenAccent, size: 20),
-                            title: Text(
-                              'Sync Stalker Live TV',
-                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            subtitle: const Text('Fetch and upload all live TV channels to your admin panel', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                            onTap: () => _runStalkerSync(false),
-                          ),
-                          const Divider(color: Colors.white10, height: 1),
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.movie_filter_rounded, color: Colors.indigoAccent, size: 20),
-                            title: Text(
-                              'Sync Stalker VOD Movies',
-                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            subtitle: const Text('Fetch and upload all portal VOD movies to your admin database', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                            onTap: () => _runStalkerSync(true),
-                          ),
-                          const Divider(color: Colors.white10, height: 1),
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.network_check_rounded, color: Colors.orangeAccent, size: 20),
-                            title: Text(
-                              'Test Portal Connectivity',
-                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            subtitle: const Text('Test handshake from this device for all portals', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                            onTap: _testPortalConnectivity,
-                          ),
-                        ],
-                      ),
-                    ),
+                    child: const SizedBox.shrink(),
                   ),
-                  const SizedBox(height: 24),
 
                   // 3. Maintenance & Storage Settings
                   _buildSectionHeader('Storage & Maintenance'),
@@ -1107,8 +915,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 
 
-                  // Seedr.cc Auth
-                  _buildSectionHeader('Seedr.cc Torrent'),
+                  // Telegram Integration
+                  _buildSectionHeader('Telegram Integration'),
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -1116,42 +924,243 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.white10),
                     ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _seedrTokenController,
-                            style: const TextStyle(color: Colors.white, fontSize: 12),
-                            decoration: InputDecoration(
-                              hintText: 'Paste Seedr.cc auth token',
-                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
-                              filled: true, fillColor: Colors.white.withValues(alpha: 0.03),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.white10)),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: ValueListenableBuilder<TelegramStatus>(
+                      valueListenable: TelegramService.instance.status,
+                      builder: (context, status, _) {
+                        final isReady = status == TelegramStatus.ready;
+                        String label;
+                        switch (status) {
+                          case TelegramStatus.unconfigured:
+                            label = 'Not configured';
+                            break;
+                          case TelegramStatus.awaitingPhone:
+                            label = 'Waiting for phone number';
+                            break;
+                          case TelegramStatus.awaitingCode:
+                            label = 'Waiting for OTP code';
+                            break;
+                          case TelegramStatus.awaitingPassword:
+                            label = 'Waiting for 2FA password';
+                            break;
+                          case TelegramStatus.ready:
+                            label = 'Connected';
+                            break;
+                          case TelegramStatus.error:
+                            label = 'Error';
+                            break;
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.accentBright
+                                        .withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.send_rounded,
+                                    color: AppColors.accentBright,
+                                    size: 22,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Saved Messages Source',
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        'Status: $label',
+                                        style: TextStyle(
+                                          color: isReady
+                                              ? AppColors.accentBright
+                                              : Colors.white54,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 38,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.accentBright,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Index video files forwarded to "Saved Messages" in Telegram. Files appear as stream sources on movie detail pages.',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white38,
+                                fontSize: 11.5,
+                                height: 1.4,
+                              ),
                             ),
-                            onPressed: () async {
-                              final t = _seedrTokenController.text.trim();
-                              if (t.isNotEmpty) {
-                                await WebTorrentService.saveToken(t);
-                                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Token saved'), backgroundColor: Colors.green));
-                              }
-                            },
-                            child: const Text('Save', style: TextStyle(fontSize: 12)),
-                          ),
-                        ),
-                      ],
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: () async {
+                                      TelegramService.instance.init();
+                                      await Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const TelegramLoginScreen(),
+                                        ),
+                                      );
+                                      if (mounted) setState(() {});
+                                    },
+                                    icon: Icon(
+                                      isReady
+                                          ? Icons.refresh_rounded
+                                          : Icons.login_rounded,
+                                      size: 16,
+                                    ),
+                                    label: Text(
+                                      isReady ? 'Manage' : 'Sign In',
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          AppColors.accentBright,
+                                      foregroundColor: Colors.black,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 12),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: isReady
+                                        ? () async {
+                                            await TelegramService.instance
+                                                .logout();
+                                            if (mounted) setState(() {});
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                      'Telegram disconnected.'),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        : null,
+                                    icon: const Icon(
+                                      Icons.logout_rounded,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Disconnect'),
+                                    style: OutlinedButton.styleFrom(
+                                      side: BorderSide(
+                                        color: Colors.white.withValues(
+                                            alpha: 0.2),
+                                      ),
+                                      foregroundColor: Colors.white70,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 12),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (isReady) ...[
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: () async {
+                                    TelegramService.instance.init();
+                                    final messenger =
+                                        ScaffoldMessenger.of(context);
+                                    try {
+                                      final items =
+                                          await TelegramService.instance
+                                              .loadSavedMessages(limit: 200);
+                                      if (!context.mounted) return;
+                                      messenger.showSnackBar(SnackBar(
+                                        content: Text(
+                                            'Indexed ${items.length} Saved Message files.'),
+                                      ));
+                                    } catch (e) {
+                                      if (!context.mounted) return;
+                                      messenger.showSnackBar(SnackBar(
+                                        content:
+                                            Text('Index failed: $e'),
+                                      ));
+                                    }
+                                  },
+                                  icon: const Icon(
+                                    Icons.cloud_sync_rounded,
+                                    size: 16,
+                                  ),
+                                  label: const Text(
+                                      'Sync Saved Messages Now'),
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(
+                                      color: AppColors.accentBright
+                                          .withValues(alpha: 0.4),
+                                    ),
+                                    foregroundColor:
+                                        AppColors.accentBright,
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(10),
+                                    ),
+                                    ),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    _showTelegramFilesPopup(context);
+                                  },
+                                  icon: const Icon(
+                                    Icons.folder_open_rounded,
+                                    size: 16,
+                                  ),
+                                  label: const Text('View Telegram Files'),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(
+                                      color: Colors.white24,
+                                    ),
+                                    foregroundColor: Colors.white70,
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -1174,6 +1183,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ])),
                         const Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
                       ]),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Admin Panel
+                  _buildSectionHeader('Administration'),
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const AdminShell(),
+                        fullscreenDialog: true,
+                      ),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFFFF8C00).withValues(alpha: 0.18),
+                            const Color(0xFFFFD700).withValues(alpha: 0.10),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0xFFFF8C00).withValues(alpha: 0.35),
+                          width: 1.2,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(11),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFF8C00).withValues(alpha: 0.20),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.admin_panel_settings_rounded,
+                              color: Color(0xFFFF8C00),
+                              size: 26,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Admin Panel',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  'Manage movies, IPTV, settings & more',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white54,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: Color(0xFFFF8C00),
+                            size: 22,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -1256,6 +1341,267 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+
+
+  void _showTelegramFilesPopup(BuildContext context) async {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        String searchQuery = '';
+        List<TelegramVideoItem> allFiles = [];
+        bool isLoadingFiles = true;
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            if (isLoadingFiles) {
+              TelegramIndexDb.instance.all().then((items) {
+                if (context.mounted) {
+                  setState(() {
+                    allFiles = items;
+                    isLoadingFiles = false;
+                  });
+                }
+              }).catchError((_) {
+                if (context.mounted) {
+                  setState(() {
+                    isLoadingFiles = false;
+                  });
+                }
+              });
+            }
+
+            final filteredFiles = allFiles.where((file) {
+              final query = searchQuery.trim().toLowerCase();
+              if (query.isEmpty) return true;
+              return file.title.toLowerCase().contains(query) ||
+                  (file.fileName != null && file.fileName!.toLowerCase().contains(query));
+            }).toList();
+
+            return Dialog(
+              backgroundColor: const Color(0xFF16151A),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+                side: BorderSide(color: Colors.white.withOpacity(0.08)),
+              ),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: Container(
+                  width: 500,
+                  height: 600,
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Header
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.send_rounded, color: AppColors.accentBright, size: 24),
+                              const SizedBox(width: 12),
+                              Text(
+                                'Telegram Files',
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close_rounded, color: Colors.white60),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Search Box
+                      TextField(
+                        onChanged: (val) {
+                          setState(() {
+                            searchQuery = val;
+                          });
+                        },
+                        style: const TextStyle(color: Colors.white, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'Search synced files...',
+                          hintStyle: const TextStyle(color: Colors.white30),
+                          prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 20),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.04),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(color: AppColors.accentBright.withOpacity(0.5)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // List / Loader / Empty State
+                      Expanded(
+                        child: isLoadingFiles
+                            ? Center(
+                                child: CircularProgressIndicator(
+                                  color: AppColors.accentBright,
+                                ),
+                              )
+                            : filteredFiles.isEmpty
+                                ? Center(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(
+                                          Icons.folder_open_rounded,
+                                          color: Colors.white24,
+                                          size: 48,
+                                        ),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          searchQuery.isEmpty
+                                              ? 'No synced files found.\nSync Saved Messages first.'
+                                              : 'No matching files found.',
+                                          textAlign: TextAlign.center,
+                                          style: GoogleFonts.outfit(
+                                            color: Colors.white38,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    itemCount: filteredFiles.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                    itemBuilder: (context, index) {
+                                      final item = filteredFiles[index];
+                                      final size = item.sizeLabel ?? 'Unknown size';
+                                      final duration = item.durationLabel ?? 'Unknown duration';
+                                      return Card(
+                                        color: Colors.white.withOpacity(0.02),
+                                        margin: EdgeInsets.zero,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(16),
+                                          side: BorderSide(color: Colors.white.withOpacity(0.05)),
+                                        ),
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(16),
+                                          onTap: () async {
+                                            // Show resolving loader
+                                            showDialog<void>(
+                                              context: context,
+                                              barrierDismissible: false,
+                                              builder: (context) => Center(
+                                                child: CircularProgressIndicator(
+                                                  color: AppColors.accentBright,
+                                                ),
+                                              ),
+                                            );
+                                            try {
+                                              final resolved = await TelegramService.instance.resolveStream(item);
+                                              if (context.mounted) {
+                                                Navigator.of(context).pop(); // Dismiss loader
+                                                Navigator.of(context).pop(); // Dismiss files list dialog
+                                                
+                                                // Play directly
+                                                Navigator.of(context).push(
+                                                  MaterialPageRoute(
+                                                    builder: (_) => VideoPlayerScreen(
+                                                      videoSource: resolved,
+                                                      title: item.title,
+                                                      subtitle: 'Telegram Sync File',
+                                                    ),
+                                                  ),
+                                                );
+                                              }
+                                            } catch (e) {
+                                              if (context.mounted) {
+                                                Navigator.of(context).pop(); // Dismiss loader
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  SnackBar(
+                                                    content: Text('Failed to resolve stream: $e'),
+                                                    backgroundColor: Colors.redAccent,
+                                                  ),
+                                                );
+                                              }
+                                            }
+                                          },
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.all(10),
+                                                  decoration: BoxDecoration(
+                                                    color: AppColors.accentBright.withOpacity(0.1),
+                                                    borderRadius: BorderRadius.circular(12),
+                                                  ),
+                                                  child: Icon(
+                                                    Icons.video_library_rounded,
+                                                    color: AppColors.accentBright,
+                                                    size: 20,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 14),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        item.title,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontWeight: FontWeight.bold,
+                                                          fontSize: 13,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        '$size  •  $duration',
+                                                        style: const TextStyle(
+                                                          color: Colors.white38,
+                                                          fontSize: 11,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                const Icon(
+                                                  Icons.play_arrow_rounded,
+                                                  color: Colors.white30,
+                                                  size: 20,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
 
 
@@ -1375,6 +1721,8 @@ class _MobileCategoryPickerDialogState extends State<MobileCategoryPickerDialog>
       ],
     );
   }
+
+
 
 }
 

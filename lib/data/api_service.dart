@@ -8,7 +8,7 @@ import 'package:private_cinema_ios/data/dio_client.dart';
 import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {
-  static const String apiUrl = 'http://ott.redapp.space/api.php';
+  static const String apiUrl = 'https://ott.redapp.space/api.php';
   static Map<String, String> _langMap = {};
 
   static String _capitalize(String name) {
@@ -239,6 +239,10 @@ class ApiService {
         streamSources: streamSources,
         collection: collection,
         isNew: isRecentlyAdded,
+        // OTT provider fields
+        ottName: json['ott_name']?.toString(),
+        ottLogo: json['ott_logo']?.toString(),
+        ottId: json['ott_id'] != null ? int.tryParse(json['ott_id'].toString()) : null,
       );
     }).toList();
   }

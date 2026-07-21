@@ -27,6 +27,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.resumeDirectly = false,
     this.headers,
     this.isLive = false,
+    this.sourceName,
   });
 
   final String videoSource;
@@ -37,6 +38,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final bool resumeDirectly;
   final Map<String, String>? headers;
   final bool isLive;
+  final String? sourceName;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -252,12 +254,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _epgRefreshTimer?.cancel();
     _player.dispose();
     
-    // Reset orientations when exiting player
+    // Lock back to portrait mode when exiting player
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
@@ -439,11 +438,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           // Live stream optimizations (small buffer to handle network jitter, low latency)
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '20971520'); // 20MB buffer limit
-          await nativePlayer.setProperty('demuxer-readahead-secs', '5');   // 5 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '5');               // 5 seconds cache
-          await nativePlayer.setProperty('network-timeout', '20');
+          await nativePlayer.setProperty('demuxer-max-bytes', '104857600'); // 100MB buffer limit
+await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
+await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
+          await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
+          await nativePlayer.setProperty('force-seekable', 'yes');
         } else {
           // Increase network timeout to prevent slow proxied sources (like AList/Streamtape on Koyeb) from timing out (default in media_kit is 5s)
           await nativePlayer.setProperty('network-timeout', '40');
@@ -456,12 +456,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('demuxer-readahead-secs', '300'); // 300 seconds readahead
           await nativePlayer.setProperty('cache-secs', '300'); // 300 seconds cache duration
           await nativePlayer.setProperty('cache-pause-wait', '3'); // Buffer 3 seconds before resuming
+          // Force VOD mode for HLS streams that omit #EXT-X-ENDLIST (Stalker, Castle, etc.)
+          await nativePlayer.setProperty('stream-live', 'no');
         }
         
         // Explicit Audio/Video Synchronization and drift correction
-        await nativePlayer.setProperty('video-sync', 'audio');
-        await nativePlayer.setProperty('autosync', '10');
-        await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
+          await nativePlayer.setProperty('video-sync', 'audio');
+          await nativePlayer.setProperty('autosync', '10');
+          await nativePlayer.setProperty('force-seekable', 'yes');
+          await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
         
         // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
         await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
@@ -475,9 +478,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final uri = Uri.parse(resolvedSource);
           final host = uri.host;
           final lowerHost = host.toLowerCase();
-          
           // Always proxy all http/https streams to support real-time network speed & data usage tracking
+          // EXCEPT for Stalker portal and Castle TV server streams, which fail to resolve duration/VOD seek when proxied.
           bool shouldProxy = true;
+          final lowerSubtitle = widget.subtitle?.toLowerCase() ?? '';
+          final lowerSourceName = widget.sourceName?.toLowerCase() ?? '';
+          final lowerUrl = resolvedSource.toLowerCase();
+          final hasStalkerCookie = playHeaders.entries.any(
+            (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
+          );
+          if (lowerSubtitle.contains('stalker') ||
+              lowerSubtitle.contains('castle') ||
+              lowerSourceName.contains('stalker') ||
+              lowerSourceName.contains('castle') ||
+              lowerUrl.contains('hlowb.com') ||
+              lowerUrl.contains('castle') ||
+              lowerUrl.contains('127.0.0.1') ||
+              lowerUrl.contains('localhost') ||
+              lowerUrl.contains('/tg/') ||
+              hasStalkerCookie) {
+            shouldProxy = false;
+          }
           if (shouldProxy) {
             final dnsProxy = CustomDnsProxy();
             if (dnsProxy.port != null) {
@@ -1951,6 +1972,53 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     // Right: Actions (PiP, Cast, CC Track, Subtitle Size, Quality, Audio, Lock)
                     Row(
                       children: [
+                        if (widget.isLive)
+                          ValueListenableBuilder<double>(
+                            valueListenable: ProxyStats.speedNotifier,
+                            builder: (context, speed, _) {
+                              return ValueListenableBuilder<int>(
+                                valueListenable: ProxyStats.totalDataNotifier,
+                                builder: (context, totalBytes, _) {
+                                  final speedText = speed <= 0
+                                      ? '0 KB/s'
+                                      : (speed < 1024 * 1024
+                                          ? '${(speed / 1024).toStringAsFixed(1)} KB/s'
+                                          : '${(speed / (1024 * 1024)).toStringAsFixed(2)} MB/s');
+                                  
+                                  final dataText = totalBytes < 1024 * 1024
+                                      ? '${(totalBytes / 1024).toStringAsFixed(1)} KB'
+                                      : (totalBytes < 1024 * 1024 * 1024
+                                          ? '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+                                          : '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB');
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(right: 12),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black38,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white10),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '$speedText | $dataText',
+                                          style: GoogleFonts.outfit(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
                         // Picture in Picture
                         _buildTopBarIcon(
                           const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 20),
@@ -1975,10 +2043,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         ),
                         
                         // Popup menu selectors (S, CC Size, Q, M)
-                        _buildPopupMenuS(),
+                        _buildTopBarIcon(
+                          const Icon(Icons.subtitles_rounded, color: Colors.white, size: 20),
+                          () => _showSettingsSheet(initialPane: 3),
+                        ),
                         _buildPopupMenuSubtitleSize(),
                         _buildPopupMenuQ(),
-                        _buildPopupMenuM(),
+                        _buildTopBarIcon(
+                          const Icon(Icons.audiotrack_rounded, color: Colors.white, size: 20),
+                          () => _showSettingsSheet(initialPane: 2),
+                        ),
 
                         // Lock Toggle
                         _buildTopBarIcon(
@@ -2200,45 +2274,43 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              ValueListenableBuilder<double>(
-                                valueListenable: ProxyStats.speedNotifier,
-                                builder: (context, speed, _) {
-                                  return ValueListenableBuilder<int>(
-                                    valueListenable: ProxyStats.totalDataNotifier,
-                                    builder: (context, totalBytes, _) {
-                                      final speedBits = speed * 8;
-                                      final speedText = speedBits <= 0
-                                          ? '0 Kb/s'
-                                          : (speedBits < 1024 * 1024
-                                              ? '${(speedBits / 1024).toStringAsFixed(1)} Kb/s'
-                                              : '${(speedBits / (1024 * 1024)).toStringAsFixed(2)} Mb/s');
-                                      
-                                      final totalBits = totalBytes * 8.0;
-                                      final dataText = totalBits < 1024 * 1024
-                                          ? '${(totalBits / 1024).toStringAsFixed(1)} Kb'
-                                          : (totalBits < 1024 * 1024 * 1024
-                                              ? '${(totalBits / (1024 * 1024)).toStringAsFixed(1)} Mb'
-                                              : '${(totalBits / (1024 * 1024 * 1024)).toStringAsFixed(2)} Gb');
+                                ValueListenableBuilder<double>(
+                                  valueListenable: ProxyStats.speedNotifier,
+                                  builder: (context, speed, _) {
+                                    return ValueListenableBuilder<int>(
+                                      valueListenable: ProxyStats.totalDataNotifier,
+                                      builder: (context, totalBytes, _) {
+                                        final speedText = speed <= 0
+                                            ? '0 KB/s'
+                                            : (speed < 1024 * 1024
+                                                ? '${(speed / 1024).toStringAsFixed(1)} KB/s'
+                                                : '${(speed / (1024 * 1024)).toStringAsFixed(2)} MB/s');
+                                        
+                                        final dataText = totalBytes < 1024 * 1024
+                                            ? '${(totalBytes / 1024).toStringAsFixed(1)} KB'
+                                            : (totalBytes < 1024 * 1024 * 1024
+                                                ? '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+                                                : '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB');
 
-                                      return Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
-                                          const SizedBox(width: 2),
-                                          Text(
-                                            '$speedText | $dataText',
-                                            style: GoogleFonts.outfit(
-                                              color: Colors.white60,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
+                                        return Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
+                                            const SizedBox(width: 2),
+                                            Text(
+                                              '$speedText | $dataText',
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.white60,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
                                             ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
+                                          ],
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
                             ],
                           ),
                           
@@ -2824,7 +2896,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
   }
 
-  void _showSettingsSheet() {
+  void _showSettingsSheet({int initialPane = 0}) {
     _revealControls();
     showDialog<void>(
       context: context,
@@ -2837,6 +2909,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           subtitleFontSize: _subtitleFontSize,
           audioDelay: _audioDelay,
           subtitleDelay: _subtitleDelay,
+          initialPane: initialPane,
           onAudioDelayChanged: (delay) {
             _changeAudioDelay(delay);
           },
@@ -2865,6 +2938,7 @@ class _SettingsPopover extends StatefulWidget {
   final double subtitleFontSize;
   final double audioDelay;
   final double subtitleDelay;
+  final int initialPane;
   final Function(double) onAudioDelayChanged;
   final Function(double) onSubtitleDelayChanged;
   final Function(double) onSubtitleFontSizeChanged;
@@ -2878,6 +2952,7 @@ class _SettingsPopover extends StatefulWidget {
     required this.subtitleFontSize,
     required this.audioDelay,
     required this.subtitleDelay,
+    this.initialPane = 0,
     required this.onAudioDelayChanged,
     required this.onSubtitleDelayChanged,
     required this.onSubtitleFontSizeChanged,
@@ -2890,7 +2965,7 @@ class _SettingsPopover extends StatefulWidget {
 }
 
 class _SettingsPopoverState extends State<_SettingsPopover> {
-  int _currentPane = 0; // 0: Main, 1: Aspect Ratio, 2: Audio, 3: Subtitle
+  late int _currentPane; // 0: Main, 1: Aspect Ratio, 2: Audio, 3: Subtitle
   late int _aspectRatioIndex;
   late double _audioDelay;
   late double _subtitleDelay;
@@ -2898,6 +2973,7 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
   @override
   void initState() {
     super.initState();
+    _currentPane = widget.initialPane;
     _aspectRatioIndex = widget.initialAspectRatioIndex;
     _audioDelay = widget.audioDelay;
     _subtitleDelay = widget.subtitleDelay;

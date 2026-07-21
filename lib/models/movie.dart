@@ -13,12 +13,18 @@ class StreamSource {
     this.seeders,
     this.peers,
     this.headers,
+    this.quality,
+    this.qualityBadgeColor,
+    this.qualityBadgeText,
   });
   final String name;
   final String url;
   final int? seeders;
   final int? peers;
   final Map<String, String>? headers;
+  final String? quality;
+  final Color? qualityBadgeColor;
+  final String? qualityBadgeText;
 }
 
 class Movie {
@@ -48,6 +54,10 @@ class Movie {
     this.streamSources = const [],
     this.collection,
     this.isNew = false,
+    // OTT provider fields
+    this.ottName,
+    this.ottLogo,
+    this.ottId,
   });
 
   final String id;
@@ -75,6 +85,11 @@ class Movie {
   final List<StreamSource> streamSources;
   final String? collection;
   final bool isNew;
+  
+  // OTT provider fields
+  final String? ottName;
+  final String? ottLogo;
+  final int? ottId;
 
   String get displayBackdrop => backdropUrl ?? posterUrl;
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
 import '../widgets/special_search_dialog.dart'; // To access StreamSourceInfo and StreamSourceType
 import 'api_service.dart';
 
@@ -30,10 +31,8 @@ class NetmirrorResolver {
     "aHR0cHM6Ly9tb2JpZGV0ZWN0cy5pbmZv",
     "aHR0cHM6Ly9tb2JpZGV0ZWN0cy5pbms=",
     "aHR0cHM6Ly9tb2JpZGV0ZWN0cy5saXZl",
-    "aHR0cHM6Ly9tb2JpZGV0ZWN0cy5wcm8=",
-    "aHR0cHM6Ly9tb2JpZGV0ZWN0cy5zdG9yZQ==",
-    "aHR0cHM6Ly9tb2JpZGV0ZWN0cy50b3A=",
-    "aHR0cHM6Ly9tb2JpZGV0ZWN0cy54eXo="
+    "aHR0cHM6Ly9uZXQ3Mi5jYw==",
+    "aHR0cHM6Ly9uZXQxMC5jYw=="
   ];
 
   static const Map<String, String> _baseHeaders = {
@@ -51,8 +50,7 @@ class NetmirrorResolver {
   static Future<String> _resolveApiBase() async {
     if (_cachedApiBase.isNotEmpty) return _cachedApiBase;
 
-    final prefs = await SharedPreferences.getInstance();
-    final customDomainsStr = prefs.getString('netmirror_domains') ?? '';
+    final customDomainsStr = await SyncService.getNetmirrorDomains();
     final List<String> domainsToTry = [];
 
     // Parse custom user domains first

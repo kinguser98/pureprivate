@@ -103,6 +103,14 @@ class CustomDnsProxy {
   final Map<String, List<String>> _dnsCacheList = {};
 
   Future<List<String>> _resolveHostList(String host) async {
+    final cleanHost = host.trim().toLowerCase();
+    if (cleanHost == '127.0.0.1' || cleanHost == 'localhost' || cleanHost == '::1') {
+      return ['127.0.0.1'];
+    }
+    if (InternetAddress.tryParse(cleanHost) != null) {
+      return [cleanHost];
+    }
+
     if (_dnsCacheList.containsKey(host)) {
       return _dnsCacheList[host]!;
     }

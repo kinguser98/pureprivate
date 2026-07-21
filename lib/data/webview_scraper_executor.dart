@@ -463,6 +463,9 @@ class WebViewScraperExecutor {
     required String mediaType,
     int? season,
     int? episode,
+    String? title,
+    String? imdbId,
+    String? releaseDate,
   }) async {
     try {
       await ensureInitialized();
@@ -485,6 +488,30 @@ class WebViewScraperExecutor {
             // Native fetch proxy setup (preserve existing completers across concurrent scrapers)
             window._fetchCompleters = window._fetchCompleters || {};
             window.fetch = window.fetch || function(url, options) {
+              const urlStr = url.toString();
+              if (urlStr.includes('themoviedb.org/3/') && ${title != null && title.isNotEmpty}) {
+                console.log("[WebViewScraperExecutor] Intercepted TMDB fetch request for " + urlStr);
+                const isTv = urlStr.includes('/tv/');
+                const mockData = {
+                  name: isTv ? ${jsonEncode(title)} : undefined,
+                  title: !isTv ? ${jsonEncode(title)} : undefined,
+                  first_air_date: isTv ? ${jsonEncode(releaseDate)} : undefined,
+                  release_date: !isTv ? ${jsonEncode(releaseDate)} : undefined,
+                  external_ids: {
+                    imdb_id: ${jsonEncode(imdbId)}
+                  }
+                };
+                return Promise.resolve({
+                  status: 200,
+                  ok: true,
+                  headers: {
+                    get: function(name) { return 'application/json'; }
+                  },
+                  text: function() { return Promise.resolve(JSON.stringify(mockData)); },
+                  json: function() { return Promise.resolve(mockData); }
+                });
+              }
+
               return new Promise((resolve, reject) => {
                 const reqId = 'fetch_' + Math.random() + '_' + Date.now();
                 window._fetchCompleters[reqId] = { resolve, reject };
@@ -537,30 +564,99 @@ class WebViewScraperExecutor {
                 const doc = parser.parseFromString(htmlText, 'text/html');
                 
                 const selectorFn = function(selector) {
-                  if (selector === 'html') {
-                    return {
-                      html: function() { return htmlText; }
-                    };
-                  }
-                  
                   let elements = [];
+                  
                   if (typeof selector === 'string') {
-                    elements = Array.from(doc.querySelectorAll(selector));
+                    let containsText = null;
+                    let targetSelector = selector;
+                    
+                    // Support :contains() filter in selector strings
+                    if (targetSelector.includes(':contains(')) {
+                      const match = targetSelector.match(/:contains\((["']?)(.*?)\1\)/);
+                      if (match) {
+                        containsText = match[2];
+                        targetSelector = targetSelector.replace(/:contains\(.*?\)/, '');
+                      }
+                    }
+                    
+                    // Query elements with cleaned selector
+                    try {
+                      elements = Array.from(doc.querySelectorAll(targetSelector));
+                    } catch (e) {
+                      console.warn("cheerio selector fail:", selector, e);
+                      elements = [];
+                    }
+                    
+                    if (containsText) {
+                      elements = elements.filter(el => el.textContent.includes(containsText));
+                    }
                   } else if (selector && selector.tagName) {
                     elements = [selector];
                   } else if (Array.isArray(selector)) {
                     elements = selector;
+                  } else if (selector && selector.toArray) {
+                    elements = selector.toArray();
                   }
                   
+                  // Helper function to wrap elements back into a cheerio selector result
+                  const wrap = function(elems) {
+                    return selectorFn(elems);
+                  };
+                  
+                  // Cheerio API methods on selection results:
                   elements.attr = function(name) {
-                    if (elements.length > 0) {
-                      if (name === 'href') {
-                        const hrefVal = elements[0].getAttribute('href') || elements[0].href;
-                        return hrefVal;
-                      }
-                      return elements[0].getAttribute(name);
+                    if (elements.length === 0) return null;
+                    if (name === 'href') {
+                      return elements[0].getAttribute('href') || elements[0].href || '';
                     }
-                    return null;
+                    return elements[0].getAttribute(name);
+                  };
+                  
+                  elements.text = function() {
+                    return elements.map(el => el.textContent).join(' ').trim();
+                  };
+                  
+                  elements.html = function() {
+                    return elements.length > 0 ? elements[0].innerHTML : '';
+                  };
+                  
+                  elements.val = function() {
+                    return elements.length > 0 ? elements[0].value || elements[0].getAttribute('value') || '' : '';
+                  };
+                  
+                  elements.prop = function(name) {
+                    if (elements.length === 0) return null;
+                    return elements[0][name] !== undefined ? elements[0][name] : elements[0].getAttribute(name);
+                  };
+                  
+                  elements.hasClass = function(className) {
+                    return elements.some(el => el.classList.contains(className));
+                  };
+                  
+                  elements.find = function(subSelector) {
+                    const found = [];
+                    let containsText = null;
+                    let targetSub = subSelector;
+                    
+                    if (typeof targetSub === 'string' && targetSub.includes(':contains(')) {
+                      const match = targetSub.match(/:contains\((["']?)(.*?)\1\)/);
+                      if (match) {
+                        containsText = match[2];
+                        targetSub = targetSub.replace(/:contains\(.*?\)/, '');
+                      }
+                    }
+                    
+                    elements.forEach(el => {
+                      try {
+                        found.push(...Array.from(el.querySelectorAll(targetSub)));
+                      } catch (e) {}
+                    });
+                    
+                    let result = found;
+                    if (containsText) {
+                      result = result.filter(el => el.textContent.includes(containsText));
+                    }
+                    return wrap(result);
                   };
                   
                   elements.each = function(callback) {
@@ -570,16 +666,59 @@ class WebViewScraperExecutor {
                     return elements;
                   };
                   
-                  elements.text = function() {
-                    return elements.map(el => el.textContent).join(' ');
+                  elements.map = function(callback) {
+                    const results = elements.map((el, index) => callback.call(el, index, el));
+                    return {
+                      get: function() { return results; },
+                      toArray: function() { return results; }
+                    };
                   };
                   
-                  elements.find = function(subSelector) {
-                    const found = [];
+                  elements.filter = function(callback) {
+                    if (typeof callback === 'string') {
+                      return wrap(elements.filter(el => el.matches(callback)));
+                    }
+                    return wrap(elements.filter((el, index) => callback.call(el, index, el)));
+                  };
+                  
+                  elements.first = function() {
+                    return wrap(elements.length > 0 ? [elements[0]] : []);
+                  };
+                  
+                  elements.last = function() {
+                    return wrap(elements.length > 0 ? [elements[elements.length - 1]] : []);
+                  };
+                  
+                  elements.eq = function(index) {
+                    if (index < 0) index = elements.length + index;
+                    return wrap((index >= 0 && index < elements.length) ? [elements[index]] : []);
+                  };
+                  
+                  elements.parent = function() {
+                    const parents = elements.map(el => el.parentElement).filter(el => el != null);
+                    return wrap(Array.from(new Set(parents)));
+                  };
+                  
+                  elements.closest = function(subSelector) {
+                    const closest = elements.map(el => el.closest(subSelector)).filter(el => el != null);
+                    return wrap(Array.from(new Set(closest)));
+                  };
+                  
+                  elements.next = function() {
+                    const nextElems = elements.map(el => el.nextElementSibling).filter(el => el != null);
+                    return wrap(nextElems);
+                  };
+                  
+                  elements.nextAll = function() {
+                    const nextAllElems = [];
                     elements.forEach(el => {
-                      found.push(...Array.from(el.querySelectorAll(subSelector)));
+                      let sib = el.nextElementSibling;
+                      while (sib) {
+                        nextAllElems.push(sib);
+                        sib = sib.nextElementSibling;
+                      }
                     });
-                    return selectorFn(found);
+                    return wrap(Array.from(new Set(nextAllElems)));
                   };
                   
                   elements.toArray = function() {

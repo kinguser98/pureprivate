@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,6 +72,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showStremioAddon = true;
   bool _showFilmu = true;
   String? _selectedStremioResolution;
+  List<String> _blockedAddonGroups = [];
 
   Future<void> _loadSourceVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -87,6 +89,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true);
         _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
+        
+        final blockedRaw = cloud['blocked_addon_groups'] ?? '';
+        _blockedAddonGroups = blockedRaw
+            .split(RegExp(r'[,\n]'))
+            .map((s) => s.trim().toLowerCase())
+            .where((s) => s.isNotEmpty)
+            .toList();
       });
     }
     // Load source order from cloud
@@ -360,359 +369,97 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       _resolvedSources = [];
     });
 
-    final List<Future<void>> tasks = [];
-
-    // 1. Resolve VidLink
-    if (_showVidlink) {
-      final activeId = (imdbId != null && imdbId.isNotEmpty) ? imdbId : tmdbId;
-      tasks.add(_resolveVidLink(activeId, season: season, episode: episode));
-    }
-
-    if (imdbId != null && imdbId.isNotEmpty) {
-      // 2. Resolve Stravo
-      if (_showStravo) {
-        tasks.add(_resolveStravo(imdbId, season: season, episode: episode));
-      }
-      // 3. Resolve Torrentio
-      if (_showTorrent) {
-        tasks.add(_resolveTorrentio(imdbId, title, season: season, episode: episode));
-      }
-      // Resolve synced custom Stremio addons
-      if (_showStremioAddon) {
-        tasks.add(_resolveStremioAddons(imdbId, season: season, episode: episode));
-      }
-    } else {
-      // Penguplay fallback: call Stremio addons with TMDB ID when IMDB is unavailable
-      if (_showStremioAddon) {
-        tasks.add(_resolveStremioAddons('tmdb:$tmdbId', season: season, episode: episode));
-      }
-    }
-
-    // For netmirror query title, append SXXEXX if series
-    String queryTitle = title;
-    if (_isSeriesSearch && season != null && episode != null) {
-      queryTitle = "$title S${season.toString().padLeft(2, '0')}E${episode.toString().padLeft(2, '0')}";
-    }
-
-    // 4. Resolve Stalker
-    if (_showStalker) {
-      tasks.add(_resolveStalkerVodDatabase(queryTitle));
-    }
-
-    // 5. Resolve NetMirror
-    if (_showNetmirror) {
-      tasks.add(_resolveNetmirror(queryTitle));
-    }
-
-    // 6. Resolve CineMM - movies only
-    if (_showCinemm && !_isSeriesSearch) {
-      final year =
-          _selectedMovie?['release_date']?.toString().split('-').first ?? '';
-      tasks.add(_resolveCinemm(title, year));
-    }
-
-    // 7. Resolve Castle - movies only
-    if (_showCastle && !_isSeriesSearch && tmdbId != null && tmdbId.isNotEmpty) {
-      tasks.add(_resolveExtraScraper('castle', tmdbId));
-    }
-
-    // Resolve Nuveo Addons
-    tasks.add(_resolveNuveoAddons(tmdbId, season: season, episode: episode));
-
-    // Resolve FilmU API Scraper
-    tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
-
-    // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
-    if (tmdbId != null && tmdbId.isNotEmpty) {
-      final vidsrcUrl = _isSeriesSearch && season != null && episode != null
-          ? 'https://vidsrc.to/embed/tv/$tmdbId/$season/$episode'
-          : 'https://vidsrc.to/embed/movie/$tmdbId';
-      _resolvedSources.add(
-        StreamSourceInfo(
-          name: 'VidSrc.to Server (Direct Native Play)',
-          url: vidsrcUrl,
-          type: StreamSourceType.vidsrc,
-        ),
-      );
-    }
-
-    // No Superembed and FilmU
-    await Future.wait(tasks);
-
-    if (mounted) {
-      setState(() {
-        _resolvingStreams = false;
-      });
-    }
-  }
-
-  Future<void> _resolveTamilBlastersClientSide(
-    String title,
-    String year,
-  ) async {
-    HeadlessInAppWebView? headlessWebView;
-    InAppWebViewController? headlessController;
-    Function(InAppWebViewController, WebUri?)? currentOnLoadStop;
-
     try {
-      debugPrint(
-        'TamilBlasters ClientScraper: Resolving client-side via HeadlessWebView for $title ($year)...',
-      );
+      final List<Future<void>> tasks = [];
 
-      // 1. Fetch active domains dynamically to handle domain hopping
-      final domainsRes = await http
-          .get(
-            Uri.parse(
-              'https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json',
-            ),
-          )
-          .timeout(const Duration(seconds: 5));
-      if (domainsRes.statusCode != 200) return;
-
-      final domainsJson = json.decode(domainsRes.body);
-      final mainUrl =
-          domainsJson['tamilblasters']?.toString() ??
-          'https://www.1tamilblasters.republican';
-
-      // 2. Load search page in background
-      final searchUrl = '$mainUrl/?s=${Uri.encodeComponent(title)}';
-      debugPrint(
-        'TamilBlasters ClientScraper: Loading search page in background: $searchUrl',
-      );
-
-      var pageLoadCompleter = Completer<void>();
-      currentOnLoadStop = (controller, url) {
-        if (!pageLoadCompleter.isCompleted) {
-          pageLoadCompleter.complete();
-        }
-      };
-
-      headlessWebView = HeadlessInAppWebView(
-        initialUrlRequest: URLRequest(
-          url: WebUri(searchUrl),
-          headers: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-        ),
-        initialSettings: InAppWebViewSettings(
-          javaScriptEnabled: true,
-          domStorageEnabled: true,
-          databaseEnabled: true,
-        ),
-        onWebViewCreated: (controller) {
-          headlessController = controller;
-        },
-        onLoadStop: (controller, url) {
-          if (currentOnLoadStop != null) {
-            currentOnLoadStop!(controller, url);
-          }
-        },
-      );
-
-      await headlessWebView.run();
-
-      await pageLoadCompleter.future
-          .timeout(const Duration(seconds: 12))
-          .catchError((e) {
-            debugPrint(
-              'TamilBlasters ClientScraper: Search page loading timed out',
-            );
-          });
-
-      if (headlessController == null) {
-        return;
+      // 1. Resolve VidLink
+      if (_showVidlink) {
+        final activeId = (imdbId != null && imdbId.isNotEmpty) ? imdbId : tmdbId;
+        tasks.add(_resolveVidLink(activeId, season: season, episode: episode));
       }
 
-      final searchHtml =
-          await headlessController!.evaluateJavascript(
-                source: "document.documentElement.outerHTML",
-              )
-              as String? ??
-          '';
-
-      // regex matches: <h2 ...> <a href="..."> TITLE </a> </h2>
-      final searchRegex = RegExp(
-        r'<h2[^>]*>\s*<a\s+[^>]*href="([^"]+)"[^>]*>([^<]+)</a>\s*</h2>',
-        caseSensitive: false,
-        multiLine: true,
-      );
-      final matches = searchRegex.allMatches(searchHtml).toList();
-
-      final List<Map<String, String>> matchedPages = [];
-      final cleanedSearchTitle = title
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^\w\s]'), '')
-          .trim();
-
-      for (final match in matches) {
-        final href = match.group(1);
-        final name = match.group(2) ?? '';
-        final nameLower = name.toLowerCase();
-        final cleanedName = nameLower.replaceAll(RegExp(r'[^\w\s]'), '').trim();
-
-        if (href != null &&
-            (nameLower.contains(cleanedSearchTitle) ||
-                cleanedName.contains(cleanedSearchTitle))) {
-          if (year.isEmpty || nameLower.contains(year)) {
-            matchedPages.add({'url': href, 'title': name});
-          }
+      if (imdbId != null && imdbId.isNotEmpty) {
+        // 2. Resolve Stravo
+        if (_showStravo) {
+          tasks.add(_resolveStravo(imdbId, season: season, episode: episode));
+        }
+        // 3. Resolve Torrentio
+        if (_showTorrent) {
+          tasks.add(_resolveTorrentio(imdbId, title, season: season, episode: episode));
+        }
+        // Resolve synced custom Stremio addons
+        if (_showStremioAddon) {
+          tasks.add(_resolveStremioAddons(imdbId, season: season, episode: episode));
+        }
+      } else {
+        // Penguplay fallback: call Stremio addons with TMDB ID when IMDB is unavailable
+        if (_showStremioAddon) {
+          tasks.add(_resolveStremioAddons('tmdb:$tmdbId', season: season, episode: episode));
         }
       }
 
-      // Fallback if no matching page found but matches are not empty
-      if (matchedPages.isEmpty && matches.isNotEmpty) {
-        final fallbackHref = matches.first.group(1);
-        final fallbackTitle = matches.first.group(2) ?? 'TamilBlasters';
-        if (fallbackHref != null) {
-          matchedPages.add({'url': fallbackHref, 'title': fallbackTitle});
-        }
+      // For netmirror query title, append SXXEXX if series
+      String queryTitle = title;
+      if (_isSeriesSearch && season != null && episode != null) {
+        queryTitle = "$title S${season.toString().padLeft(2, '0')}E${episode.toString().padLeft(2, '0')}";
       }
 
-      if (matchedPages.isEmpty) {
-        debugPrint(
-          'TamilBlasters ClientScraper: No matched search page found.',
-        );
-        return;
+      // 4. Resolve Stalker
+      if (_showStalker) {
+        tasks.add(_resolveStalkerVodDatabase(queryTitle));
       }
 
-      final List<StreamSourceInfo> localSources = [];
+      // 5. Resolve NetMirror
+      if (_showNetmirror) {
+        tasks.add(_resolveNetmirror(queryTitle));
+      }
 
-      // Scrape up to 4 top matched pages
-      for (final page in matchedPages.take(4)) {
-        final pageUrl = page['url']!;
-        final pageTitle = page['title']!;
+      // 6. Resolve CineMM - movies only
+      if (_showCinemm && !_isSeriesSearch) {
+        final year =
+            _selectedMovie?['release_date']?.toString().split('-').first ?? '';
+        tasks.add(_resolveCinemm(title, year));
+      }
 
-        debugPrint(
-          'TamilBlasters ClientScraper: Loading detail page: $pageUrl',
-        );
-        var detailLoadCompleter = Completer<void>();
-        currentOnLoadStop = (controller, url) {
-          if (!detailLoadCompleter.isCompleted) {
-            detailLoadCompleter.complete();
-          }
-        };
+      // 7. Resolve Castle - movies only
+      if (_showCastle && !_isSeriesSearch && tmdbId != null && tmdbId.isNotEmpty) {
+        tasks.add(_resolveExtraScraper('castle', tmdbId));
+      }
 
-        await headlessController!.loadUrl(
-          urlRequest: URLRequest(
-            url: WebUri(pageUrl),
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
+      // Resolve Nuveo Addons
+      tasks.add(_resolveNuveoAddons(tmdbId, season: season, episode: episode));
+
+      // Resolve FilmU API Scraper
+      tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
+
+      // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
+      if (tmdbId != null && tmdbId.isNotEmpty) {
+        final vidsrcUrl = _isSeriesSearch && season != null && episode != null
+            ? 'https://vidsrc.to/embed/tv/$tmdbId/$season/$episode'
+            : 'https://vidsrc.to/embed/movie/$tmdbId';
+        _resolvedSources.add(
+          StreamSourceInfo(
+            name: 'VidSrc.to Server (Direct Native Play)',
+            url: vidsrcUrl,
+            type: StreamSourceType.vidsrc,
           ),
         );
-
-        await detailLoadCompleter.future
-            .timeout(const Duration(seconds: 12))
-            .catchError((e) {
-              debugPrint(
-                'TamilBlasters ClientScraper: Detail page loading timed out',
-              );
-            });
-
-        final detailHtml =
-            await headlessController!.evaluateJavascript(
-                  source: "document.documentElement.outerHTML",
-                )
-                as String? ??
-            '';
-
-        final iframeRegex = RegExp(
-          r'<iframe\s+[^>]*src="([^"]+)"',
-          caseSensitive: false,
-        );
-        final iframeMatches = iframeRegex.allMatches(detailHtml);
-
-        final List<String> pageEmbeds = [];
-        for (final match in iframeMatches) {
-          var src = match.group(1);
-          if (src != null) {
-            if (src.startsWith('//')) {
-              src = 'https:$src';
-            }
-            if (!src.contains('youtube') &&
-                !src.contains('facebook') &&
-                !src.contains('twitter') &&
-                !src.contains('instagram') &&
-                !pageEmbeds.contains(src)) {
-              pageEmbeds.add(src);
-            }
-          }
-        }
-
-        debugPrint(
-          'TamilBlasters ClientScraper: Found ${pageEmbeds.length} embeds on page: $pageTitle',
-        );
-
-        // Format page title to remove tags, domain names, file sizes, and trailing codecs
-        String displayTitle = pageTitle;
-        displayTitle = displayTitle
-            .replaceAll(RegExp(r'\(TamilBlasters\)', caseSensitive: false), '')
-            .replaceAll(
-              RegExp(r'www\.1TamilBlasters\.\w+', caseSensitive: false),
-              '',
-            )
-            .replaceAll(
-              RegExp(r'\[\s*1\s*tamilblasters\s*\]', caseSensitive: false),
-              '',
-            )
-            .replaceAll(RegExp(r'\s+-\s+x264.*$', caseSensitive: false), '')
-            .replaceAll(RegExp(r'\s+-\s+700MB.*$', caseSensitive: false), '')
-            .trim();
-
-        for (var url in pageEmbeds) {
-          String hostName = 'Embed';
-          final urlLower = url.toLowerCase();
-          if (urlLower.contains('hgcloud') ||
-              urlLower.contains('hglink') ||
-              urlLower.contains('cavanhabg')) {
-            hostName = 'HG Cloud';
-            // Do not swap domains to dead cavanhabg.com anymore.
-            // Keep original domains like hglink.to which resolve properly on device connection.
-          } else if (urlLower.contains('streamtape')) {
-            hostName = 'Streamtape';
-          } else if (urlLower.contains('filemoon')) {
-            hostName = 'Filemoon';
-          } else if (urlLower.contains('vidplay')) {
-            hostName = 'Vidplay';
-          } else if (urlLower.contains('vidhide') ||
-              urlLower.contains('tryzendm')) {
-            hostName = 'VidHide';
-          } else if (urlLower.contains('lulu') ||
-              urlLower.contains('lulustream') ||
-              urlLower.contains('lulupwr')) {
-            hostName = 'LuluStream';
-          }
-
-          final serverName = '$hostName - $displayTitle';
-
-          final isDup =
-              _resolvedSources.any((s) => s.url == url) ||
-              localSources.any((s) => s.url == url);
-          if (!isDup) {
-            localSources.add(
-              StreamSourceInfo(
-                name: serverName,
-                url: url,
-                type: StreamSourceType.tamilblasters,
-              ),
-            );
-          }
-        }
       }
 
-      if (mounted && localSources.isNotEmpty) {
+      // No Superembed and FilmU
+      await Future.wait(tasks);
+    } catch (e) {
+      debugPrint('Error during _resolveMovieStreams: $e');
+    } finally {
+      if (mounted) {
         setState(() {
-          _resolvedSources.addAll(localSources);
+          _resolvingStreams = false;
         });
       }
-    } catch (e) {
-      debugPrint('TamilBlasters ClientScraper error: $e');
-    } finally {
-      await headlessWebView?.dispose();
     }
   }
+
+
 
   Future<void> _resolveVidLink(String activeId, {int? season, int? episode}) async {
     try {
@@ -863,10 +610,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveStravo(String imdbId, {int? season, int? episode}) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl =
-          prefs.getString('stravo_addon_url') ??
-          'https://stravo-clfk.onrender.com/default';
+      final addonBaseUrl = await SyncService.getStravoUrl();
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
@@ -942,10 +686,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveTorrentio(String imdbId, String title, {int? season, int? episode}) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl =
-          prefs.getString('torrentio_addon_url') ??
-          'https://torrentio.strem.fun';
+      final addonBaseUrl = await SyncService.getTorrentioUrl();
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
@@ -1095,6 +836,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final results = await Future.wait(tasks);
       for (final list in results) {
         for (final item in list) {
+          final addonName = (item.addonName ?? '').trim().toLowerCase();
+          if (_blockedAddonGroups.any((b) => addonName == b || addonName.contains(b))) {
+            continue;
+          }
           final isDup = _resolvedSources.any((s) => s.url == item.url) ||
                         sources.any((s) => s.url == item.url);
           if (!isDup) {
@@ -1174,6 +919,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final results = await Future.wait(tasks);
       for (final list in results) {
         for (final item in list) {
+          final addonName = (item.addonName ?? item.name ?? '').toString().trim().toLowerCase();
+          if (_blockedAddonGroups.any((b) => addonName == b || addonName.contains(b))) {
+            continue;
+          }
           final isDup = _resolvedSources.any((s) => s.url == item.url) ||
                         sources.any((s) => s.url == item.url);
           if (!isDup) {
@@ -1619,6 +1368,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 movieId: 'special_search_${_selectedMovie['id']}',
                 resumeDirectly: false,
                 headers: headers.isNotEmpty ? headers : null,
+                sourceName: source.name,
               ),
             ),
           );
@@ -1654,6 +1404,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 movieId: 'special_search_${_selectedMovie['id']}',
                 resumeDirectly: false,
                 headers: headers.isNotEmpty ? headers : null,
+                sourceName: source.name,
               ),
             ),
           );
@@ -3082,6 +2833,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
+
+
       final List<Widget> groupCards = [];
       for (final key in _sourceOrder) {
         if (key == 'stremioAddon') {
@@ -3197,14 +2950,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           ),
         );
       }
-
-      // Remove resolution categories and list addon streams directly together
+ 
+       // Remove resolution categories and list addon streams directly together
             if (_activeGroupType == StreamSourceType.stremioAddon || _activeGroupType == StreamSourceType.nuveoAddon) {
               final isNuv = _activeGroupType == StreamSourceType.nuveoAddon;
               final addonList = _resolvedSources
-                  .where((s) => s.type == (isNuv ? StreamSourceType.nuveoAddon : StreamSourceType.stremioAddon))
+                  .where((s) => s.type == (_activeGroupType))
                   .toList();
-
+ 
               if (_selectedAddonSubGroup == null) {
                 // Sub-group cards view
                 final Map<String, List<StreamSourceInfo>> grouped = {};
@@ -3212,7 +2965,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                   final key = s.addonName ?? 'Unknown Source';
                   grouped.putIfAbsent(key, () => []).add(s);
                 }
-
+ 
                 if (grouped.isEmpty) {
                   return Center(
                     child: Column(
@@ -3235,13 +2988,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                     ),
                   );
                 }
-
+ 
                 final entries = grouped.entries.toList();
                 return ListView(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   children: [
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
+                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
                         '${isNuv ? "Nuveo" : "Stremio"} Addons \u2022 ${entries.length} source${entries.length != 1 ? "s" : ""}',
                         style: TextStyle(
@@ -3262,6 +3015,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(14),
                           onTap: () => setState(() => _selectedAddonSubGroup = entry.key),
+                          onLongPress: () {
+                            Clipboard.setData(ClipboardData(text: entry.key));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Copied Category: ${entry.key}'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
                           child: Padding(
                             padding: const EdgeInsets.all(14),
                             child: Row(
@@ -3359,6 +3121,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                             color: Colors.white30,
                           ),
                           onTap: () => _playStream(s, movieTitle, posterPath),
+                          onLongPress: () {
+                            Clipboard.setData(ClipboardData(text: s.url));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Copied Link: ${s.url}'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
                         ),
                       ),
                   ],
@@ -3403,6 +3174,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 color: Colors.white.withValues(alpha: 0.4),
               ),
               onTap: () => _playStream(source, movieTitle, posterPath),
+              onLongPress: () {
+                Clipboard.setData(ClipboardData(text: source.url));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Copied Link: ${source.url}'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
             ),
           );
         },
@@ -3464,7 +3244,6 @@ enum StreamSourceType {
   stravo,
   torrent,
   stalker,
-  tamilblasters,
   netmirror,
   dvdplay,
   mallumv,

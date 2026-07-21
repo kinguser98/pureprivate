@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:private_cinema_ios/data/playback_tracker.dart';
 
 class SyncService {
-  static const String _apiSyncUrl = 'http://ott.redapp.space/api.php';
+  static const String _apiSyncUrl = 'https://ott.redapp.space/api.php';
 
   /// Generates a random 6-character uppercase sync code
   static String generateSyncCode() {
@@ -346,7 +346,10 @@ class SyncService {
         if (decoded is List) {
           return decoded.where((e) {
             if (e is String) return true;
-            if (e is Map) return e['enabled'] != false;
+            if (e is Map) {
+              final enabled = e['enabled'];
+              return enabled != false && enabled != 'false';
+            }
             return false;
           }).map((e) {
             if (e is String) return e;
@@ -379,7 +382,13 @@ class SyncService {
       try {
         final decoded = json.decode(raw);
         if (decoded is List) {
-          return decoded.map((e) {
+          return decoded.where((e) {
+            if (e is Map) {
+              final enabled = e['enabled'];
+              return enabled != false && enabled != 'false';
+            }
+            return true;
+          }).map((e) {
             if (e is Map) return Map<String, dynamic>.from(e);
             // If it's a URL string, build a basic manifest placeholder
             return <String, dynamic>{'url': e.toString(), 'name': 'Global Nuveo', 'scrapers': <dynamic>[]};
@@ -427,13 +436,35 @@ class SyncService {
   static Future<List<String>> fetchSourceOrder() async {
     final settings = await fetchAppSettings();
     final raw = settings['source_visibility'] ?? settings['source_order'];
+    List<String> list = [];
     if (raw != null && raw.isNotEmpty) {
       try {
         final decoded = json.decode(raw);
-        if (decoded is List) return decoded.cast<String>();
+        if (decoded is List) {
+          list = decoded.cast<String>();
+        }
       } catch (_) {}
     }
-    return ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon'];
+    if (list.isEmpty) {
+      list = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','telegram'];
+    }
+    return list;
+  }
+
+  /// Fetch admin-configured Telegram api credentials. Returns nulls if the
+  /// admin hasn't set them yet (or if the admin has disabled the source).
+  static Future<({int? apiId, String? apiHash, bool enabled})>
+      fetchTelegramConfig() async {
+    final settings = await fetchAppSettings();
+    final enabled =
+        (settings['source_show_telegram'] ?? 'true').toString() != 'false';
+    final apiIdStr = settings['telegram_api_id'];
+    final apiHash = settings['telegram_api_hash'];
+    return (
+      apiId: apiIdStr == null || apiIdStr.isEmpty ? null : int.tryParse(apiIdStr),
+      apiHash: (apiHash == null || apiHash.isEmpty) ? null : apiHash,
+      enabled: enabled,
+    );
   }
 
   /// Save list of synced Nuveo addon manifest configs
@@ -456,6 +487,50 @@ class SyncService {
       debugPrint('SyncService: Failed to save Nuveo addons: $e');
     }
     return false;
+  }
+
+  static Future<String> getTorrentioUrl() async {
+    try {
+      final cloud = await fetchAppSettings();
+      if (cloud.containsKey('torrentio_addon_url') && cloud['torrentio_addon_url']!.isNotEmpty) {
+        return cloud['torrentio_addon_url']!;
+      }
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('torrentio_addon_url') ?? 'https://torrentio.strem.fun';
+  }
+
+  static Future<String> getStravoUrl() async {
+    try {
+      final cloud = await fetchAppSettings();
+      if (cloud.containsKey('stravo_addon_url') && cloud['stravo_addon_url']!.isNotEmpty) {
+        return cloud['stravo_addon_url']!;
+      }
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('stravo_addon_url') ?? 'https://stravo-clfk.onrender.com/default';
+  }
+
+  static Future<String> getNetmirrorDomains() async {
+    try {
+      final cloud = await fetchAppSettings();
+      if (cloud.containsKey('netmirror_domains') && cloud['netmirror_domains']!.isNotEmpty) {
+        return cloud['netmirror_domains']!;
+      }
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('netmirror_domains') ?? '';
+  }
+
+  static Future<String?> getSeedrToken() async {
+    try {
+      final cloud = await fetchAppSettings();
+      if (cloud.containsKey('seedr_token') && cloud['seedr_token']!.isNotEmpty) {
+        return cloud['seedr_token']!;
+      }
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('seedr_auth_token');
   }
 }
 

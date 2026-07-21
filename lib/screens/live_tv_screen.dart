@@ -15,6 +15,7 @@ import 'package:private_cinema_ios/data/api_service.dart';
 import 'package:private_cinema_ios/widgets/glass_panel.dart';
 import 'package:private_cinema_ios/screens/video_player_screen.dart';
 import 'package:private_cinema_ios/screens/multi_view_player_screen.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
 import 'package:private_cinema_ios/data/epg_service.dart';
 import 'package:private_cinema_ios/data/sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -466,7 +467,30 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
         }
 
-        await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
+        ProxyStats.reset();
+
+        var resolvedUrl = resolved.url;
+        if (resolvedUrl.startsWith('http')) {
+          try {
+            final uri = Uri.parse(resolvedUrl);
+            final dnsProxy = CustomDnsProxy();
+            if (dnsProxy.port != null) {
+              var cleanUri = uri;
+              if (!uri.queryParameters.containsKey('local_proxy_headers') && resolved.headers.isNotEmpty) {
+                final newParams = Map<String, String>.from(uri.queryParameters);
+                newParams['local_proxy_headers'] = jsonEncode(resolved.headers);
+                cleanUri = uri.replace(queryParameters: newParams);
+              }
+              final hostWithPort = cleanUri.hasPort ? '${cleanUri.host}:${cleanUri.port}' : cleanUri.host;
+              resolvedUrl = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
+              debugPrint('LiveTvScreen: Rewrote source to proxy relay: $resolvedUrl');
+            }
+          } catch (e) {
+            debugPrint('LiveTvScreen error rewriting proxy URL: $e');
+          }
+        }
+
+        await _miniPlayer!.open(Media(resolvedUrl, httpHeaders: resolved.headers), play: true);
 
         final channelId = channel['stalker_id']?.toString() ?? channel['id']?.toString();
         
@@ -783,6 +807,56 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
                           ),
                         ],
                       ),
+                    ),
+                  ),
+                if (!_isResolvingStream && _activeMiniChannel != null)
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: ProxyStats.speedNotifier,
+                      builder: (context, speed, _) {
+                        return ValueListenableBuilder<int>(
+                          valueListenable: ProxyStats.totalDataNotifier,
+                          builder: (context, totalBytes, _) {
+                            final speedText = speed <= 0
+                                ? '0 KB/s'
+                                : (speed < 1024 * 1024
+                                    ? '${(speed / 1024).toStringAsFixed(1)} KB/s'
+                                    : '${(speed / (1024 * 1024)).toStringAsFixed(2)} MB/s');
+                            
+                            final dataText = totalBytes < 1024 * 1024
+                                ? '${(totalBytes / 1024).toStringAsFixed(1)} KB'
+                                : (totalBytes < 1024 * 1024 * 1024
+                                    ? '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+                                    : '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB');
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '$speedText | $dataText',
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      },
                     ),
                   ),
               ],

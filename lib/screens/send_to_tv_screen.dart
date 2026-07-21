@@ -85,45 +85,68 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     }
   }
 
-  Future<void> _sendFile() async {
-    if (_selectedFile == null || _ipController.text.isEmpty) return;
+Future<void> _sendFile() async {
+  if (_selectedFile == null || _ipController.text.isEmpty) return;
 
-    setState(() {
-      _isSending = true;
-      _progress = 0;
-      _status = 'Connecting...';
-    });
+  setState(() {
+    _isSending = true;
+    _progress = 0;
+    _status = 'Connecting...';
+  });
 
-    try {
-      final bytes = await File(_selectedFile!.path!).readAsBytes();
-      final fileName = _selectedFile!.name;
-      var targetHost = _ipController.text.trim();
-      if (!targetHost.startsWith('http')) {
-        targetHost = 'http://$targetHost';
+  try {
+    final fileName = _selectedFile!.name;
+    final file = File(_selectedFile!.path!);
+    final fileSize = await file.length();
+    var targetHost = _ipController.text.trim();
+    final uri = Uri.parse(targetHost.startsWith('http') ? targetHost : 'http://$targetHost');
+    final host = uri.host;
+    final port = uri.port == 0 ? 80 : uri.port;
+
+    _status = 'Sending $fileName (${fileSize ~/ 1048576} MB)...';
+
+    final socket = await Socket.connect(host, port, timeout: const Duration(seconds: 15));
+
+    final requestLine = 'POST /upload?name=${Uri.encodeComponent(fileName)} HTTP/1.1\r\n';
+    final hostHeader = 'Host: $host:$port\r\n';
+    final contentType = 'Content-Type: application/octet-stream\r\n';
+    final contentLength = 'Content-Length: $fileSize\r\n';
+    final headersEnd = '\r\n';
+
+    socket.add(requestLine.codeUnits);
+    socket.add(hostHeader.codeUnits);
+    socket.add(contentType.codeUnits);
+    socket.add(contentLength.codeUnits);
+    socket.add(headersEnd.codeUnits);
+    await socket.flush();
+
+    int sentBytes = 0;
+    await for (final chunk in file.openRead()) {
+      socket.add(chunk);
+      sentBytes += chunk.length;
+      if (mounted) {
+        setState(() {
+          _progress = sentBytes / fileSize;
+        });
       }
-      final uri = Uri.parse('$targetHost/upload?name=${Uri.encodeComponent(fileName)}');
-
-      _status = 'Sending $fileName (${_selectedFile!.size ~/ 1048576} MB)...';
-
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/octet-stream'},
-        body: bytes,
-      ).timeout(const Duration(minutes: 10));
-
-      if (response.statusCode == 200) {
-        _status = '✓ Sent successfully!';
-        _history.insert(0, {'ip': _ipController.text, 'file': fileName, 'time': DateTime.now().toIso8601String()});
-        _saveHistory();
-      } else {
-        _status = 'Server error: ${response.statusCode} ${response.body}';
-      }
-    } catch (e) {
-      _status = 'Error: $e';
     }
+    await socket.flush();
+  final responseStr = await socket.map(utf8.decode).join();
+  await socket.close();
 
-    setState(() => _isSending = false);
+  if (responseStr.contains('200') || responseStr.contains('"success":true')) {
+      _status = '✓ Sent successfully!';
+      _history.insert(0, {'ip': _ipController.text, 'file': fileName, 'time': DateTime.now().toIso8601String()});
+      _saveHistory();
+    } else {
+      _status = 'Server error: ${responseStr.substring(0, responseStr.length.clamp(0, 200))}';
+    }
+  } catch (e) {
+    _status = 'Error: $e';
   }
+
+  setState(() => _isSending = false);
+}
 
   Future<void> _scanQrCode() async {
     final status = await Permission.camera.request();

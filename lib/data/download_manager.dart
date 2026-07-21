@@ -27,6 +27,8 @@ class DownloadTask {
   int receivedBytes;
   String? error;
   Map<String, String>? headers;
+  String? selectedQuality;
+  String? selectedAudio;
 
   // Runtime fields (non-persisted)
   int speedBytesPerSecond = 0;
@@ -72,6 +74,8 @@ class DownloadTask {
     this.receivedBytes = 0,
     this.error,
     this.headers,
+    this.selectedQuality,
+    this.selectedAudio,
   });
 
   Map<String, dynamic> toJson() {
@@ -106,6 +110,8 @@ class DownloadTask {
       'receivedBytes': receivedBytes,
       'error': error,
       'headers': headers,
+      'selectedQuality': selectedQuality,
+      'selectedAudio': selectedAudio,
     };
   }
 
@@ -127,6 +133,8 @@ class DownloadTask {
       receivedBytes: json['receivedBytes'] as int? ?? 0,
       error: json['error'] as String?,
       headers: json['headers'] != null ? Map<String, String>.from(json['headers'] as Map) : null,
+      selectedQuality: json['selectedQuality']?.toString(),
+      selectedAudio: json['selectedAudio']?.toString(),
     );
   }
 }
@@ -209,7 +217,7 @@ abstract final class DownloadManager {
   }
 
   /// Enqueues and starts downloading a movie stream link in the background.
-  static Future<void> downloadMovie(Movie movie, String downloadUrl, {Map<String, String>? headers}) async {
+  static Future<void> downloadMovie(Movie movie, String downloadUrl, {Map<String, String>? headers, String? selectedQuality, String? selectedAudio}) async {
     var task = getTask(movie.id);
 
     if (task == null) {
@@ -236,6 +244,8 @@ abstract final class DownloadManager {
         localPath: localPath,
         status: DownloadStatus.queued,
         headers: headers,
+        selectedQuality: selectedQuality,
+        selectedAudio: selectedAudio,
       );
 
       downloadTasks.value = List.from(downloadTasks.value)..add(task);

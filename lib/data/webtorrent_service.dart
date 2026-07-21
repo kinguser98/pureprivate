@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
 
 class WebTorrentService {
   static const String _baseUrl = 'https://v2.seedr.cc/api/v0.1/p';
@@ -176,13 +177,11 @@ class WebTorrentService {
   }
 
   static Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('seedr_auth_token');
+    return await SyncService.getSeedrToken();
   }
 
   static Future<String?> _getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('seedr_auth_token');
+    return await SyncService.getSeedrToken();
   }
 
   static Future<void> saveToken(String token) async {

@@ -531,9 +531,19 @@ class StalkerResolver {
       throw lastErr ?? Exception('nothing_to_play');
     }
 
-    // Strip ffmpeg prefix if present
-    if (streamUrl.startsWith('ffmpeg ')) {
-      streamUrl = streamUrl.substring(7);
+    // Strip helper prefixes if present (e.g. 'ffmpeg ', 'auto ', 'ffrt ', 'hls ')
+    while (true) {
+      if (streamUrl.startsWith('ffmpeg ')) {
+        streamUrl = streamUrl.substring(7);
+      } else if (streamUrl.startsWith('auto ')) {
+        streamUrl = streamUrl.substring(5);
+      } else if (streamUrl.startsWith('ffrt ')) {
+        streamUrl = streamUrl.substring(5);
+      } else if (streamUrl.startsWith('hls ')) {
+        streamUrl = streamUrl.substring(4);
+      } else {
+        break;
+      }
     }
 
     // Resolve localhost / 127.0.0.1 loopbacks back to portal host

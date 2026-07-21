@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:private_cinema_ios/data/dns_proxy.dart';
 import 'package:private_cinema_ios/data/download_manager.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
+import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:private_cinema_ios/screens/navigation_holder.dart';
 import 'package:private_cinema_ios/theme/app_colors.dart';
 
@@ -64,7 +67,10 @@ void main() async {
   }
 
   
-  // Set system bar styling
+  // Set system bar styling and lock to portrait mode
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -90,11 +96,46 @@ void main() async {
     debugPrint('Error initializing DownloadManager: $e');
   }
 
+  // Hook up Telegram credentials to the admin-pushed values so
+  // TelegramService.init() can find them on first use.
+  TelegramService.registerRemoteCredentialsProvider(() async {
+    try {
+      final cfg = await SyncService.fetchTelegramConfig();
+      if (cfg.apiId == null || cfg.apiHash == null) return null;
+      return TelegramCredentials(
+          apiId: cfg.apiId!, apiHash: cfg.apiHash!);
+    } catch (_) {
+      return null;
+    }
+  });
+
+  // Restore Telegram session and refresh index in the background so that
+  // Settings shows "Connected" immediately on every app open without blocking
+  // the main UI thread.
+  unawaited(_telegramStartup());
+
   runApp(const PrivateCinemaMobileApp());
 }
 
+/// Restores the Telegram session and refreshes the saved-messages index in
+/// the background.  Runs as a fire-and-forget from [main] so it never blocks
+/// the initial frame render.
+Future<void> _telegramStartup() async {
+  try {
+    await TelegramService.instance.init();
+    if (TelegramService.instance.status.value == TelegramStatus.ready) {
+      // Silently refresh the index so it's always up-to-date on every launch.
+      await TelegramService.instance.loadSavedMessages(limit: 200);
+    }
+  } catch (e) {
+    debugPrint('Telegram startup error: $e');
+  }
+}
+
+
 class PrivateCinemaMobileApp extends StatelessWidget {
   const PrivateCinemaMobileApp({super.key});
+
 
   @override
   Widget build(BuildContext context) {

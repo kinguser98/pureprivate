@@ -118,8 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages);
       final parsedLanguages = ApiService.parseLanguages(rawLanguages);
 
-      final recent = parsedMovies.where((m) => m.year != null && m.year! >= 2024).toList();
-      final recentList = recent.isNotEmpty ? recent : parsedMovies.take(10).toList();
+      final recentList = parsedMovies.take(15).toList();
 
       final rawTrending = List<dynamic>.from(rawMovies)
         ..sort((a, b) {
@@ -157,11 +156,11 @@ class _HomeScreenState extends State<HomeScreen> {
       await _initializeMockPlaybackProgress(parsedMovies);
       await _loadContinueWatching();
 
-      final featured = parsedMovies.where((m) => m.rating >= 8.5).toList();
+      final featuredList = parsedMovies.take(5).toList();
 
       if (mounted) {
         setState(() {
-          _featuredMovies = featured.isNotEmpty ? featured : parsedMovies.take(5).toList();
+          _featuredMovies = featuredList;
           _languages = parsedLanguages;
           _movieGenres = genres;
           _movieCollections = collections;

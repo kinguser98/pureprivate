@@ -238,11 +238,28 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               movie.title,
               style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
             ),
-            subtitle: Text(
-              '${movie.genre} • ${movie.year ?? 2026} • ${movie.runtime ?? "2h"}',
-              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            subtitle: Builder(
+              builder: (context) {
+                final task = DownloadManager.getTask(movie.id);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${movie.genre} • ${movie.year ?? 2026} • ${movie.runtime ?? "2h"}',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                    if (task != null && (task.selectedQuality != null || task.selectedAudio != null)) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '${task.selectedQuality != null ? "[${task.selectedQuality}] " : ""}${task.selectedAudio != null ? "[${task.selectedAudio}]" : ""}',
+                        style: TextStyle(color: AppColors.accentBright, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ],
+                );
+              }
             ),
-             trailing: Row(
+            trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
@@ -379,7 +396,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '$speedLabel • $detailsText',
+                          '${task.selectedQuality != null ? "[${task.selectedQuality}] " : ""}${task.selectedAudio != null ? "[${task.selectedAudio}] • " : ""}$speedLabel • $detailsText',
                           style: const TextStyle(color: Colors.white30, fontSize: 11),
                         ),
                       ],

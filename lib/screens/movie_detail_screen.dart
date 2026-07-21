@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
@@ -14,6 +17,10 @@ import 'package:private_cinema_ios/data/playback_tracker.dart';
 import 'package:private_cinema_ios/data/youtube_service.dart';
 import 'package:private_cinema_ios/data/embed_resolver.dart';
 import 'package:private_cinema_ios/data/cinemm_resolver.dart';
+import 'package:private_cinema_ios/data/telegram_sources.dart';
+import 'package:freebuff_core/services/telegram/telegram_service.dart';
+import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
+import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
 import 'package:private_cinema_ios/models/movie.dart';
 import 'package:private_cinema_ios/theme/app_colors.dart';
 import 'package:private_cinema_ios/widgets/movie_image.dart';
@@ -28,6 +35,7 @@ import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
 import 'package:private_cinema_ios/data/hls_preflight.dart';
 import 'package:private_cinema_ios/data/webtorrent_service.dart';
 import 'package:private_cinema_ios/widgets/seedr_countdown_dialog.dart';
+import 'package:private_cinema_ios/widgets/stream_metadata_tile.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -67,7 +75,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveStremioSources = [];
   List<StreamSource> _liveNuveoSources = [];
   List<StreamSource> _liveCastleSources = [];
- 
+  List<StreamSource> _liveTelegramSources = [];
+
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
@@ -77,7 +86,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingNuveo = false;
   bool _resolvingCastle = false;
   bool _resolvingTorrent = false;
- 
+  bool _resolvingTelegram = false;
+
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showCinemm = true;
@@ -87,9 +97,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showStremioAddon = true;
   bool _showNuveoAddon = true;
   bool _showCastle = true;
+  bool _showTelegram = true;
+  List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [];
-
   StateSetter? _modalSetState;
+
+  Color? _qualityBadgeColor(String quality) {
+    final q = quality.toLowerCase();
+    if (q.contains('2160p') || q.contains('4k') || q.contains('uhd') || q.contains('2160')) {
+      return const Color(0xFF9C27B0);
+    }
+    if (q.contains('1080p') || q.contains('fhd') || q.contains('1080')) {
+      return const Color(0xFF2196F3);
+    }
+    if (q.contains('720p') || q.contains('hd') || q.contains('720')) {
+      return const Color(0xFF4CAF50);
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -129,6 +154,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showStremioAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['stremio_addons_enabled'] ?? 'true') == 'true';
         _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
+        _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        
+        final blockedRaw = cloud['blocked_addon_groups'] ?? '';
+        _blockedAddonGroups = blockedRaw
+            .split(RegExp(r'[,\n]'))
+            .map((s) => s.trim().toLowerCase())
+            .where((s) => s.isNotEmpty)
+            .toList();
       });
     }
     // Load source order from cloud
@@ -170,6 +203,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (_showCastle) {
         _resolveLiveCastle(movie.tmdbId!);
       }
+    }
+
+    if (_showTelegram) {
+      _resolveLiveTelegram();
     }
   }
 
@@ -334,10 +371,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   Future<void> _resolveLiveStravo(String imdbId) async {
     if (mounted) setState(() => _resolvingStravo = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl =
-          prefs.getString('stravo_addon_url') ??
-          'https://stravo-clfk.onrender.com/default';
+      final addonBaseUrl = await SyncService.getStravoUrl();
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
@@ -425,13 +459,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final List<StreamSource> sources = [];
       for (final list in results) {
         for (final item in list) {
+          final addonName = (item.addonName ?? '').trim().toLowerCase();
+          if (_blockedAddonGroups.any((b) => addonName == b || addonName.contains(b))) {
+            continue;
+          }
           final isDup = sources.any((s) => s.url == item.url);
           if (!isDup) {
-            sources.add(StreamSource(
-              name: '${item.addonName} - ${item.quality}',
-              url: item.url,
-              headers: item.headers.isNotEmpty ? item.headers : null,
-            ));
+            final metaParts = <String>[item.addonName ?? ''];
+            if (item.quality != null && item.quality!.isNotEmpty) metaParts.add(item.quality!);
+            if (item.size != null && item.size!.isNotEmpty) metaParts.add(item.size!);
+            if (item.languages != null && item.languages!.isNotEmpty) metaParts.add(item.languages!.join(', '));
+  sources.add(StreamSource(
+    name: metaParts.join(' - '),
+    url: item.url,
+    headers: item.headers.isNotEmpty ? item.headers : null,
+    quality: item.quality,
+    qualityBadgeColor: item.quality != null && item.quality!.isNotEmpty ? _qualityBadgeColor(item.quality!) : null,
+    qualityBadgeText: item.quality,
+  ));
           }
         }
       }
@@ -477,23 +522,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             scriptUrl: scriptUrl,
             tmdbId: tmdbId,
             mediaType: 'movie',
+            title: widget.movie.title,
+            imdbId: widget.movie.imdbId,
+            releaseDate: widget.movie.year != null ? '${widget.movie.year}-01-01' : null,
           ));
         }
       }
       final results = await Future.wait(tasks);
-      final List<StreamSource> sources = [];
-      for (final list in results) {
-        for (final item in list) {
-          final isDup = sources.any((s) => s.url == item.url);
-          if (!isDup) {
-            sources.add(StreamSource(
-              name: '${item.addonName ?? item.name}${item.quality != null ? ' - ${item.quality}' : ''}',
-              url: item.url,
-              headers: item.headers,
-            ));
-          }
-        }
+  final List<StreamSource> sources = [];
+  for (final list in results) {
+    for (final item in list) {
+      final addonName = (item.addonName ?? item.name ?? '').toString().trim().toLowerCase();
+      if (_blockedAddonGroups.any((b) => addonName == b || addonName.contains(b))) {
+        continue;
       }
+      final isDup = sources.any((s) => s.url == item.url);
+      if (!isDup) {
+        final quality = item.quality ?? StremioParser.parseQuality(item.name ?? '', item.originalTitle ?? '');
+        final badgeColor = _qualityBadgeColor(quality);
+        sources.add(StreamSource(
+          name: '${item.addonName ?? item.name}${quality.isNotEmpty ? ' - $quality' : ''}',
+          url: item.url,
+          headers: item.headers,
+          quality: quality,
+          qualityBadgeColor: badgeColor,
+          qualityBadgeText: quality.toUpperCase(),
+        ));
+      }
+    }
+  }
       if (mounted) {
         setState(() {
           _liveNuveoSources = sources;
@@ -518,7 +575,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final List<StreamSource> resolved = [];
       for (final s in streams) {
         resolved.add(StreamSource(
-          name: '${s.name}${s.quality != null ? ' - ${s.quality}' : ''}',
+          name: 'Castle TV - ${s.name}${s.quality != null ? ' - ${s.quality}' : ''}',
           url: s.url,
           headers: s.headers,
         ));
@@ -534,6 +591,41 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (mounted) setState(() => _resolvingCastle = false);
     }
   }
+
+  Future<void> _resolveLiveTelegram() async {
+    if (mounted) setState(() => _resolvingTelegram = true);
+    try {
+      if (!await TelegramService.instance.hasSession) {
+        if (mounted) setState(() => _liveTelegramSources = const []);
+        return;
+      }
+      final cfg = await SyncService.fetchTelegramConfig();
+      if (!cfg.enabled) {
+        if (mounted) setState(() => _liveTelegramSources = const []);
+        return;
+      }
+      if (cfg.apiId != null && cfg.apiHash != null) {
+        await TelegramService.instance
+            .setCredentials(cfg.apiId, cfg.apiHash);
+      }
+      await TelegramService.instance.init();
+      final query =
+          '${movie.title}${movie.year != null ? ' ${movie.year}' : ''}';
+      final hits = await TelegramService.instance.search(query);
+      if (mounted) {
+        setState(() {
+          _liveTelegramSources =
+              TelegramSources.toStreamSources(hits).cast<StreamSource>();
+        });
+      }
+    } catch (e) {
+      debugPrint('Telegram resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingTelegram = false);
+    }
+  }
+
+
 
   Future<Map<String, int>?> _scrapeTorrentStats(String url) async {
     try {
@@ -580,11 +672,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (imdbId == null || imdbId.isEmpty || imdbId == 'null') return;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final addonBaseUrl =
-          prefs.getString('torrentio_addon_url') ??
-          'https://torrentio.strem.fun';
-
+      final addonBaseUrl = await SyncService.getTorrentioUrl();
       var baseUrl = addonBaseUrl.trim();
       if (baseUrl.endsWith('/')) {
         baseUrl = baseUrl.substring(0, baseUrl.length - 1);
@@ -707,10 +795,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return [];
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    final addonBaseUrl =
-        prefs.getString('stravo_addon_url') ??
-        'https://stravo-clfk.onrender.com/default';
+    final addonBaseUrl = await SyncService.getStravoUrl();
 
     var baseUrl = addonBaseUrl.trim();
     if (baseUrl.endsWith('/')) {
@@ -1199,6 +1284,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final lower = url.toLowerCase();
     if (_isYoutubeUrl(url)) return false;
 
+    // Local Telegram streams are direct file resources, not web embeds
+    if (lower.contains('127.0.0.1') || lower.contains('localhost') || lower.contains('/tg/')) {
+      return false;
+    }
+
     // If it has a direct video extension or standard HLS/stream segment pattern, it's not a generic web embed
     if (lower.contains('.m3u8') ||
         lower.contains('.mp4') ||
@@ -1267,6 +1357,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     bool resumeDirectly = false,
     Map<String, String>? headers,
     String? originalEmbedUrl,
+    String? sourceName,
   }) async {
     final List<String> parts = [];
     if (movie.year != null) parts.add(movie.year.toString());
@@ -1283,6 +1374,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           imdbId: movie.imdbId,
           resumeDirectly: resumeDirectly,
           headers: headers,
+          sourceName: sourceName,
         ),
       ),
     );
@@ -1585,6 +1677,60 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }) async {
     source = _sanitizeUrl(source);
 
+    // Telegram Saved-Message file: resolve to a streamable URL first.
+    if (TelegramSources.isTelegramUrl(source)) {
+      final localId = TelegramSources.extractLocalId(source);
+      final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+      TelegramVideoItem? match;
+      for (final i in items) {
+        if (i.localId == localId) {
+          match = i;
+          break;
+        }
+      }
+      if (match == null) {
+        // Not in cache → try to refresh and re-search.
+        await TelegramService.instance.loadSavedMessages(limit: 200);
+        final items2 = await TelegramIndexDb.instance.all();
+        for (final i in items2) {
+          if (i.localId == localId) {
+            match = i;
+            break;
+          }
+        }
+      }
+      if (match == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Telegram file not found locally. Open Settings → Telegram → Sync Saved Messages.'),
+            backgroundColor: const Color(0xFFEF4444),
+          ));
+        }
+        return;
+      }
+      try {
+        final resolved = await TelegramService.instance.resolveStream(match);
+        // Re-enter playback with the resolved URL.
+        return _playWithResolution(
+          resolved,
+          resumeDirectly: resumeDirectly,
+          sourceName: sourceName,
+          forceNative: forceNative,
+          forceWeb: forceWeb,
+          headers: headers,
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Telegram resolve failed: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ));
+        }
+        return;
+      }
+    }
+
     if (source.startsWith('magnet:')) {
       // Show dialog IMMEDIATELY before any async
       showDialog<void>(
@@ -1667,6 +1813,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           stalkerStream.url,
           resumeDirectly: resumeDirectly,
           headers: stalkerStream.headers,
+          sourceName: 'Stalker',
         );
       } catch (e) {
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
@@ -1937,6 +2084,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
     } else {
+      final isLocalTelegram = source.contains('127.0.0.1') || source.contains('localhost') || source.contains('/tg/');
+      if (isLocalTelegram) {
+        _play(
+          source,
+          resumeDirectly: resumeDirectly,
+          headers: headers,
+          sourceName: sourceName,
+        );
+        return;
+      }
+
       // Show resolving dialog
       if (mounted) {
         showDialog<void>(
@@ -1977,6 +2135,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         playUrl,
         resumeDirectly: resumeDirectly,
         headers: finalHeaders.isEmpty ? null : finalHeaders,
+        sourceName: sourceName,
       );
     }
   }
@@ -2244,6 +2403,41 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 },
               );
             }
+
+            // Telegram Saved Messages
+            if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+              sourceWidgets['telegram'] = _buildSourceTile(
+                icon: Icons.send_rounded,
+                title: '${pos('telegram')}. Telegram Saved Messages',
+                subtitle: _resolvingTelegram
+                    ? 'Searching Telegram...'
+                    : (_liveTelegramSources.isEmpty
+                        ? 'No files found'
+                        : '${_liveTelegramSources.length} files in Saved Messages'),
+                disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveTelegramSources.length == 1) {
+                    final s = _liveTelegramSources.first;
+                    _playWithResolution(
+                      s.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: s.name,
+                      headers: s.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'TELEGRAM SAVED MESSAGES',
+                      _liveTelegramSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+ 
+
  
             final List<Widget> items = [];
  
@@ -2865,45 +3059,33 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     shrinkWrap: true,
                     itemCount: sources.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final source = sources[index];
-                      return ListTile(
-                        leading: Icon(
-                          Icons.play_circle_outline_rounded,
-                          color: AppColors.accentBright,
-                        ),
-                        title: Text(
-                          source.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                        subtitle: Text(
-                          source.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white30,
-                            fontSize: 11,
-                          ),
-                        ),
-                        tileColor: Colors.white.withValues(alpha: 0.03),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          _playWithResolution(
-                            source.url,
-                            resumeDirectly: resumeDirectly,
-                            sourceName: source.name,
-                            headers: source.headers,
-                          );
-                        },
-                      );
-                    },
+                      itemBuilder: (context, index) {
+                        final source = sources[index];
+                        return StreamMetadataTile(
+                          name: source.name,
+                          url: source.url,
+                          headers: source.headers,
+                          isSelected: false,
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _playWithResolution(
+                              source.url,
+                              resumeDirectly: resumeDirectly,
+                              sourceName: source.name,
+                              headers: source.headers,
+                            );
+                          },
+                          onLongPress: () {
+                            Clipboard.setData(ClipboardData(text: source.url));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Copied Link: ${source.url}'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                        );
+                      },
                   ),
                 ),
               ],
@@ -3014,23 +3196,34 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 Icons.play_circle_outline_rounded,
                                 color: AppColors.accentBright,
                               ),
-                              title: Text(
-                                source.name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              subtitle: Text(
-                                source.url,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white30,
-                                  fontSize: 11,
-                                ),
-                              ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${widget.movie.title} [Portal ${entry.key}]',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              source.url,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white30,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
                               tileColor: Colors.white.withValues(alpha: 0.03),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -3065,22 +3258,42 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     List<StreamSource> sources, {
     bool resumeDirectly = false,
   }) {
-    // Group by addon name extracted from source name (format: "AddonName - Quality")
-    final Map<String, List<StreamSource>> grouped = {};
+    // Parse metadata and build nested grouping: addon -> site -> streams
+    final Map<String, Map<String, List<StreamSource>>> nested = {};
     for (final s in sources) {
-      final addonName = s.name.contains(' - ') ? s.name.split(' - ').first : s.name;
-      grouped.putIfAbsent(addonName, () => []);
-      grouped[addonName]!.add(s);
+      final meta = parseStreamMeta(s.name, s.url);
+      final parts = s.name.contains(' - ') ? s.name.split(' - ') : [s.name];
+      final addonName = meta.site.isNotEmpty ? parts.first : s.name;
+      final siteName = meta.site.isNotEmpty ? meta.site : (parts.length > 1 ? parts.last : 'Stream');
+
+      nested.putIfAbsent(addonName, () => {});
+      nested[addonName]!.putIfAbsent(siteName, () => []);
+      nested[addonName]![siteName]!.add(s);
     }
 
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) {
-        final entries = grouped.entries.toList();
+        final addonEntries = nested.entries.toList();
+
+        // If only one addon with one site → show flat source list
+        bool onlyOne = addonEntries.length == 1 && addonEntries.first.value.length == 1;
+        if (onlyOne) {
+          final streams = addonEntries.first.value.values.first;
+          if (streams.length <= 2) {
+            return SafeArea(child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Text(title, style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                const SizedBox(height: 16),
+                Flexible(child: _buildFlatSourceList(streams, resumeDirectly)),
+              ]),
+            ));
+          }
+        }
+
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -3088,31 +3301,52 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(title,
-                  style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                Text(title, style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
                 const SizedBox(height: 16),
                 Flexible(
-                  child: entries.length == 1
-                      ? _buildFlatSourceList(entries.first.value, resumeDirectly)
-                      : ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: entries.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
-                          itemBuilder: (_, i) {
-                            final entry = entries[i];
-                            return ListTile(
-                              leading: Icon(Icons.folder_rounded, color: AppColors.accentBright),
-                              title: Text(entry.key, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                              subtitle: Text('${entry.value.length} links', style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                              trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white24),
-                              tileColor: Colors.white.withValues(alpha: 0.03),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              onTap: () {
-                                _showSubSourceSelector(ctx, entry.key.toUpperCase(), entry.value, resumeDirectly: resumeDirectly);
-                              },
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: addonEntries.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) {
+                      final addonEntry = addonEntries[i];
+                      final siteEntries = addonEntry.value.entries.toList();
+                      final totalLinks = siteEntries.fold(0, (s, e) => s + e.value.length);
+                      return Container(
+                        decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.02), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white10)),
+                        child: ExpansionTile(
+                          shape: const Border(), collapsedShape: const Border(),
+                          iconColor: AppColors.accentBright, collapsedIconColor: Colors.white38,
+                          initiallyExpanded: i == 0,
+                          title: Text(addonEntry.key, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                          subtitle: Text('$totalLinks links across ${siteEntries.length} source(s)', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                          children: siteEntries.map((siteEntry) {
+                            final streams = siteEntry.value;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (siteEntries.length > 1)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                                    child: Text(siteEntry.key, style: GoogleFonts.outfit(color: AppColors.accentBright, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                                  ),
+                                ...streams.map((s) => Padding(
+                                  padding: EdgeInsets.only(left: siteEntries.length > 1 ? 8 : 0),
+                                  child: StreamMetadataTile(
+                                    name: s.name, url: s.url, headers: s.headers,
+                                    onTap: () {
+                                      Navigator.of(ctx).pop();
+                                      _playWithResolution(s.url, resumeDirectly: resumeDirectly, sourceName: s.name, headers: s.headers);
+                                    },
+                                  ),
+                                )),
+                              ],
                             );
-                          },
+                          }).toList(),
                         ),
+                      );
+                    },
+                  ),
                 ),
               ],
             ),
@@ -3126,15 +3360,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     return ListView.separated(
       shrinkWrap: true,
       itemCount: sources.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) {
         final s = sources[i];
-        return ListTile(
-          leading: Icon(Icons.play_circle_outline_rounded, color: AppColors.accentBright),
-          title: Text(s.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-          subtitle: Text(s.url, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white30, fontSize: 11)),
-          tileColor: Colors.white.withValues(alpha: 0.03),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        return StreamMetadataTile(
+          name: s.name,
+          url: s.url,
+          headers: s.headers,
           onTap: () {
             Navigator.of(context).pop();
             _playWithResolution(s.url, resumeDirectly: resumeDirectly, sourceName: s.name, headers: s.headers);
@@ -3347,15 +3579,173 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
-  void _startDirectMp4Download(String url) async {
-    try {
-      await DownloadManager.downloadMovie(movie, url);
+
+  Future<void> _promptAndStartDownload(String downloadUrl, {Map<String, String>? headers}) async {
+    String selectedQuality = 'Original';
+    String selectedAudio = 'Default';
+
+    final result = await showModalBottomSheet<Map<String, String>?>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'DOWNLOAD OPTIONS',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Quality Selector
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Video Quality', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                        DropdownButton<String>(
+                          value: selectedQuality,
+                          dropdownColor: AppColors.surface,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          underline: const SizedBox(),
+                          items: <String>['Original', '1080p', '720p', '480p', '360p']
+                              .map((q) => DropdownMenuItem(value: q, child: Text(q)))
+                              .toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setModalState(() => selectedQuality = val);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const Divider(color: Colors.white10),
+                    // Audio Selector
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Audio Language', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                        DropdownButton<String>(
+                          value: selectedAudio,
+                          dropdownColor: AppColors.surface,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          underline: const SizedBox(),
+                          items: <String>['Default', 'English', 'Tamil', 'Hindi', 'Telugu', 'Malayalam', 'Spanish', 'French']
+                              .map((a) => DropdownMenuItem(value: a, child: Text(a)))
+                              .toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setModalState(() => selectedAudio = val);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accentBright,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).pop({
+                          'quality': selectedQuality,
+                          'audio': selectedAudio,
+                        });
+                      },
+                      child: const Text(
+                        'Start Download',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null) {
+      final q = result['quality'] == 'Original' ? null : result['quality'];
+      final a = result['audio'] == 'Default' ? null : result['audio'];
+
+      await DownloadManager.downloadMovie(
+        movie,
+        downloadUrl,
+        headers: headers,
+        selectedQuality: q,
+        selectedAudio: a,
+      );
       await _checkDownloadStatus();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(this.context).showSnackBar(
           SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
         );
       }
+    }
+  }
+
+  Future<void> _downloadTelegramStream(StreamSource source) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.tealAccent)),
+    );
+    try {
+      final localId = TelegramSources.extractLocalId(source.url);
+      var items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+      TelegramVideoItem? match;
+      for (final item in items) {
+        if (item.localId == localId) {
+          match = item;
+          break;
+        }
+      }
+      if (match == null) {
+        await TelegramService.instance.loadSavedMessages(limit: 200);
+        final items2 = await TelegramIndexDb.instance.all();
+        for (final item in items2) {
+          if (item.localId == localId) {
+            match = item;
+            break;
+          }
+        }
+      }
+
+      if (mounted) Navigator.of(context).pop();
+
+      if (match != null) {
+        final resolved = await TelegramService.instance.resolveStream(match);
+        await _promptAndStartDownload(resolved);
+      } else {
+        throw Exception('Telegram file not found in sync database.');
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Telegram download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  void _startDirectMp4Download(String url) async {
+    try {
+      await _promptAndStartDownload(url);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -3382,6 +3772,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
         final dbStreamtapeSources = movie.streamSources.where(_isStreamtapeSource).toList();
         final totalTorrents = _torrentioSources.length + movie.streamSources.where(_isMagnetSource).length;
+        final totalTelegram = _liveTelegramSources.length;
 
         final List<Widget> items = [];
 
@@ -3543,6 +3934,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           ));
         }
 
+        // 9. Telegram Server
+        if (!_resolvingTelegram && _liveTelegramSources.isNotEmpty) {
+          items.add(_buildSourceTile(
+            icon: Icons.send_rounded,
+            title: '9. Telegram Server',
+            subtitle: '${_liveTelegramSources.length} links available',
+            disabled: false,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveTelegramSources.length == 1) {
+                _downloadTelegramStream(_liveTelegramSources.first);
+              } else {
+                _showDownloadSubSelector('TELEGRAM DOWNLOADS', _liveTelegramSources, isTelegram: true);
+              }
+            },
+          ));
+        } else if (_resolvingTelegram) {
+          items.add(_buildSourceTile(
+            icon: Icons.send_rounded,
+            title: '9. Telegram Server',
+            subtitle: 'Searching Telegram...',
+            disabled: true,
+            onTap: () {},
+          ));
+        }
+
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -3611,13 +4028,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (mounted) Navigator.of(context).pop();
 
       if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
-        await DownloadManager.downloadMovie(movie, resolvedUrl, headers: headers);
-        await _checkDownloadStatus();
-        if (mounted) {
-          ScaffoldMessenger.of(this.context).showSnackBar(
-            SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
-          );
-        }
+        await _promptAndStartDownload(resolvedUrl, headers: headers);
       } else {
         throw Exception('Could not resolve download link.');
       }
@@ -3645,13 +4056,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (mounted) Navigator.of(context).pop();
 
       if (url.isNotEmpty) {
-        await DownloadManager.downloadMovie(movie, url);
-        await _checkDownloadStatus();
-        if (mounted) {
-          ScaffoldMessenger.of(this.context).showSnackBar(
-            SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
-          );
-        }
+        await _promptAndStartDownload(url);
       } else {
         throw Exception('Failed to resolve CineMM direct URL.');
       }
@@ -3679,18 +4084,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (mounted) Navigator.of(context).pop();
 
       if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
-        await DownloadManager.downloadMovie(
-          movie,
+        await _promptAndStartDownload(
           resolvedUrl,
           headers: {
             'Referer': 'https://streamtape.com/',
             'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
-        );
-        await _checkDownloadStatus();
-        ScaffoldMessenger.of(this.context).showSnackBar(
-          SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
         );
       } else {
         throw Exception('Failed to resolve Streamtape direct URL.');
@@ -3716,11 +4116,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final resolved = await StalkerResolver.resolveStream(cmd, portalId, isLive: false);
       if (mounted) Navigator.of(context).pop();
 
-      await DownloadManager.downloadMovie(movie, resolved.url, headers: resolved.headers);
-      await _checkDownloadStatus();
-      ScaffoldMessenger.of(this.context).showSnackBar(
-        SnackBar(content: Text('"${movie.title}" added to downloads queue.')),
-      );
+      await _promptAndStartDownload(resolved.url, headers: resolved.headers);
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       ScaffoldMessenger.of(this.context).showSnackBar(
@@ -3820,7 +4216,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false}) {
+  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false, bool isTelegram = false}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -3862,6 +4258,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             _downloadStravoStream(source);
                           } else if (isCinemm) {
                             _downloadCinemmStream(source);
+                          } else if (isTelegram) {
+                            _downloadTelegramStream(source);
                           } else {
                             _downloadSourceUrl(source.url, sourceName: source.name);
                           }
@@ -4079,41 +4477,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     children: _watchProviders.map((provider) {
                       final logoPath = provider['logo_path']?.toString() ?? '';
                       final logoUrl = 'https://image.tmdb.org/t/p/w154$logoPath';
-                      final providerName = provider['provider_name']?.toString() ?? 'OTT';
                       return Container(
                         margin: const EdgeInsets.only(right: 16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 54,
-                              height: 54,
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: Colors.white10),
-                              ),
-                              clipBehavior: Clip.antiAlias,
-                              child: Image.network(
-                                logoUrl,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const Icon(Icons.tv_rounded, color: Colors.white60, size: 24),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            SizedBox(
-                              width: 66,
-                              child: Text(
-                                providerName,
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: GoogleFonts.outfit(
-                                  color: Colors.white70,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
-                          ],
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: Image.network(
+                          logoUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(Icons.tv_rounded, color: Colors.white60, size: 24),
                         ),
                       );
                     }).toList(),
@@ -4624,23 +5000,51 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   ? activeTheme.accentBright
                                   : null,
                             ),
-                            _buildActionButtonCard(
-                              icon: Icons.tv_rounded,
-                              label: 'Watch OTT',
-                              onTap: () {
-                                if (_watchProviders.isEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('No OTT streaming platforms found for this movie.'),
-                                      backgroundColor: Colors.orangeAccent,
-                                    ),
-                                  );
-                                } else {
-                                  _showWatchProvidersBottomSheet(context);
-                                }
-                              },
-                              activeColor: _watchProviders.isNotEmpty ? activeTheme.accentBright : null,
-                            ),
+        if (movie.ottName != null && movie.ottName!.isNotEmpty)
+          Expanded(
+            child: GestureDetector(
+              onTap: () => _showWatchProvidersBottomSheet(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  border: Border.all(color: Colors.white10, width: 0.8),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (movie.ottLogo != null && movie.ottLogo!.isNotEmpty)
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: Colors.white10,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Image.network(
+                  movie.ottLogo!,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => Icon(
+                    Icons.tv_rounded,
+                    color: activeTheme.accentBright ?? Colors.white,
+                    size: 24,
+                  ),
+                ),
+              )
+            else
+              Icon(
+                Icons.tv_rounded,
+                color: activeTheme.accentBright ?? Colors.white,
+                size: 24,
+              ),
+          ],
+        ),
+              ),
+            ),
+          ),
                           ],
                         ),
                         const SizedBox(height: 16),
@@ -4893,8 +5297,51 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     );
   }
 
+  Widget _buildOttBadgesRow(String ottName, String? ottLogo) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (ottLogo != null && ottLogo.isNotEmpty)
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(4),
+              color: Colors.white10,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Image.network(
+              ottLogo,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Icon(
+                Icons.play_circle_rounded,
+                color: AppColors.accentBright,
+                size: 18,
+              ),
+            ),
+          )
+        else
+          Icon(
+            Icons.play_circle_rounded,
+            color: AppColors.accentBright,
+            size: 18,
+          ),
+        const SizedBox(width: 6),
+        Text(
+          ottName,
+          style: GoogleFonts.outfit(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildActionButtonCard({
-    required IconData icon,
+    IconData? icon,
+    String? logoUrl,
     required String label,
     required VoidCallback onTap,
     Color? activeColor,
@@ -4913,7 +5360,30 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: activeColor ?? Colors.white, size: 20),
+              if (logoUrl != null && logoUrl.isNotEmpty)
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Image.network(
+                    logoUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Icon(
+                      icon ?? Icons.tv_rounded,
+                      color: activeColor ?? Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                )
+              else
+                Icon(
+                  icon ?? Icons.tv_rounded,
+                  color: activeColor ?? Colors.white,
+                  size: 20,
+                ),
               const SizedBox(height: 6),
               Text(
                 label,
