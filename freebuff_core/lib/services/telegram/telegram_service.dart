@@ -469,10 +469,24 @@ class TelegramService {
       mimeOverride: mimeOverride,
     );
 
-    // Append the file name as a path segment so media player / FFmpeg / libmpv
-    // can correctly identify the container format (especially for .mkv, .webm, etc.)
-    final rawName = item.fileName ?? 'video.mp4';
-    final safeName = Uri.encodeComponent(rawName);
+    // Append a clean file name with the correct extension so media player / FFmpeg / libmpv
+    // can correctly identify the container format without encountering spaces or URL encoding issues on iOS.
+    String ext = '.mp4';
+    if (nameLower.endsWith('.mkv')) {
+      ext = '.mkv';
+    } else if (nameLower.endsWith('.webm')) {
+      ext = '.webm';
+    } else if (nameLower.endsWith('.avi')) {
+      ext = '.avi';
+    } else if (nameLower.endsWith('.m3u8')) {
+      ext = '.m3u8';
+    } else if (nameLower.contains('.')) {
+      final parsedExt = nameLower.substring(nameLower.lastIndexOf('.'));
+      if (RegExp(r'^\.[a-zA-Z0-9]+$').hasMatch(parsedExt)) {
+        ext = parsedExt;
+      }
+    }
+    final safeName = 'video$ext';
     if (url.endsWith('/')) {
       url = '$url$safeName';
     } else {
