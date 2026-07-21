@@ -197,7 +197,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'castle': return 'Castle TV';
       case 'torrent': return 'Torrent Server';
       case 'stremioAddon': return 'Stremio Addons';
-      case 'telegram': return 'Telegram Saved Messages';
+      case 'telegram': return 'Telegram Server';
       default: return key;
     }
   }
@@ -980,9 +980,9 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSectionTitle(
-          'Telegram Integration (Saved Messages)',
+          'Telegram Integration (Telegram Server)',
           subtitle:
-              'Users forward movie files to "Saved Messages" in Telegram. The app indexes those files and surfaces them as stream sources.',
+              'Users forward movie files to their Telegram Server. The app indexes those files and surfaces them as stream sources.',
         ),
         const SizedBox(height: 12),
         Container(

@@ -974,7 +974,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        'Saved Messages Source',
+                                        'Telegram Server Source',
                                         style: GoogleFonts.outfit(
                                           color: Colors.white,
                                           fontWeight: FontWeight.bold,
@@ -998,7 +998,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Index video files forwarded to "Saved Messages" in Telegram. Files appear as stream sources on movie detail pages.',
+                              'Index video files forwarded to your Telegram Server. Files appear as stream sources on movie detail pages.',
                               style: GoogleFonts.outfit(
                                 color: Colors.white38,
                                 fontSize: 11.5,
@@ -1114,7 +1114,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     size: 16,
                                   ),
                                   label: const Text(
-                                      'Sync Saved Messages Now'),
+                                      'Sync Telegram Server Now'),
                                   style: OutlinedButton.styleFrom(
                                     side: BorderSide(
                                       color: AppColors.accentBright
@@ -1470,7 +1470,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         const SizedBox(height: 12),
                                         Text(
                                           searchQuery.isEmpty
-                                              ? 'No synced files found.\nSync Saved Messages first.'
+                                              ? 'No synced files found.\nSync Telegram Server first.'
                                               : 'No matching files found.',
                                           textAlign: TextAlign.center,
                                           style: GoogleFonts.outfit(

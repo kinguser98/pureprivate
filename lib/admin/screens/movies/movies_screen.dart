@@ -181,12 +181,12 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
   }
 }
 
-class _MovieDetailsSheet extends StatelessWidget {
+class _MovieDetailsSheet extends ConsumerWidget {
   final Movie movie;
   const _MovieDetailsSheet({required this.movie});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
       minChildSize: 0.5,
@@ -209,6 +209,60 @@ class _MovieDetailsSheet extends StatelessWidget {
                 icon: const Icon(Icons.edit, size: 16),
                 label: const Text('Edit', style: TextStyle(fontSize: 12)),
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      backgroundColor: const Color(0xFF1A1F2E),
+                      title: const Text('Delete Movie', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      content: Text('Are you sure you want to permanently delete "${movie.title}"?', style: const TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          style: TextButton.styleFrom(foregroundColor: Colors.red),
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm == true && context.mounted) {
+                    Navigator.pop(context); // Close details sheet
+                    final scaffold = ScaffoldMessenger.of(context);
+                    
+                    // Show progress loader
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFEF4444))),
+                    );
+                    
+                    try {
+                      final result = await ref.read(movieProvider.notifier).deleteMovie(movie.id);
+                      if (context.mounted) {
+                        Navigator.pop(context); // Dismiss progress
+                        scaffold.showSnackBar(SnackBar(
+                          content: Text(result['message'] ?? 'Movie deleted'),
+                          backgroundColor: result['success'] == true ? const Color(0xFF10B981) : Colors.red,
+                        ));
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        Navigator.pop(context); // Dismiss progress
+                        scaffold.showSnackBar(SnackBar(content: Text('Error deleting movie: $e'), backgroundColor: Colors.red));
+                      }
+                    }
+                  }
+                },
+                icon: const Icon(Icons.delete, size: 16, color: Colors.white),
+                label: const Text('Delete', style: TextStyle(fontSize: 12, color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.withOpacity(0.8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
               ),
             ]),
             const SizedBox(height: 8),

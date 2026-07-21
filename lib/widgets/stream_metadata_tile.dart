@@ -23,8 +23,12 @@ class ParsedStreamMeta {
 }
 
 ParsedStreamMeta parseStreamMeta(String name, String url) {
-  final lower = name.toLowerCase();
-  final raw = name;
+  var raw = name;
+  // Clean up TG tag suffixes/delimiters (e.g. -TG, _TG, [TG])
+  raw = raw.replaceAll(RegExp(r'[-_.]?[tT][gG]\b'), '');
+  raw = raw.replaceAll(RegExp(r'\[[tT][gG]\]'), '');
+  raw = raw.replaceAll(RegExp(r'\b[tT][gG]\b'), '');
+  raw = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   // Quality
   String? quality;

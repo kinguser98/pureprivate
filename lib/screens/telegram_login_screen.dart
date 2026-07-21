@@ -90,7 +90,7 @@ class _TelegramLoginScreenState extends State<TelegramLoginScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Saved Messages refreshed.'),
+          content: Text('Telegram Server refreshed.'),
           backgroundColor: Color(0xFF22C55E),
         ),
       );
@@ -207,7 +207,7 @@ class _TelegramLoginScreenState extends State<TelegramLoginScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Index video files from your Saved Messages and surface them as stream sources on movie pages.',
+                'Index video files from your Telegram Server and surface them as stream sources on movie pages.',
                 style: GoogleFonts.outfit(
                   color: Colors.white54,
                   fontSize: 13,
@@ -495,7 +495,7 @@ class _TelegramLoginScreenState extends State<TelegramLoginScreen> {
                   ),
                 ),
                 child: Text(
-                  'Sync Saved Messages',
+                  'Sync Telegram Server',
                   style: GoogleFonts.outfit(
                     color: AppColors.accentBright,
                     fontWeight: FontWeight.bold,

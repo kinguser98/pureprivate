@@ -499,10 +499,14 @@ class TelegramService {
     if (_client == null) return;
     if (_streamServer != null) return; // Already running
     try {
-      _streamServer = TelegramFileStreamServer(_client!);
+      _streamServer = TelegramFileStreamServer(
+        _client!,
+        chunkSize: 128 * 1024,
+        prefetchAhead: 8,
+      );
       await _streamServer!.start();
       try {
-        await _streamServer!.warmup(dcId: _client!.dcId, workers: 8);
+        await _streamServer!.warmup(dcId: _client!.dcId, workers: 4);
       } catch (e) {
         debugPrint('Stream server warmup warning: $e');
       }

@@ -3,6 +3,7 @@ import '../models/movie.dart';
 import '../utils/api_client.dart';
 import '../utils/storage.dart';
 import '../config/api_config.dart';
+import '../utils/admin_api_client.dart';
 import 'auth_provider.dart';
 
 final movieProvider = StateNotifierProvider<MovieNotifier, MovieState>((ref) {
@@ -107,6 +108,20 @@ class MovieNotifier extends StateNotifier<MovieState> {
       );
     }
   }
+
+  Future<Map<String, dynamic>> deleteMovie(int id) async {
+    final adminApi = AdminApiClient();
+    final result = await adminApi.deleteMovie(id);
+    if (result['success'] == true) {
+      final updatedMovies = state.movies.where((m) => m.id != id).toList();
+      state = state.copyWith(movies: updatedMovies);
+      try {
+        await Storage.cacheMovies(updatedMovies);
+      } catch (_) {}
+    }
+    return result;
+  }
+
 
   List<Movie> searchMovies(String query) {
     if (query.isEmpty) return state.movies;

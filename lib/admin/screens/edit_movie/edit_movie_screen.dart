@@ -473,12 +473,73 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
               label: Text('Add Source', style: TextStyle(color: const Color(0xFF3B82F6).withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 24),
-            SizedBox(
-              height: 52,
-              child: ElevatedButton(
-                onPressed: _isSaving ? null : _save,
-                child: _isSaving ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save Changes', style: TextStyle(letterSpacing: 1)),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _isSaving ? null : _save,
+                      child: _isSaving ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save Changes', style: TextStyle(letterSpacing: 1)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (_movie == null) return;
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          backgroundColor: const Color(0xFF1A1F2E),
+                          title: const Text('Delete Movie', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          content: Text('Are you sure you want to permanently delete "${_movie!.title}"?', style: const TextStyle(color: Colors.white70)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              style: TextButton.styleFrom(foregroundColor: Colors.red),
+                              child: const Text('Delete'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true && context.mounted) {
+                        final scaffold = ScaffoldMessenger.of(context);
+                        showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFEF4444))),
+                        );
+                        try {
+                          final result = await ref.read(movieProvider.notifier).deleteMovie(_movie!.id);
+                          if (context.mounted) {
+                            Navigator.pop(context); // Dismiss progress
+                            scaffold.showSnackBar(SnackBar(
+                              content: Text(result['message'] ?? 'Movie deleted'),
+                              backgroundColor: result['success'] == true ? const Color(0xFF10B981) : Colors.red,
+                            ));
+                            if (result['success'] == true) {
+                              context.pop();
+                            }
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            Navigator.pop(context); // Dismiss progress
+                            scaffold.showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+                          }
+                        }
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red.withOpacity(0.8),
+                    ),
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 32),
           ],

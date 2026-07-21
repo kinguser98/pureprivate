@@ -24,4 +24,6 @@ dev_dependencies:
   build_runner: ^2.4.0
   json_serializable: ^6.8.0
 
-dependencies_overrides: {}
+dependency_overrides:
+  mtflute:
+    path: ../../mtflute_diagnostic/packages/mtflute

@@ -427,10 +427,9 @@ packages:
   mtflute:
     dependency: "direct main"
     description:
-      name: mtflute
-      sha256: d8debe66bf184b92f0c67d85aff3040f7ddafd020c10585ebb787e185807d60c
-      url: "https://pub.dev"
-    source: hosted
+      path: "../../mtflute_diagnostic/packages/mtflute"
+      relative: true
+    source: path
     version: "0.5.0"
   objective_c:
     dependency: transitive

@@ -446,7 +446,7 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
           await nativePlayer.setProperty('force-seekable', 'yes');
         } else {
           // Increase network timeout to prevent slow proxied sources (like AList/Streamtape on Koyeb) from timing out (default in media_kit is 5s)
-          await nativePlayer.setProperty('network-timeout', '40');
+          await nativePlayer.setProperty('network-timeout', '60');
           
           // Buffering/Streaming optimizations for low latency and memory safety
           await nativePlayer.setProperty('cache', 'yes');
@@ -742,6 +742,7 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
       if (startX < screenWidth / 2) {
         // Left side: Brightness
         setState(() {
+          _hudType = 'brightness';
           if (_dragStartBrightness != null) {
             _brightness = (_dragStartBrightness! - deltaY / 150).clamp(0.1, 1.0);
           }
@@ -749,6 +750,7 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
       } else {
         // Right side: Volume
         setState(() {
+          _hudType = 'volume';
           if (_dragStartVolume != null) {
             _volume = (_dragStartVolume! - deltaY / 2.5).clamp(0.0, 100.0);
           }
@@ -764,6 +766,17 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
     _dragStartVolume = null;
     _dragStartBrightness = null;
     _dragStartPoint = null;
+    
+    // Start timer to hide brightness/volume overlay after drag ends
+    _hudTimer?.cancel();
+    _hudTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (mounted) {
+        setState(() {
+          _hudType = null;
+          _seekOverlayValue = null;
+        });
+      }
+    });
   }
 
 
@@ -996,29 +1009,68 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
   }
 
   Widget _buildHudOverlay() {
-    if (_hudType != 'seek') {
+    IconData icon;
+    String label;
+    double progress = 0.0;
+
+    if (_hudType == 'seek') {
+      final isForward = (_seekOverlayValue ?? 0) > 0;
+      icon = isForward ? Icons.fast_forward_rounded : Icons.fast_rewind_rounded;
+      label = isForward ? '+ 5' : '- 5';
+    } else if (_hudType == 'volume') {
+      icon = _volume == 0
+          ? Icons.volume_mute_rounded
+          : (_volume < 50 ? Icons.volume_down_rounded : Icons.volume_up_rounded);
+      label = '${_volume.round()}%';
+      progress = _volume / 100.0;
+    } else if (_hudType == 'brightness') {
+      icon = Icons.brightness_6_rounded;
+      label = '${(_brightness * 100).round()}%';
+      progress = _brightness;
+    } else {
       return const SizedBox.shrink();
     }
 
-    final isForward = (_seekOverlayValue ?? 0) > 0;
-    final icon = isForward ? Icons.fast_forward_rounded : Icons.fast_rewind_rounded;
-    final label = isForward ? '+ 5' : '- 5';
-
     return Center(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white, size: 64),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: GoogleFonts.outfit(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 28,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            color: Colors.black45,
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 48),
+                const SizedBox(height: 10),
+                Text(
+                  label,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+                if (_hudType != 'seek') ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: 100,
+                    height: 4,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        backgroundColor: Colors.white24,
+                        color: AppColors.accentBright,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1943,31 +1995,38 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     // Left: Back button and Title
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: Container(
-                        color: Colors.black45,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).pop(_hasError),
-                              child: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 22),
-                            ),
-                            const SizedBox(width: 14),
-                            Text(
-                              widget.title ?? 'Movie Playback',
-                              style: GoogleFonts.outfit(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                    Flexible(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          color: Colors.black45,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                onTap: () => Navigator.of(context).pop(_hasError),
+                                child: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 22),
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 14),
+                              Flexible(
+                                child: Text(
+                                  widget.title ?? 'Movie Playback',
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
+                    const SizedBox(width: 16),
 
                     // Right: Actions (PiP, Cast, CC Track, Subtitle Size, Quality, Audio, Lock)
                     Row(

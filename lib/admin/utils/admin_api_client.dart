@@ -132,6 +132,24 @@ class AdminApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> deleteMovie(int id) async {
+    try {
+      final response = await _dio.get('${ApiConfig.viewAllMovies}?delete=$id');
+      if (_isAuthRedirect(response.headers, response.statusCode)) {
+        return {'success': false, 'message': 'Session expired. Please log out and sign in again.'};
+      }
+      return {'success': true, 'message': 'Movie deleted successfully'};
+    } on DioException catch (e) {
+      if (e.response != null && _isAuthRedirect(e.response!.headers, e.response!.statusCode)) {
+        return {'success': false, 'message': 'Session expired. Please log out and sign in again.'};
+      }
+      return {'success': false, 'message': _extractMessage(e.response?.data ?? '')};
+    } catch (e) {
+      return {'success': false, 'message': 'Failed to delete movie: $e'};
+    }
+  }
+
+
   Future<Map<String, dynamic>> addLanguage(String name, String imageUrl) async {
     try {
       final response = await _dio.post(ApiConfig.languages, data: FormData.fromMap({'name': name, 'image_url': imageUrl}));

@@ -1703,7 +1703,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
-                'Telegram file not found locally. Open Settings → Telegram → Sync Saved Messages.'),
+                'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
             backgroundColor: const Color(0xFFEF4444),
           ));
         }
@@ -2404,36 +2404,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
-            // Telegram Saved Messages
-            if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
-              sourceWidgets['telegram'] = _buildSourceTile(
-                icon: Icons.send_rounded,
-                title: '${pos('telegram')}. Telegram Saved Messages',
-                subtitle: _resolvingTelegram
-                    ? 'Searching Telegram...'
-                    : (_liveTelegramSources.isEmpty
-                        ? 'No files found'
-                        : '${_liveTelegramSources.length} files in Saved Messages'),
-                disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (_liveTelegramSources.length == 1) {
-                    final s = _liveTelegramSources.first;
-                    _playWithResolution(
-                      s.url,
-                      resumeDirectly: resumeDirectly,
-                      sourceName: s.name,
-                      headers: s.headers,
-                    );
-                  } else {
-                    _showSubSourceSelector(
-                      context,
-                      'TELEGRAM SAVED MESSAGES',
-                      _liveTelegramSources,
-                      resumeDirectly: resumeDirectly,
-                    );
-                  }
-                },
+             // Telegram Server
+             if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+               sourceWidgets['telegram'] = _buildSourceTile(
+                 icon: Icons.send_rounded,
+                 title: '${pos('telegram')}. Telegram Server',
+                 subtitle: _resolvingTelegram
+                     ? 'Searching Telegram...'
+                     : (_liveTelegramSources.isEmpty
+                         ? 'No files found'
+                         : '${_liveTelegramSources.length} files in Telegram Server'),
+                 disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
+                 onTap: () {
+                   Navigator.of(context).pop();
+                   if (_liveTelegramSources.length == 1) {
+                     final s = _liveTelegramSources.first;
+                     _playWithResolution(
+                       s.url,
+                       resumeDirectly: resumeDirectly,
+                       sourceName: s.name,
+                       headers: s.headers,
+                     );
+                   } else {
+                     _showSubSourceSelector(
+                       context,
+                       'TELEGRAM SERVER',
+                       _liveTelegramSources,
+                       resumeDirectly: resumeDirectly,
+                     );
+                   }
+                 },
               );
             }
  
@@ -3196,34 +3196,34 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 Icons.play_circle_outline_rounded,
                                 color: AppColors.accentBright,
                               ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                '${widget.movie.title} [Portal ${entry.key}]',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ],
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              source.url,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white30,
-                fontSize: 11,
-              ),
-            ),
-          ],
-        ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      source.name.replaceAll(RegExp(r'[-_.]?[tT][gG]\b'), '').replaceAll(RegExp(r'\[[tT][gG]\]'), '').replaceAll(RegExp(r'\b[tT][gG]\b'), '').replaceAll(RegExp(r'\s+'), ' ').trim(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    source.url,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white30,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ),
                               tileColor: Colors.white.withValues(alpha: 0.03),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -3772,86 +3772,63 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
         final dbStreamtapeSources = movie.streamSources.where(_isStreamtapeSource).toList();
         final totalTorrents = _torrentioSources.length + movie.streamSources.where(_isMagnetSource).length;
-        final totalTelegram = _liveTelegramSources.length;
 
-        final List<Widget> items = [];
+        // Build order lookup from admin settings
+        final Set<String> enabledKeys = _sourceOrder.toSet();
+        final Map<String, int> orderPos = {};
+        for (int i = 0; i < _sourceOrder.length; i++) {
+          orderPos[_sourceOrder[i]] = i + 1;
+        }
+        int pos(String key) => orderPos[key] ?? 99;
 
-        // 1. MP4/MKV Link
-        items.add(_buildSourceTile(
-          icon: Icons.video_file_rounded,
-          title: '1. Direct MP4/MKV Link',
-          subtitle: dbMp4Sources.isEmpty 
-              ? 'Not available' 
-              : (dbMp4Sources.length == 1 ? dbMp4Sources.first.name : '${dbMp4Sources.length} files available'),
-          disabled: dbMp4Sources.isEmpty,
-          onTap: () {
-            Navigator.of(context).pop();
-            if (dbMp4Sources.length == 1) {
-              _downloadSourceUrl(dbMp4Sources.first.url, sourceName: dbMp4Sources.first.name);
-            } else {
-              _showDownloadSubSelector('MP4/MKV DIRECT FILES', dbMp4Sources);
-            }
-          },
-        ));
+        final Map<String, Widget> downloadSourceWidgets = {};
 
         // 2. Vidlink Server
-        items.add(_buildSourceTile(
-          icon: Icons.play_arrow_rounded,
-          title: '2. Vidlink Server',
-          subtitle: _resolvingVidlink 
-              ? 'Checking live...' 
-              : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
-          disabled: _liveVidlinkSources.isEmpty,
-          onTap: () {
-            Navigator.of(context).pop();
-            _downloadSourceUrl(_liveVidlinkSources.first.url, sourceName: _liveVidlinkSources.first.name);
-          },
-        ));
+        if ((_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
+          downloadSourceWidgets['vidlink'] = _buildSourceTile(
+            icon: Icons.play_arrow_rounded,
+            title: '${pos('vidlink')}. Vidlink Server',
+            subtitle: _resolvingVidlink 
+                ? 'Checking live...' 
+                : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
+            disabled: _liveVidlinkSources.isEmpty,
+            onTap: () {
+              Navigator.of(context).pop();
+              _downloadSourceUrl(_liveVidlinkSources.first.url, sourceName: _liveVidlinkSources.first.name);
+            },
+          );
+        }
 
         // 3. NetMirror Server
-        items.add(_buildSourceTile(
-          icon: Icons.language_rounded,
-          title: '3. NetMirror Server (NF/PV/HS)',
-          subtitle: _resolvingNetmirror 
-              ? 'Searching NetMirror...' 
-              : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
-          disabled: _liveNetmirrorSources.isEmpty,
-          onTap: () {
-            Navigator.of(context).pop();
-            ScaffoldMessenger.of(this.context).showSnackBar(
-              const SnackBar(
-                content: Text('NetMirror uses HLS (.m3u8) format, which does not support downloading. Please choose another server.'),
-                backgroundColor: Colors.orangeAccent,
-              ),
-            );
-          },
-        ));
-
-        // 4. Streamtape Server
-        items.add(_buildSourceTile(
-          icon: Icons.folder_shared_rounded,
-          title: '4. Streamtape Server',
-          subtitle: dbStreamtapeSources.isEmpty 
-              ? 'Not available' 
-              : (dbStreamtapeSources.length == 1 ? dbStreamtapeSources.first.name : '${dbStreamtapeSources.length} files available'),
-          disabled: dbStreamtapeSources.isEmpty,
-          onTap: () {
-            Navigator.of(context).pop();
-            if (dbStreamtapeSources.length == 1) {
-              _downloadStreamtapeSource(dbStreamtapeSources.first);
-            } else {
-              _showDownloadSubSelector('STREAMTAPE DOWNLOADS', dbStreamtapeSources, isStreamtape: true);
-            }
-          },
-        ));
+        if ((_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) && enabledKeys.contains('netmirror')) {
+          downloadSourceWidgets['netmirror'] = _buildSourceTile(
+            icon: Icons.language_rounded,
+            title: '${pos('netmirror')}. NetMirror Server',
+            subtitle: _resolvingNetmirror 
+                ? 'Searching NetMirror...' 
+                : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
+            disabled: _liveNetmirrorSources.isEmpty,
+            onTap: () {
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text('NetMirror uses HLS (.m3u8) format, which does not support downloading. Please choose another server.'),
+                  backgroundColor: Colors.orangeAccent,
+                ),
+              );
+            },
+          );
+        }
 
         // 5. CineMM Server
-        if (!_resolvingCinemm && _liveCinemmSources.isNotEmpty) {
-          items.add(_buildSourceTile(
+        if ((_resolvingCinemm || _liveCinemmSources.isNotEmpty) && enabledKeys.contains('cinemm')) {
+          downloadSourceWidgets['cinemm'] = _buildSourceTile(
             icon: Icons.local_movies_rounded,
-            title: '5. CineMM Server',
-            subtitle: '${_liveCinemmSources.length} links available',
-            disabled: false,
+            title: '${pos('cinemm')}. CineMM Server',
+            subtitle: _resolvingCinemm
+                ? 'Searching CineMM...'
+                : '${_liveCinemmSources.length} links available',
+            disabled: _resolvingCinemm,
             onTap: () {
               Navigator.of(context).pop();
               if (_liveCinemmSources.length == 1) {
@@ -3860,24 +3837,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 _showDownloadSubSelector('CINEMM DOWNLOADS', _liveCinemmSources, isCinemm: true);
               }
             },
-          ));
-        } else if (_resolvingCinemm) {
-          items.add(_buildSourceTile(
-            icon: Icons.local_movies_rounded,
-            title: '5. CineMM Server',
-            subtitle: 'Searching CineMM...',
-            disabled: true,
-            onTap: () {},
-          ));
+          );
         }
 
         // 6. Stalker VOD Server
-        if (!_resolvingStalker && _liveStalkerSources.isNotEmpty) {
-          items.add(_buildSourceTile(
+        if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
+          downloadSourceWidgets['stalker'] = _buildSourceTile(
             icon: Icons.movie_filter_rounded,
-            title: '6. Stalker VOD Server',
-            subtitle: '${_liveStalkerSources.length} links available',
-            disabled: false,
+            title: '${pos('stalker')}. Stalker VOD Server',
+            subtitle: _resolvingStalker
+                ? 'Searching Portal...'
+                : '${_liveStalkerSources.length} links available',
+            disabled: _resolvingStalker,
             onTap: () {
               Navigator.of(context).pop();
               if (_liveStalkerSources.length == 1) {
@@ -3886,24 +3857,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 _showDownloadSubSelector('STALKER VOD DOWNLOADS', _liveStalkerSources, isStalker: true);
               }
             },
-          ));
-        } else if (_resolvingStalker) {
-          items.add(_buildSourceTile(
-            icon: Icons.movie_filter_rounded,
-            title: '6. Stalker VOD Server',
-            subtitle: 'Searching Portal...',
-            disabled: true,
-            onTap: () {},
-          ));
+          );
         }
 
         // 7. Stravo Server
-        if (!_resolvingStravo && _liveStravoSources.isNotEmpty) {
-          items.add(_buildSourceTile(
+        if ((_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
+          downloadSourceWidgets['stravo'] = _buildSourceTile(
             icon: Icons.rocket_launch_rounded,
-            title: '7. Stravo Server',
-            subtitle: '${_liveStravoSources.length} links available',
-            disabled: false,
+            title: '${pos('stravo')}. Stravo Server',
+            subtitle: _resolvingStravo
+                ? 'Searching streams...'
+                : '${_liveStravoSources.length} links available',
+            disabled: _resolvingStravo,
             onTap: () {
               Navigator.of(context).pop();
               if (_liveStravoSources.length == 1) {
@@ -3912,35 +3877,71 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 _showDownloadSubSelector('STRAVO DOWNLOADS', _liveStravoSources, isStravo: true);
               }
             },
-          ));
-        } else if (_resolvingStravo) {
-          items.add(_buildSourceTile(
-            icon: Icons.rocket_launch_rounded,
-            title: '7. Stravo Server',
-            subtitle: 'Searching streams...',
-            disabled: true,
-            onTap: () {},
-          ));
+          );
         }
 
         // 8. Torrent Server
-        if (totalTorrents > 0) {
-          items.add(_buildSourceTile(
+        if (totalTorrents > 0 && enabledKeys.contains('torrent')) {
+          downloadSourceWidgets['torrent'] = _buildSourceTile(
             icon: Icons.cloud_circle_rounded,
-            title: '8. Torrent Server',
-            subtitle: '$totalTorrents links available',
+            title: '${pos('torrent')}. Torrent Server',
+            subtitle: '$totalTorrents links available (Torrents do not support direct downloading)',
             disabled: true,
             onTap: () {},
-          ));
+          );
         }
 
-        // 9. Telegram Server
-        if (!_resolvingTelegram && _liveTelegramSources.isNotEmpty) {
-          items.add(_buildSourceTile(
+        // Stremio Addons & Nuveo Addons (do not support downloading)
+        if ((_resolvingStremio || _liveStremioSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+          downloadSourceWidgets['stremioAddon'] = _buildSourceTile(
+            icon: Icons.extension_rounded,
+            title: '${pos('stremioAddon')}. Stremio Addons',
+            subtitle: 'Addon formats do not support downloading.',
+            disabled: true,
+            onTap: () {},
+          );
+        }
+        if ((_resolvingNuveo || _liveNuveoSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+          downloadSourceWidgets['nuveoAddon'] = _buildSourceTile(
+            icon: Icons.auto_awesome_rounded,
+            title: '${pos('stremioAddon')}. Nuveo Addons',
+            subtitle: 'Addon formats do not support downloading.',
+            disabled: true,
+            onTap: () {},
+          );
+        }
+
+        // Castle Server
+        if ((_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
+          downloadSourceWidgets['castle'] = _buildSourceTile(
+            icon: Icons.castle_rounded,
+            title: '${pos('castle')}. Castle TV Server',
+            subtitle: _resolvingCastle
+                ? 'Searching Castle...'
+                : '${_liveCastleSources.length} links available',
+            disabled: _resolvingCastle,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveCastleSources.length == 1) {
+                _downloadSourceUrl(_liveCastleSources.first.url, sourceName: _liveCastleSources.first.name);
+              } else {
+                _showDownloadSubSelector('CASTLE TV DOWNLOADS', _liveCastleSources);
+              }
+            },
+          );
+        }
+
+        // Telegram Server
+        if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+          downloadSourceWidgets['telegram'] = _buildSourceTile(
             icon: Icons.send_rounded,
-            title: '9. Telegram Server',
-            subtitle: '${_liveTelegramSources.length} links available',
-            disabled: false,
+            title: '${pos('telegram')}. Telegram Server',
+            subtitle: _resolvingTelegram
+                ? 'Searching Telegram...'
+                : (_liveTelegramSources.isEmpty
+                    ? 'No files found'
+                    : '${_liveTelegramSources.length} files in Telegram Server'),
+            disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
             onTap: () {
               Navigator.of(context).pop();
               if (_liveTelegramSources.length == 1) {
@@ -3949,15 +3950,70 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 _showDownloadSubSelector('TELEGRAM DOWNLOADS', _liveTelegramSources, isTelegram: true);
               }
             },
-          ));
-        } else if (_resolvingTelegram) {
-          items.add(_buildSourceTile(
-            icon: Icons.send_rounded,
-            title: '9. Telegram Server',
-            subtitle: 'Searching Telegram...',
-            disabled: true,
-            onTap: () {},
-          ));
+          );
+        }
+
+        // Ordered items output list
+        final List<Widget> items = [];
+
+        // 1. Direct MP4/MKV Link (always shown at top if exist)
+        if (dbMp4Sources.isNotEmpty) {
+          items.add(
+            _buildSourceTile(
+              icon: Icons.video_file_rounded,
+              title: 'Direct MP4/MKV Link',
+              subtitle: dbMp4Sources.length == 1
+                  ? dbMp4Sources.first.name
+                  : '${dbMp4Sources.length} files available',
+              disabled: false,
+              onTap: () {
+                Navigator.of(context).pop();
+                if (dbMp4Sources.length == 1) {
+                  _downloadSourceUrl(dbMp4Sources.first.url, sourceName: dbMp4Sources.first.name);
+                } else {
+                  _showDownloadSubSelector('MP4/MKV DIRECT DOWNLOADS', dbMp4Sources);
+                }
+              },
+            ),
+          );
+        }
+
+        // 4. Streamtape Server (always shown at top if exist)
+        if (dbStreamtapeSources.isNotEmpty) {
+          items.add(
+            _buildSourceTile(
+              icon: Icons.folder_shared_rounded,
+              title: 'Streamtape Server',
+              subtitle: dbStreamtapeSources.isEmpty 
+                  ? 'Not available' 
+                  : (dbStreamtapeSources.length == 1 ? dbStreamtapeSources.first.name : '${dbStreamtapeSources.length} files available'),
+              disabled: dbStreamtapeSources.isEmpty,
+              onTap: () {
+                Navigator.of(context).pop();
+                if (dbStreamtapeSources.length == 1) {
+                  _downloadStreamtapeSource(dbStreamtapeSources.first);
+                } else {
+                  _showDownloadSubSelector('STREAMTAPE DOWNLOADS', dbStreamtapeSources, isStreamtape: true);
+                }
+              },
+            ),
+          );
+        }
+
+        // Dynamic sources
+        for (final key in _sourceOrder) {
+          if (key == 'stremioAddon') {
+            if (downloadSourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
+              items.add(downloadSourceWidgets['stremioAddon']!);
+            }
+            if (downloadSourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
+              items.add(downloadSourceWidgets['nuveoAddon']!);
+            }
+          } else {
+            if (downloadSourceWidgets.containsKey(key) && enabledKeys.contains(key)) {
+              items.add(downloadSourceWidgets[key]!);
+            }
+          }
         }
 
         return SafeArea(
@@ -5000,51 +5056,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   ? activeTheme.accentBright
                                   : null,
                             ),
-        if (movie.ottName != null && movie.ottName!.isNotEmpty)
-          Expanded(
-            child: GestureDetector(
-              onTap: () => _showWatchProvidersBottomSheet(context),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  border: Border.all(color: Colors.white10, width: 0.8),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-      child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (movie.ottLogo != null && movie.ottLogo!.isNotEmpty)
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Image.network(
-                  movie.ottLogo!,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Icon(
-                    Icons.tv_rounded,
-                    color: activeTheme.accentBright ?? Colors.white,
-                    size: 24,
-                  ),
-                ),
-              )
-            else
-              Icon(
-                Icons.tv_rounded,
-                color: activeTheme.accentBright ?? Colors.white,
-                size: 24,
-              ),
-          ],
-        ),
-              ),
-            ),
-          ),
+                            if (movie.ottName != null && movie.ottName!.isNotEmpty)
+                              _buildActionButtonCard(
+                                logoUrl: movie.ottLogo,
+                                label: movie.ottName!,
+                                onTap: () => _showWatchProvidersBottomSheet(context),
+                              ),
                           ],
                         ),
                         const SizedBox(height: 16),
@@ -5362,8 +5379,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             children: [
               if (logoUrl != null && logoUrl.isNotEmpty)
                 Container(
-                  width: 20,
-                  height: 20,
+                  width: 24,
+                  height: 24,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(4),
                   ),
