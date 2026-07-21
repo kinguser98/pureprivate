@@ -34,9 +34,6 @@ dependencies:
     path: ./freebuff_core
 
 dependency_overrides:
-  mtflute:
-    path: ../mtflute_diagnostic/packages/mtflute
-
   # Admin Panel dependencies
   go_router: ^12.0.0
   fl_chart: ^0.63.0
