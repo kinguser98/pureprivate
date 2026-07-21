@@ -31,7 +31,7 @@ dependencies:
   qr_flutter: ^4.1.0
   dio: ^5.7.0
   freebuff_core:
-    path: ../freebuff_core
+    path: ./freebuff_core
 
   # Admin Panel dependencies
   go_router: ^12.0.0
