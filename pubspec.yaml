@@ -32,6 +32,8 @@ dependencies:
   dio: ^5.7.0
   freebuff_core:
     path: ./freebuff_core
+  mtflute:
+    path: ./mtflute
 
 dependency_overrides:
   # Admin Panel dependencies
