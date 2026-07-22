@@ -323,7 +323,7 @@ class TelegramService {
     statusMessage.value = null;
   }
 
-  Future<List<TelegramVideoItem>> loadSavedMessages({int limit = 200}) async {
+  Future<List<TelegramVideoItem>> loadSavedMessages({int limit = 500}) async {
     await init();
     if (status.value != TelegramStatus.ready || _client == null) {
       return TelegramIndexDb.instance.all();
@@ -347,9 +347,7 @@ class TelegramService {
       }
 
       final fresh = _extractItems(res);
-      if (fresh.isNotEmpty) {
-        await TelegramIndexDb.instance.replaceAll(fresh);
-      }
+      await TelegramIndexDb.instance.replaceAll(fresh);
       return fresh;
     } catch (e) {
       debugPrint('TelegramService.loadSavedMessages failed: $e');
@@ -361,9 +359,9 @@ class TelegramService {
   List<TelegramVideoItem> _extractItems(MessagesMessages result) {
     final out = <TelegramVideoItem>[];
     List<dynamic> messages = const [];
-    if (result is MessagesMessagesObj) {
-      messages = result.messages;
-    }
+    try {
+      messages = (result as dynamic).messages ?? const [];
+    } catch (_) {}
     for (final raw in messages) {
       if (raw is! MessageObj) continue;
       final id = raw.id;

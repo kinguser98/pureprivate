@@ -464,7 +464,7 @@ await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
           await nativePlayer.setProperty('video-sync', 'audio');
           await nativePlayer.setProperty('autosync', '10');
           await nativePlayer.setProperty('force-seekable', 'yes');
-          await nativePlayer.setProperty('ao', 'audiounit,');
+          await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
         
         // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
         await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
