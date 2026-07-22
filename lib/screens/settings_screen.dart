@@ -1367,9 +1367,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 }
               }).catchError((_) {
                 if (context.mounted) {
-                  setState(() {
-                    isLoadingFiles = false;
-                  });
+                  setState(() => isLoadingFiles = false);
                 }
               });
             }
@@ -1649,7 +1647,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 color: isLoadingMore ? Colors.white38 : AppColors.accentBright,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                
                               ),
                             ),
                             style: OutlinedButton.styleFrom(

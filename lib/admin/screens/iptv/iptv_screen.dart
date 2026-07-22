@@ -11,6 +11,7 @@ import '../../models/iptv_channel.dart';
 import '../../utils/drawer_helper.dart';
 import '../../utils/admin_api_client.dart';
 import '../../widgets/common/glass_card.dart';
+import '../../../data/stalker_resolver.dart';
 
 class IptvScreen extends ConsumerStatefulWidget {
   const IptvScreen({super.key});
@@ -719,6 +720,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                           builder: (_) => ChannelPlayerDialog(
                             channelName: channel.displayName,
                             streamUrl: channel.cmd,
+                            portalId: channel.portalId,
                           ),
                         );
                       },
@@ -1238,11 +1240,13 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
 class ChannelPlayerDialog extends StatefulWidget {
   final String channelName;
   final String streamUrl;
+  final int portalId;
 
   const ChannelPlayerDialog({
     super.key,
     required this.channelName,
     required this.streamUrl,
+    required this.portalId,
   });
 
   @override
@@ -1279,7 +1283,23 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
     cleanUrl = cleanUrl.trim();
         
     try {
-      _videoPlayerController = VideoPlayerController.networkUrl(Uri.parse(cleanUrl));
+      String playUrl = cleanUrl;
+      Map<String, String> headers = {};
+      
+      if (widget.portalId > 0) {
+        try {
+          final resolved = await StalkerResolver.resolveStream(cleanUrl, widget.portalId);
+          playUrl = resolved.url;
+          headers = resolved.headers;
+        } catch (e) {
+          debugPrint('ChannelPlayerDialog failed to resolve stalker stream: $e');
+        }
+      }
+
+      _videoPlayerController = VideoPlayerController.networkUrl(
+        Uri.parse(playUrl),
+        httpHeaders: headers,
+      );
       await _videoPlayerController!.initialize();
       
       _chewieController = ChewieController(

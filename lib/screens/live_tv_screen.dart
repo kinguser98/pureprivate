@@ -455,16 +455,14 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
             await nativePlayer.setProperty('hwdec', 'auto');
           }
           
-          await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '104857600'); // 100MB buffer limit
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30');   // 30 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '30');               // 30 seconds cache
+          await nativePlayer.setProperty('cache', 'no');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '0');
+          await nativePlayer.setProperty('cache-secs', '0');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('video-sync', 'audio');
           await nativePlayer.setProperty('autosync', '10');
-          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=1');
         }
 
         ProxyStats.reset();

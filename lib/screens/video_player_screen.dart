@@ -453,14 +453,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
         
         if (widget.isLive) {
-          await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB buffer limit
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
+          await nativePlayer.setProperty('cache', 'no');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '0');
+          await nativePlayer.setProperty('cache-secs', '0');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
-          await nativePlayer.setProperty('force-seekable', 'yes');
         } else if (!isLocalStream) {
           // Network timeout & buffering for proxied & Telegram local server streams
           await nativePlayer.setProperty('network-timeout', '60');
