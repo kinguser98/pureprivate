@@ -529,14 +529,17 @@ class TelegramService {
       // Network errors — proceed and let the stream server handle retries.
     }
 
-    // Warm up workers for DCs 1-5 so auth export to any media DC is
-    // pre-established before playback begins (avoids first-play latency/failures).
+    // Warm up workers for DCs 1-5 in the background (non-blocking) so auth export
+    // to any media DC is pre-established concurrently before playback begins.
     if (_streamServer != null && _client != null) {
-      for (int dc = 1; dc <= 5; dc++) {
-        try {
-          await _streamServer!.warmup(dcId: dc, workers: 2);
-        } catch (_) {}
-      }
+      unawaited(Future.wait(
+        List.generate(5, (index) async {
+          final dc = index + 1;
+          try {
+            await _streamServer!.warmup(dcId: dc, workers: 2);
+          } catch (_) {}
+        }),
+      ));
     }
 
     // Determine MIME type override based on file extension from fileName or caption
