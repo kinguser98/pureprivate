@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/data/mock_catalog.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/mock_catalog.dart';
+import 'package:private_cinema_ios/models/movie.dart';
 
 abstract final class PlaybackTracker {
   static const String _listKey = 'continue_watching_list';

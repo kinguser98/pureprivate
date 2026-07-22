@@ -7,12 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:private_cinema_mobile/data/dns_proxy.dart';
-import 'package:private_cinema_mobile/data/download_manager.dart';
-import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
+import 'package:private_cinema_ios/data/download_manager.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
-import 'package:private_cinema_mobile/screens/navigation_holder.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_ios/screens/navigation_holder.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
 
 Future<void> fetchHotConfig() async {
   try {
@@ -125,7 +125,7 @@ Future<void> _telegramStartup() async {
     await TelegramService.instance.init();
     if (TelegramService.instance.status.value == TelegramStatus.ready) {
       // Silently refresh the index so it's always up-to-date on every launch.
-      await TelegramService.instance.loadSavedMessages(limit: 200);
+      await TelegramService.instance.loadSavedMessages();
     }
   } catch (e) {
     debugPrint('Telegram startup error: $e');

@@ -9,12 +9,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/dns_proxy.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/widgets/glass_panel.dart';
-import 'package:private_cinema_mobile/data/epg_service.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/dns_proxy.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/widgets/glass_panel.dart';
+import 'package:private_cinema_ios/data/epg_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -376,18 +376,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
 
       final Map<String, String> playHeaders = {};
-      if (widget.headers != null) {
-        playHeaders.addAll(widget.headers!);
-      } else if (widget.videoSource.startsWith('http')) {
-        playHeaders.addAll({
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          if (widget.videoSource.contains('.m3u8') || widget.videoSource.contains('/hls/'))
-            'Referer': 'https://streamimdb.ru/',
-        });
+      final isLocalStream = widget.videoSource.contains('127.0.0.1') || 
+                            widget.videoSource.contains('localhost') || 
+                            widget.videoSource.contains('/f/');
+
+      if (!isLocalStream) {
+        if (widget.headers != null) {
+          playHeaders.addAll(widget.headers!);
+        } else if (widget.videoSource.startsWith('http')) {
+          playHeaders.addAll({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            if (widget.videoSource.contains('.m3u8') || widget.videoSource.contains('/hls/'))
+              'Referer': 'https://streamimdb.ru/',
+          });
+        }
       }
       
       // Parse inline headers from the stream URL if present
-      if (widget.videoSource.startsWith('http')) {
+      if (!isLocalStream && widget.videoSource.startsWith('http')) {
         try {
           final uri = Uri.parse(widget.videoSource);
           if (uri.queryParameters.containsKey('headers')) {
@@ -414,7 +420,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
         }
         
-        if (playHeaders.isNotEmpty) {
+        if (isLocalStream) {
+          // Exact diagnostic configuration for local/loopback Telegram streams
+          await nativePlayer.setProperty('network-timeout', '60');
+          await nativePlayer.setProperty('demuxer-max-bytes', '32MiB');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8MiB');
+          await nativePlayer.setProperty('cache', 'yes');
+        } else if (playHeaders.isNotEmpty) {
           final userAgent = playHeaders['User-Agent'] ?? playHeaders['user-agent'];
           if (userAgent != null) {
             await nativePlayer.setProperty('user-agent', userAgent);
@@ -431,7 +443,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             await nativePlayer.setProperty('http-header-fields', headerList.join(','));
           }
         }
-        // Enable hardware decoding
+        // Hardware decoding configuration
         if (Platform.isAndroid) {
           await nativePlayer.setProperty('hwdec', 'auto');
         } else if (Platform.isIOS || Platform.isMacOS) {
@@ -441,7 +453,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
         
         if (widget.isLive) {
-          // Live stream optimizations (small buffer to handle network jitter, low latency)
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
           await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB buffer limit
@@ -450,34 +461,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('force-seekable', 'yes');
-        } else {
-          // Increase network timeout to prevent slow proxied sources from timing out
+        } else if (!isLocalStream) {
+          // Network timeout & buffering for proxied & Telegram local server streams
           await nativePlayer.setProperty('network-timeout', '60');
-          
-          // Buffering/Streaming optimizations for low latency and smooth 60fps playback
           await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no'); // Prevent file cache errors, use memory
+          await nativePlayer.setProperty('cache-on-disk', 'no'); // Use memory cache
           await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB memory buffer
           await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216'); // 16MB backward seek cache
           await nativePlayer.setProperty('demuxer-readahead-secs', '60'); // 60 seconds readahead
           await nativePlayer.setProperty('cache-secs', '60'); // 60 seconds cache duration
           await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer 2 seconds before resuming
-          // Force VOD mode for HLS streams that omit #EXT-X-ENDLIST (Stalker, Castle, etc.)
           await nativePlayer.setProperty('stream-live', 'no');
         }
         
-        // Smooth Audio/Video Synchronization without aggressive frame drops
-        await nativePlayer.setProperty('video-sync', 'audio');
-        await nativePlayer.setProperty('framedrop', 'vo');
         await nativePlayer.setProperty('force-seekable', 'yes');
         if (Platform.isAndroid) {
           await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
         } else if (Platform.isIOS) {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
-        
-        // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
-        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
       }
 
       var resolvedSource = widget.videoSource;
@@ -499,13 +501,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           );
           if (lowerSubtitle.contains('stalker') ||
               lowerSubtitle.contains('castle') ||
+              lowerSubtitle.contains('telegram') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
+              lowerSourceName.contains('telegram') ||
               lowerUrl.contains('hlowb.com') ||
               lowerUrl.contains('castle') ||
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
+              lowerUrl.contains('/f/') ||
               hasStalkerCookie) {
             shouldProxy = false;
           }

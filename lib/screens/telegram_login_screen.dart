@@ -86,7 +86,7 @@ class _TelegramLoginScreenState extends State<TelegramLoginScreen> {
   Future<void> _refreshIndex() async {
     setState(() => _busy = true);
     try {
-      await TelegramService.instance.loadSavedMessages(limit: 200);
+      await TelegramService.instance.loadSavedMessages();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

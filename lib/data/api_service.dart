@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
-import 'package:private_cinema_mobile/models/language_item.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/dio_client.dart';
+import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_ios/models/language_item.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/dio_client.dart';
 import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {

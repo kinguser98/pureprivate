@@ -1,11 +1,11 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
-import 'package:private_cinema_mobile/data/mock_catalog.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/widgets/movie_card.dart';
-import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
+import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_ios/data/mock_catalog.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/widgets/movie_card.dart';
+import 'package:private_cinema_ios/screens/movie_detail_screen.dart';
 
 Widget getOttLogo(String name, {String? logoUrl, double size = 38}) {
   final lower = name.toLowerCase();

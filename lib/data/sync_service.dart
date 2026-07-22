@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
 
 class SyncService {
   static const String _apiSyncUrl = 'https://ott.redapp.space/api.php';

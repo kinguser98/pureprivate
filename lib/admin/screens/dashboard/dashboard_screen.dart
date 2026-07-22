@@ -624,7 +624,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               _buildHealthBadge('Telegram Stream Sync', 'Active', Colors.blueAccent),
               _buildHealthBadge('TMDB API Gateway', 'Operational', Colors.cyanAccent),
               _buildHealthBadge('Streamtape Resolver', 'Ready', Colors.amberAccent),
-              _buildHealthBadge('Nuveo Addon Core', 'Operational', Colors.emerald),
+              _buildHealthBadge('Nuveo Addon Core', 'Operational', Colors.green),
               _buildHealthBadge('Stream Cache Engine', 'Optimized', Colors.tealAccent),
             ],
           ),
@@ -957,7 +957,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ),
     );
   }
-}
+
   String _formatViews(int views) {
     if (views >= 1000000) return '${(views / 1000000).toStringAsFixed(1)}M';
     if (views >= 1000) return '${(views / 1000).toStringAsFixed(1)}K';

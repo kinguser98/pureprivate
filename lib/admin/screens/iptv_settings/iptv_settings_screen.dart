@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
 import '../../utils/admin_api_client.dart';
 import '../../utils/drawer_helper.dart';
 import '../../widgets/common/glass_card.dart';

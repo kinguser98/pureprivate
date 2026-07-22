@@ -11,32 +11,32 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/api_service.dart';
-import 'package:private_cinema_mobile/data/download_manager.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
-import 'package:private_cinema_mobile/data/youtube_service.dart';
-import 'package:private_cinema_mobile/data/embed_resolver.dart';
-import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
-import 'package:private_cinema_mobile/data/telegram_sources.dart';
+import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_ios/data/download_manager.dart';
+import 'package:private_cinema_ios/data/playback_tracker.dart';
+import 'package:private_cinema_ios/data/youtube_service.dart';
+import 'package:private_cinema_ios/data/embed_resolver.dart';
+import 'package:private_cinema_ios/data/cinemm_resolver.dart';
+import 'package:private_cinema_ios/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
 import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
-import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
-import 'package:private_cinema_mobile/widgets/movie_image.dart';
-import 'package:private_cinema_mobile/screens/video_player_screen.dart';
-import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
-import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
-import 'package:private_cinema_mobile/data/stalker_resolver.dart';
-import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
-import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
-import 'package:private_cinema_mobile/data/sync_service.dart';
-import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
-import 'package:private_cinema_mobile/data/hls_preflight.dart';
-import 'package:private_cinema_mobile/data/webtorrent_service.dart';
-import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
-import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_ios/screens/all_movies_screen.dart';
+import 'package:private_cinema_ios/widgets/movie_image.dart';
+import 'package:private_cinema_ios/screens/video_player_screen.dart';
+import 'package:private_cinema_ios/widgets/resolving_dialog.dart';
+import 'package:private_cinema_ios/screens/webview_player_screen.dart';
+import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_ios/data/netmirror_resolver.dart';
+import 'package:private_cinema_ios/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
+import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
+import 'package:private_cinema_ios/data/hls_preflight.dart';
+import 'package:private_cinema_ios/data/webtorrent_service.dart';
+import 'package:private_cinema_ios/widgets/seedr_countdown_dialog.dart';
+import 'package:private_cinema_ios/widgets/stream_metadata_tile.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -1691,7 +1691,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       if (match == null) {
         // Not in cache → try to refresh and re-search.
-        await TelegramService.instance.loadSavedMessages(limit: 200);
+        await TelegramService.instance.loadSavedMessages();
         final items2 = await TelegramIndexDb.instance.all();
         for (final i in items2) {
           if (i.localId == localId) {
@@ -1716,9 +1716,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         return _playWithResolution(
           resolved,
           resumeDirectly: resumeDirectly,
-          sourceName: sourceName,
-          forceNative: forceNative,
-          forceWeb: forceWeb,
+          sourceName: 'mp4/mkv',
+          forceNative: true,
+          forceWeb: false,
           headers: headers,
         );
       } catch (e) {
@@ -3620,7 +3620,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
       if (match == null) {
-        await TelegramService.instance.loadSavedMessages(limit: 200);
+        await TelegramService.instance.loadSavedMessages();
         final items2 = await TelegramIndexDb.instance.all();
         for (final item in items2) {
           if (item.localId == localId) {

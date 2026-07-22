@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_ios/data/sync_service.dart';
 import '../widgets/special_search_dialog.dart'; // To access StreamSourceInfo and StreamSourceType
 import 'api_service.dart';
 

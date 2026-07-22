@@ -181,6 +181,7 @@ class TelegramService {
       if (isAuth) {
         status.value = TelegramStatus.ready;
         statusMessage.value = 'Connected to Telegram.';
+        unawaited(_ensureStreamServerStarted());
       } else {
         status.value = TelegramStatus.awaitingPhone;
         statusMessage.value = null;
@@ -318,43 +319,99 @@ class TelegramService {
 
     await TelegramIndexDb.clearSession();
     await TelegramIndexDb.instance.clearIndex();
+    await TelegramIndexDb.resetSyncCursor();
 
     status.value = TelegramStatus.unconfigured;
     statusMessage.value = null;
   }
 
-  Future<List<TelegramVideoItem>> loadSavedMessages({int limit = 500}) async {
+  /// Returns cached movies from the local DB and fetches the latest 100 from
+  /// Telegram in the background (if the session is active). This is the
+  /// fast path — the app shows what it has immediately, then refreshes.
+  ///
+  /// To load older movies call [loadMoreMessages].
+  Future<List<TelegramVideoItem>> loadSavedMessages() async {
     await init();
+
+    // Always return the DB immediately so the UI isn't blocked.
     if (status.value != TelegramStatus.ready || _client == null) {
       return TelegramIndexDb.instance.all();
     }
+
     try {
-      final res = await _client!.invoke(
-        MessagesGetHistoryRequest(
-          peer: InputPeerSelf(),
-          offsetId: 0,
-          offsetDate: 0,
-          addOffset: 0,
-          limit: limit,
-          maxId: 0,
-          minId: 0,
-          hash: 0,
-        ),
-      );
-
-      if (res is! MessagesMessages) {
-        return TelegramIndexDb.instance.all();
-      }
-
-      final fresh = _extractItems(res);
-      await TelegramIndexDb.instance.replaceAll(fresh);
-      return fresh;
+      // Fetch only the newest 100 messages (offsetId = 0 = start from top).
+      await _fetchBatch(offsetId: 0, isRefresh: true);
     } catch (e) {
       debugPrint('TelegramService.loadSavedMessages failed: $e');
       statusMessage.value = 'Telegram refresh failed: $e';
-      return TelegramIndexDb.instance.all();
+    }
+
+    return TelegramIndexDb.instance.all();
+  }
+
+  /// Fetches the next batch of 100 older messages beyond what we already have.
+  /// Returns true if there are still more messages to load after this batch.
+  Future<bool> loadMoreMessages() async {
+    await init();
+    if (status.value != TelegramStatus.ready || _client == null) return false;
+
+    final hasMore = await TelegramIndexDb.loadSyncHasMore();
+    if (!hasMore) return false;
+
+    final offsetId = await TelegramIndexDb.loadSyncOffsetId();
+    try {
+      return await _fetchBatch(offsetId: offsetId, isRefresh: false);
+    } catch (e) {
+      debugPrint('TelegramService.loadMoreMessages failed: $e');
+      return false;
     }
   }
+
+  /// Returns whether any more messages exist beyond the current cursor.
+  Future<bool> get hasSyncMore => TelegramIndexDb.loadSyncHasMore();
+
+  // Fetches exactly 100 messages at [offsetId] and persists them + the cursor.
+  // [isRefresh] = true means we start from the top (newest messages).
+  Future<bool> _fetchBatch({required int offsetId, required bool isRefresh}) async {
+    final res = await _client!.invoke(
+      MessagesGetHistoryRequest(
+        peer: InputPeerSelf(),
+        offsetId: offsetId,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: 100,
+        maxId: 0,
+        minId: 0,
+        hash: 0,
+      ),
+    );
+
+    if (res is! MessagesMessages) return false;
+
+    List<dynamic> rawMessages = const [];
+    try {
+      rawMessages = (res as dynamic).messages ?? const [];
+    } catch (_) {}
+
+    if (rawMessages.isNotEmpty) {
+      final batchItems = _extractItems(res);
+      if (batchItems.isNotEmpty) {
+        await TelegramIndexDb.instance.upsertAll(batchItems);
+      }
+
+      // Save the cursor for the NEXT loadMore call.
+      final lastMsg = rawMessages.last;
+      if (lastMsg is MessageObj) {
+        await TelegramIndexDb.saveSyncOffsetId(lastMsg.id);
+      }
+    }
+
+    // If Telegram returned fewer than 100 raw messages, we've reached the end.
+    final hasMore = rawMessages.length >= 100;
+    await TelegramIndexDb.saveSyncHasMore(hasMore);
+    return hasMore;
+  }
+
 
   List<TelegramVideoItem> _extractItems(MessagesMessages result) {
     final out = <TelegramVideoItem>[];
@@ -448,42 +505,130 @@ class TelegramService {
       throw TelegramException('Telegram is not connected. Sign in from Settings first.');
     }
     await _ensureStreamServerStarted();
-    // Determine MIME type override based on file extension
+
+    // ── CONNECTION HEALTH CHECK ──────────────────────────────────────────────
+    // After syncing many messages the main DC connection can become stale or
+    // the auth key can be invalidated by Telegram. Probing here catches the
+    // problem early and surfaces a clear error instead of silently looping
+    // with AUTH_KEY_UNREGISTERED inside the stream server.
+    try {
+      await _client!.invoke(UpdatesGetStateRequest());
+    } on TgError catch (e) {
+      if (e.code == 401 || e.matches('AUTH_KEY_UNREGISTERED')) {
+        // Session fully expired — clean up so the user is prompted to sign in.
+        try { await _streamServer?.stop(); _streamServer = null; } catch (_) {}
+        try { await _client?.close(); _client = null; } catch (_) {}
+        status.value = TelegramStatus.awaitingPhone;
+        statusMessage.value = 'Session expired.';
+        throw TelegramException(
+          'Telegram session expired. Please sign in again from Settings → Telegram.',
+        );
+      }
+      // Other TG errors (flood wait, etc.) are transient — proceed.
+    } catch (_) {
+      // Network errors — proceed and let the stream server handle retries.
+    }
+
+    // Warm up workers for DCs 1-5 so auth export to any media DC is
+    // pre-established before playback begins (avoids first-play latency/failures).
+    if (_streamServer != null && _client != null) {
+      for (int dc = 1; dc <= 5; dc++) {
+        try {
+          await _streamServer!.warmup(dcId: dc, workers: 2);
+        } catch (_) {}
+      }
+    }
+
+    // Determine MIME type override based on file extension from fileName or caption
+    final fileName = item.fileName?.toLowerCase() ?? '';
+    final caption = item.caption?.toLowerCase() ?? '';
     String? mimeOverride;
-    final nameLower = (item.fileName ?? '').toLowerCase();
-    if (nameLower.endsWith('.mkv')) {
-      mimeOverride = 'video/x-matroska';
-    } else if (nameLower.endsWith('.mp4')) {
-      mimeOverride = 'video/mp4';
-    } else if (nameLower.endsWith('.webm')) {
-      mimeOverride = 'video/webm';
-    } else if (nameLower.endsWith('.avi')) {
-      mimeOverride = 'video/x-msvideo';
+    String ext = '.mp4';
+
+    String? getMime(String extension) {
+      return switch (extension) {
+        '.mp4' || '.m4v' => 'video/mp4',
+        '.mkv' => 'video/x-matroska',
+        '.mov' => 'video/quicktime',
+        '.webm' => 'video/webm',
+        '.avi' => 'video/x-msvideo',
+        '.flv' => 'video/x-flv',
+        '.3gp' => 'video/3gpp',
+        '.ts' => 'video/mp2t',
+        '.m3u8' => 'application/x-mpegURL',
+        _ => null,
+      };
+    }
+
+    // 1. Try to extract extension directly from filename
+    if (fileName.isNotEmpty && fileName.contains('.')) {
+      final fileExt = fileName.substring(fileName.lastIndexOf('.'));
+      final mime = getMime(fileExt);
+      if (mime != null) {
+        mimeOverride = mime;
+        ext = fileExt;
+      }
+    }
+
+    // 2. If not resolved from filename, fallback to searching keywords in combined name
+    if (mimeOverride == null) {
+      final combined = '$fileName $caption';
+      if (combined.contains('.mkv')) {
+        mimeOverride = 'video/x-matroska';
+        ext = '.mkv';
+      } else if (combined.contains('.mp4')) {
+        mimeOverride = 'video/mp4';
+        ext = '.mp4';
+      } else if (combined.contains('.webm')) {
+        mimeOverride = 'video/webm';
+        ext = '.webm';
+      } else if (combined.contains('.ts')) {
+        mimeOverride = 'video/mp2t';
+        ext = '.ts';
+      } else if (combined.contains('.avi')) {
+        mimeOverride = 'video/x-msvideo';
+        ext = '.avi';
+      } else if (combined.contains('.m3u8')) {
+        mimeOverride = 'application/x-mpegURL';
+        ext = '.m3u8';
+      } else if (combined.contains('.mov')) {
+        mimeOverride = 'video/quicktime';
+        ext = '.mov';
+      } else if (combined.contains('.flv')) {
+        mimeOverride = 'video/x-flv';
+        ext = '.flv';
+      } else if (combined.contains('.3gp')) {
+        mimeOverride = 'video/3gpp';
+        ext = '.3gp';
+      } else {
+        mimeOverride = 'video/mp4';
+        ext = '.mp4';
+      }
+    }
+
+    InputPeer peer = InputPeerSelf();
+    if (item.chatId != 0) {
+      final chatIdStr = item.chatId.toString();
+      if (chatIdStr.startsWith('-100')) {
+        final channelId = int.tryParse(chatIdStr.substring(4)) ?? 0;
+        if (channelId > 0) {
+          peer = InputPeerChannel(channelId: channelId, accessHash: 0);
+        }
+      } else if (item.chatId < 0) {
+        peer = InputPeerChat(chatId: -item.chatId);
+      } else if (item.chatId > 0) {
+        peer = InputPeerUser(userId: item.chatId, accessHash: 0);
+      }
     }
 
     var url = await _streamServer!.publishMessage(
-      peer: InputPeerSelf(),
+      peer: peer,
       msgId: item.messageId,
       mimeOverride: mimeOverride,
     );
 
     // Append a clean file name with the correct extension so media player / FFmpeg / libmpv
-    // can correctly identify the container format without encountering spaces or URL encoding issues on iOS.
-    String ext = '.mp4';
-    if (nameLower.endsWith('.mkv')) {
-      ext = '.mkv';
-    } else if (nameLower.endsWith('.webm')) {
-      ext = '.webm';
-    } else if (nameLower.endsWith('.avi')) {
-      ext = '.avi';
-    } else if (nameLower.endsWith('.m3u8')) {
-      ext = '.m3u8';
-    } else if (nameLower.contains('.')) {
-      final parsedExt = nameLower.substring(nameLower.lastIndexOf('.'));
-      if (RegExp(r'^\.[a-zA-Z0-9]+$').hasMatch(parsedExt)) {
-        ext = parsedExt;
-      }
-    }
+    // can correctly identify the container format without encountering spaces or URL encoding issues.
     final safeName = 'video$ext';
     if (url.endsWith('/')) {
       url = '$url$safeName';

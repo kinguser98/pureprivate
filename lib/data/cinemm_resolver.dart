@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
+import 'package:private_cinema_ios/widgets/special_search_dialog.dart';
 
 class CinemmResolver {
   static const String _mainUrl = 'https://cinemm.com';

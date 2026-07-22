@@ -504,10 +504,13 @@ extension FileOperations on MtpClient {
             if (attempts >= _maxRetriesPerPart) rethrow;
             continue;
           }
-          // Stale exported auth key — evict bad senders and rebuild the pool
-          // so the next attempt creates a fresh session via exportToDc.
+          // Stale exported auth key — evict bad senders, wipe the persisted
+          // DC key, and rebuild the pool so the next exportToDc goes straight
+          // to a fresh export/import rather than wasting a round-trip on the
+          // already-invalidated cached key.
           if (e.code == 401 || e.matches('AUTH_KEY_UNREGISTERED')) {
             release();
+            recordDcKey(effectiveDc, null);
             await this.clearSendersFor(effectiveDc);
             activePool = await _buildPool(this, effectiveDc, workers);
             attempts++;

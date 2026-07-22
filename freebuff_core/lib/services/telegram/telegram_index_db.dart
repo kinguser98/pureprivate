@@ -20,7 +20,9 @@ class TelegramIndexDb {
   static const String _kUser = 'tg_user_phone_v1';
   static const String _kApiId = 'tg_api_id_override_v1';
   static const String _kApiHash = 'tg_api_hash_override_v1';
-  static const int _maxCachedItems = 400;
+  static const String _kSyncOffsetId = 'tg_sync_offset_id_v1';
+  static const String _kSyncHasMore = 'tg_sync_has_more_v1';
+  static const int _maxCachedItems = 5000;
 
   /// Shared singleton — callers should always go through this.
   static final TelegramIndexDb instance = TelegramIndexDb._ctor();
@@ -61,6 +63,22 @@ class TelegramIndexDb {
       ..addAll(items.length > _maxCachedItems
           ? items.sublist(items.length - _maxCachedItems)
           : items);
+    await _persist();
+  }
+
+  Future<void> upsertAll(List<TelegramVideoItem> items) async {
+    await _ensureLoaded();
+    for (final item in items) {
+      final idx = _items.indexWhere((e) => e.localId == item.localId);
+      if (idx >= 0) {
+        _items[idx] = item;
+      } else {
+        _items.add(item);
+      }
+    }
+    if (_items.length > _maxCachedItems) {
+      _items.removeRange(0, _items.length - _maxCachedItems);
+    }
     await _persist();
   }
 
@@ -198,6 +216,39 @@ class TelegramIndexDb {
   static Future<int?> loadCurrentDcId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('tg_current_dc_id');
+  }
+
+  // ---- incremental sync cursor -------------------------------------------
+
+  /// The message-ID offset to pass on the NEXT `MessagesGetHistoryRequest`.
+  /// 0 means "start from the newest message" (i.e. nothing synced yet).
+  static Future<void> saveSyncOffsetId(int offsetId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kSyncOffsetId, offsetId);
+  }
+
+  static Future<int> loadSyncOffsetId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_kSyncOffsetId) ?? 0;
+  }
+
+  /// Whether more messages exist beyond the already-synced cursor.
+  static Future<void> saveSyncHasMore(bool hasMore) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSyncHasMore, hasMore);
+  }
+
+  static Future<bool> loadSyncHasMore() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Default true: on first launch assume there IS history to load.
+    return prefs.getBool(_kSyncHasMore) ?? true;
+  }
+
+  /// Wipe the cursor so the next sync starts from the newest message.
+  static Future<void> resetSyncCursor() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kSyncOffsetId);
+    await prefs.setBool(_kSyncHasMore, true);
   }
 
   static TelegramVideoItem fromMap(Map<String, dynamic> j) => _fromJson(j);
