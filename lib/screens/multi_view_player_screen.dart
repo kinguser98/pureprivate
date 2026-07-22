@@ -5,10 +5,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:http/http.dart' as http;
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/dns_proxy.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/dns_proxy.dart';
 
 class MultiViewPlayerScreen extends StatefulWidget {
   final List<dynamic>? initialChannels;

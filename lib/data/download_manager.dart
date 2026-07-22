@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/models/movie.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
 
 enum DownloadStatus {
   queued,

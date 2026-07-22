@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
 
 abstract final class MockCatalog {
   static const demoMp4Video =
@@ -22,6 +22,8 @@ abstract final class MockCatalog {
       language: 'English',
       videoSource: demoMp4Video,
       trailerUrl: 'https://www.youtube.com/watch?v=DotnJ7tTA34',
+      ottName: 'Amazon Prime',
+      ottLogo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/11/Amazon_Prime_Video_logo.svg/185px-Amazon_Prime_Video_logo.svg.png',
     ),
     _detail(
       id: 'last-of-us',
@@ -36,6 +38,8 @@ abstract final class MockCatalog {
       language: 'English',
       videoSource: demoMkvVideo,
       trailerUrl: 'https://www.youtube.com/watch?v=uLtkt8BonwM',
+      ottName: 'JioHotstar',
+      ottLogo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Disney%2B_Hotstar_logo.svg/185px-Disney%2B_Hotstar_logo.svg.png',
     ),
     _detail(
       id: 'premalu',
@@ -50,6 +54,8 @@ abstract final class MockCatalog {
       language: 'Malayalam',
       videoSource: demoMp4Video,
       trailerUrl: 'https://www.youtube.com/watch?v=r8Z5Lue_g2U',
+      ottName: 'Netflix',
+      ottLogo: 'https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.png',
     ),
     _detail(
       id: 'manjummel-boys',
@@ -64,6 +70,8 @@ abstract final class MockCatalog {
       language: 'Malayalam',
       videoSource: demoMp4Video,
       trailerUrl: 'https://www.youtube.com/watch?v=Y81i_j5CszE',
+      ottName: 'SonyLiv',
+      ottLogo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/58/SonyLIV_logo.svg/185px-SonyLIV_logo.svg.png',
     ),
     _detail(
       id: 'vikram',
@@ -77,6 +85,23 @@ abstract final class MockCatalog {
       runtime: '2h 55m',
       language: 'Tamil',
       videoSource: demoMp4Video,
+      ottName: 'SunNxt',
+      ottLogo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Sun_NXT_logo.png/185px-Sun_NXT_logo.png',
+    ),
+    _detail(
+      id: 'leo',
+      title: 'LEO',
+      genre: 'Action',
+      rating: 8.4,
+      poster: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=600&auto=format&fit=crop',
+      backdrop: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=1200&auto=format&fit=crop',
+      color: const Color(0xFF2E4053),
+      year: 2023,
+      runtime: '2h 44m',
+      language: 'Tamil',
+      videoSource: demoMp4Video,
+      ottName: 'Zee5',
+      ottLogo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/ZEE5_logo.svg/185px-ZEE5_logo.svg.png',
     ),
   ];
 
@@ -109,6 +134,8 @@ abstract final class MockCatalog {
     required String language,
     String? videoSource,
     String? trailerUrl,
+    String? ottName,
+    String? ottLogo,
   }) {
     final actualVideoSource = videoSource ?? demoMp4Video;
     return Movie(
@@ -134,6 +161,8 @@ abstract final class MockCatalog {
       videoSource: actualVideoSource,
       trailerUrl: trailerUrl,
       language: language,
+      ottName: ottName,
+      ottLogo: ottLogo,
       streamSources: [StreamSource(name: 'Default Server', url: actualVideoSource)],
     );
   }

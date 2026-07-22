@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 class ParsedStreamMeta {
   final String? quality;
@@ -61,37 +61,50 @@ ParsedStreamMeta parseStreamMeta(String name, String url) {
   const knownLangs = ['Hindi', 'English', 'Tamil', 'Telugu', 'Malayalam', 'Kannada', 'Bengali', 'Punjabi', 'Japanese', 'Korean', 'Spanish', 'French', 'German', 'Arabic', 'Turkish'];
   final languages = knownLangs.where((l) => raw.contains(RegExp(l, caseSensitive: false))).toList();
 
-  // Site/source name: rebuild clean display from parts
+  final isSeedr = url.startsWith('magnet:');
+  final isStalker = url.startsWith('stalker:') || raw.toLowerCase().startsWith('portal') || raw.toLowerCase().contains('stalker');
+
+  // Site/source name: format Stalker VOD as "Portal Num - Full Database Movie Name"
   String site = '';
-  final parts = raw.split(' - ');
-  if (parts.length >= 2) {
-    final lastPart = parts.last.trim();
-    final hasQuality = RegExp(r'(2160p|1080p|720p|480p|360p|4k|UHD|HD)', caseSensitive: false).hasMatch(lastPart);
-    final hasSize = RegExp(r'[\d.]+\s*(GB|MB|GIB|MIB)', caseSensitive: false).hasMatch(lastPart);
-    final hasLang = knownLangs.any((l) => lastPart.contains(RegExp(l, caseSensitive: false)));
-    if (hasQuality || hasSize || hasLang || lastPart.isEmpty) {
-      if (parts.length >= 3) {
-        site = parts.sublist(1, parts.length - 1).join(' - ');
+  if (isStalker) {
+    if (RegExp(r'^(Portal|Stalker)\s*\d+', caseSensitive: false).hasMatch(raw)) {
+      site = raw;
+    } else {
+      // Default to Portal 1 prefix if portal index isn't prefixed
+      site = 'Portal 1 - $raw';
+    }
+  } else if (url.contains('.mkv') || url.contains('.mp4')) {
+    final ext = url.contains('.mkv') ? 'MKV' : 'MP4';
+    site = '$ext Stream - $raw';
+  } else if (url.startsWith('http')) {
+    site = raw;
+  } else {
+    final parts = raw.split(' - ');
+    if (parts.length >= 2) {
+      final lastPart = parts.last.trim();
+      final hasQuality = RegExp(r'(2160p|1080p|720p|480p|360p|4k|UHD|HD)', caseSensitive: false).hasMatch(lastPart);
+      final hasSize = RegExp(r'[\d.]+\s*(GB|MB|GIB|MIB)', caseSensitive: false).hasMatch(lastPart);
+      final hasLang = knownLangs.any((l) => lastPart.contains(RegExp(l, caseSensitive: false)));
+      if (hasQuality || hasSize || hasLang || lastPart.isEmpty) {
+        if (parts.length >= 3) {
+          site = parts.sublist(1, parts.length - 1).join(' - ');
+        } else {
+          site = parts.first.trim();
+        }
       } else {
-        site = parts.first.trim();
+        site = lastPart;
       }
     } else {
-      site = lastPart;
-    }
-  } else {
-    final lastPipe = raw.lastIndexOf(' | ');
-    if (lastPipe > 0 && lastPipe < raw.length - 3) {
-      site = raw.substring(lastPipe + 3).trim();
-    } else {
-      site = raw.trim();
+      final lastPipe = raw.lastIndexOf(' | ');
+      if (lastPipe > 0 && lastPipe < raw.length - 3) {
+        site = raw.substring(lastPipe + 3).trim();
+      } else {
+        site = raw.trim();
+      }
     }
   }
-  // Remove quality/size/language leftovers from site
-  site = site.replaceAll(RegExp(r'(2160p|1080p|720p|480p|360p|4k)', caseSensitive: false), '').trim();
-  site = site.replaceAll(RegExp(r'[\d.]+\s*(GB|MB|GIB|MIB)', caseSensitive: false), '').trim();
 
-  final isSeedr = url.startsWith('magnet:');
-  final isStalker = url.startsWith('stalker:');
+  if (site.isEmpty) site = raw;
 
   return ParsedStreamMeta(quality: quality, qualityColor: qualityColor, size: size, languages: languages, site: site, isSeedr: isSeedr, raw: raw);
 }
@@ -123,7 +136,7 @@ class StreamMetadataTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: isSelected ? AppColors.accent.withOpacity(0.15) : Colors.white.withOpacity(0.02),
+        color: isSelected ? AppColors.accent.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.02),
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
@@ -138,7 +151,7 @@ class StreamMetadataTile extends StatelessWidget {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: isSeedr ? const Color(0xFF00E676).withOpacity(0.12) : (isStalker ? AppColors.accentBright.withOpacity(0.12) : Colors.white.withOpacity(0.05)),
+                    color: isSeedr ? const Color(0xFF00E676).withValues(alpha: 0.12) : (isStalker ? AppColors.accentBright.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.05)),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
@@ -161,7 +174,7 @@ class StreamMetadataTile extends StatelessWidget {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                               decoration: BoxDecoration(
-                                color: (meta.qualityColor ?? AppColors.accentBright).withOpacity(0.18),
+                                color: (meta.qualityColor ?? AppColors.accentBright).withValues(alpha: 0.18),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -205,7 +218,7 @@ class StreamMetadataTile extends StatelessWidget {
                           if (isSeedr)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                              decoration: BoxDecoration(color: const Color(0xFF00E676).withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                              decoration: BoxDecoration(color: const Color(0xFF00E676).withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)),
                               child: Row(mainAxisSize: MainAxisSize.min, children: [
                                 Icon(Icons.cloud_download_rounded, size: 8, color: const Color(0xFF00E676)),
                                 const SizedBox(width: 2),
@@ -215,7 +228,7 @@ class StreamMetadataTile extends StatelessWidget {
                           if (isStalker)
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                              decoration: BoxDecoration(color: AppColors.accentBright.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+                              decoration: BoxDecoration(color: AppColors.accentBright.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)),
                               child: Text('VOD', style: TextStyle(color: AppColors.accentBright, fontSize: 7, fontWeight: FontWeight.bold)),
                             ),
                         ],

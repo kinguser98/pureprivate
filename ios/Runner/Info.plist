@@ -73,5 +73,21 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app requires access to the local network to proxy video stream requests through the secure DNS provider.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>GoXio requires document access to save and manage downloaded movies and video files.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>GoXio needs access to save downloaded videos to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>GoXio needs access to read videos from your library.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
 </dict>
 </plist>

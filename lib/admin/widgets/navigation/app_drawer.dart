@@ -67,6 +67,9 @@ class AppDrawer extends ConsumerWidget {
                   _navItem(context, ref, Icons.people, 'OTT Providers', '/ott-providers', false),
                   _navItem(context, ref, Icons.person, 'Account', '/account-settings', false),
                   _divider(),
+                  _navItem(context, ref, Icons.exit_to_app_rounded, 'Exit to Main App', '/exit', false, color: Colors.orangeAccent, onTapOverride: () {
+                    Navigator.of(context, rootNavigator: true).pop();
+                  }),
                   _navItem(context, ref, Icons.logout, 'Logout', '/logout', false, color: Colors.red),
                 ],
               ),
@@ -92,7 +95,7 @@ class AppDrawer extends ConsumerWidget {
     );
   }
 
-  Widget _navItem(BuildContext context, WidgetRef ref, IconData icon, String label, String route, bool isActive, {Color? color}) {
+  Widget _navItem(BuildContext context, WidgetRef ref, IconData icon, String label, String route, bool isActive, {Color? color, VoidCallback? onTapOverride}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -109,7 +112,9 @@ class AppDrawer extends ConsumerWidget {
           tileColor: isActive ? const Color(0xFFEF4444).withOpacity(0.15) : Colors.transparent,
           onTap: () {
             Navigator.pop(context);
-            if (route == '/logout') {
+            if (onTapOverride != null) {
+              onTapOverride();
+            } else if (route == '/logout') {
               ref.read(authProvider.notifier).logout();
               context.go('/login');
             } else {

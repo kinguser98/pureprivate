@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 int parseSizeToMb(String? sizeStr) {
   if (sizeStr == null || sizeStr.isEmpty) return 0;

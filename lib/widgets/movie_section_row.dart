@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/models/movie.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/widgets/movie_card.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/widgets/movie_card.dart';
 
 class MovieSectionRow extends StatelessWidget {
   const MovieSectionRow({

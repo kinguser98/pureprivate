@@ -40,18 +40,13 @@ class AuthState {
 class AuthNotifier extends StateNotifier<AuthState> {
   final ApiClient _apiClient;
 
-  AuthNotifier(this._apiClient) : super(const AuthState()) {
+  AuthNotifier(this._apiClient) : super(const AuthState(isAuthenticated: false, username: 'admin')) {
     _checkAuthStatus();
   }
 
   Future<void> _checkAuthStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username');
-    final isLoggedIn = prefs.getBool('is_logged_in') ?? false;
-
-    if (isLoggedIn && username != null) {
-      state = state.copyWith(isAuthenticated: true, username: username);
-    }
+    // ALWAYS require fresh login when opening admin panel
+    state = state.copyWith(isAuthenticated: false, username: 'admin');
   }
 
   Future<void> login(String username, String password) async {

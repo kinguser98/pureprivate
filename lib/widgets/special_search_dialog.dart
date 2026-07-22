@@ -6,21 +6,21 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/screens/video_player_screen.dart';
-import 'package:private_cinema_ios/screens/webview_player_screen.dart';
-import 'package:private_cinema_ios/screens/cast_controller_screen.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/netmirror_resolver.dart';
-import 'package:private_cinema_ios/data/cinemm_resolver.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/data/embed_resolver.dart';
-import 'package:private_cinema_ios/data/wifi_cast_service.dart';
-import 'package:private_cinema_ios/data/sync_service.dart';
-import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
-import 'package:private_cinema_ios/data/stremio_addon_resolver.dart';
-import 'package:private_cinema_ios/data/hls_preflight.dart';
-import 'package:private_cinema_ios/widgets/resolving_dialog.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/screens/cast_controller_screen.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
+import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
+import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_mobile/data/hls_preflight.dart';
+import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:io';
 
@@ -538,7 +538,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             if (!isDup) {
               sources.add(
                 StreamSourceInfo(
-                  name: '[$portalName] $name',
+                  name: '$portalName - $name',
                   url: 'stalker://$portalId$cmd',
                   type: StreamSourceType.stalker,
                 ),

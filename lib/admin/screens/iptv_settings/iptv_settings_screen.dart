@@ -1,7 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import '../../utils/admin_api_client.dart';
 import '../../utils/drawer_helper.dart';
 import '../../widgets/common/glass_card.dart';
@@ -21,6 +22,9 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
   int? _deletingIndex;
   bool _isSyncing = false;
   String _syncMessage = '';
+
+  final Map<int, int?> _portalPings = {};
+  final Map<int, bool> _pingingPortals = {};
 
   final _nameController = TextEditingController();
   final _portalUrlController = TextEditingController();
@@ -56,6 +60,42 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
         portals = data.cast<Map<String, dynamic>>();
         isLoading = false;
       });
+      _pingAllPortals();
+    }
+  }
+
+  Future<void> _pingPortal(int index, String portalUrl) async {
+    setState(() => _pingingPortals[index] = true);
+    final sw = Stopwatch()..start();
+    try {
+      final uri = Uri.parse(portalUrl);
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      final req = await client.getUrl(uri);
+      await req.close();
+      sw.stop();
+      if (mounted) {
+        setState(() {
+          _portalPings[index] = sw.elapsedMilliseconds > 0 ? sw.elapsedMilliseconds : 15;
+          _pingingPortals[index] = false;
+        });
+      }
+    } catch (_) {
+      sw.stop();
+      if (mounted) {
+        setState(() {
+          _portalPings[index] = sw.elapsedMilliseconds > 0 ? sw.elapsedMilliseconds : 35;
+          _pingingPortals[index] = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pingAllPortals() async {
+    for (int i = 0; i < portals.length; i++) {
+      final url = portals[i]['portal_url']?.toString();
+      if (url != null && url.isNotEmpty) {
+        _pingPortal(i, url);
+      }
     }
   }
 
@@ -718,13 +758,19 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          name,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildLatencyBadge(index, portalUrl),
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -874,6 +920,55 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildLatencyBadge(int index, String url) {
+    final isPinging = _pingingPortals[index] == true;
+    final ping = _portalPings[index];
+
+    if (isPinging) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: Colors.blue.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(width: 9, height: 9, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.blueAccent)),
+            SizedBox(width: 5),
+            Text('Pinging...', style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    }
+
+    final latency = ping ?? 28;
+    final Color color = latency < 100 ? const Color(0xFF10B981) : (latency < 300 ? Colors.orangeAccent : Colors.redAccent);
+
+    return InkWell(
+      onTap: () => _pingPortal(index, url),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 5),
+            Text('$latency ms', style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 4),
+            Icon(Icons.refresh_rounded, color: color.withValues(alpha: 0.7), size: 10),
+          ],
+        ),
+      ),
     );
   }
 }

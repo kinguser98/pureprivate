@@ -9,12 +9,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/data/playback_tracker.dart';
-import 'package:private_cinema_ios/data/dns_proxy.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/widgets/glass_panel.dart';
-import 'package:private_cinema_ios/data/epg_service.dart';
+import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_mobile/data/dns_proxy.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/widgets/glass_panel.dart';
+import 'package:private_cinema_mobile/data/epg_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -264,7 +264,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _bindStreams() {
     _player.stream.playing.listen((v) {
-      if (mounted) {
+      if (mounted && _playing != v) {
         setState(() => _playing = v);
         if (v) {
           _armHideControls();
@@ -273,35 +273,42 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
     _player.stream.position.listen((v) {
       if (mounted) {
-        setState(() {
-          _position = v;
-          if (v.inMilliseconds > 0 && !_hasStartedPlaying) {
-            _hasStartedPlaying = true;
-            // Schedule track selector ~1s after playback actually starts (tracks are populated by then)
-            if (!_trackSelectorScheduled) {
-              _trackSelectorScheduled = true;
-              Future.delayed(const Duration(milliseconds: 1200), () {
-                if (mounted && _hasMultipleTracks) {
-                  setState(() => _showInitialTrackSelector = true);
-                }
-              });
-            }
+        final lastMs = _position.inMilliseconds;
+        final currentMs = v.inMilliseconds;
+        _position = v;
+
+        if (currentMs > 0 && !_hasStartedPlaying) {
+          _hasStartedPlaying = true;
+          // Schedule track selector ~1s after playback actually starts (tracks are populated by then)
+          if (!_trackSelectorScheduled) {
+            _trackSelectorScheduled = true;
+            Future.delayed(const Duration(milliseconds: 1200), () {
+              if (mounted && _hasMultipleTracks) {
+                setState(() => _showInitialTrackSelector = true);
+              }
+            });
           }
-        });
+        }
 
         // Save progress every 5 seconds
-        final currentMs = v.inMilliseconds;
         if (widget.movieId != null && _duration.inMilliseconds > 0 && (currentMs - _lastSavedMs).abs() > 5000) {
           _lastSavedMs = currentMs;
           PlaybackTracker.saveProgress(widget.movieId!, currentMs, _duration.inMilliseconds);
         }
+
+        // Only rebuild UI when controls are visible or every 250ms when visible
+        if (_showControls && (currentMs - lastMs).abs() >= 250) {
+          setState(() {});
+        }
       }
     });
     _player.stream.duration.listen((v) {
-      if (mounted) setState(() => _duration = v);
+      if (mounted && _duration != v) {
+        setState(() => _duration = v);
+      }
     });
     _player.stream.buffering.listen((v) {
-      if (mounted) {
+      if (mounted && _buffering != v) {
         setState(() => _buffering = v);
         if (!v && _playing) {
           _armHideControls();
@@ -309,11 +316,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
     });
     _player.stream.volume.listen((v) {
-      if (mounted) setState(() => _volume = v);
+      if (mounted && _volume != v) {
+        setState(() => _volume = v);
+      }
     });
     _player.stream.track.listen((_) {
       if (mounted) {
-        setState(() {});
+        if (_showControls) setState(() {});
         if (!_trackSelectorScheduled && _hasStartedPlaying && _hasMultipleTracks) {
           _trackSelectorScheduled = true;
           Future.delayed(const Duration(milliseconds: 500), () {
@@ -344,9 +353,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           });
         }
       }
-    });
-    _player.stream.log.listen((event) {
-      debugPrint('libmpv log: [${event.level}] ${event.prefix}: ${event.text}');
     });
   }
 
@@ -427,7 +433,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
         // Enable hardware decoding
         if (Platform.isAndroid) {
-          await nativePlayer.setProperty('hwdec', 'mediacodec-copy');
+          await nativePlayer.setProperty('hwdec', 'auto');
         } else if (Platform.isIOS || Platform.isMacOS) {
           await nativePlayer.setProperty('hwdec', 'videotoolbox');
         } else {
@@ -438,33 +444,37 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           // Live stream optimizations (small buffer to handle network jitter, low latency)
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '104857600'); // 100MB buffer limit
-await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
-await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
+          await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB buffer limit
+          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
+          await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('force-seekable', 'yes');
         } else {
-          // Increase network timeout to prevent slow proxied sources (like AList/Streamtape on Koyeb) from timing out (default in media_kit is 5s)
+          // Increase network timeout to prevent slow proxied sources from timing out
           await nativePlayer.setProperty('network-timeout', '60');
           
-          // Buffering/Streaming optimizations for low latency and memory safety
+          // Buffering/Streaming optimizations for low latency and smooth 60fps playback
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no'); // Prevent file cache errors, use memory
-          await nativePlayer.setProperty('demuxer-max-bytes', '157286400'); // 150MB memory buffer
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '20971520'); // 20MB backward seek cache
-          await nativePlayer.setProperty('demuxer-readahead-secs', '300'); // 300 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '300'); // 300 seconds cache duration
-          await nativePlayer.setProperty('cache-pause-wait', '3'); // Buffer 3 seconds before resuming
+          await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB memory buffer
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216'); // 16MB backward seek cache
+          await nativePlayer.setProperty('demuxer-readahead-secs', '60'); // 60 seconds readahead
+          await nativePlayer.setProperty('cache-secs', '60'); // 60 seconds cache duration
+          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer 2 seconds before resuming
           // Force VOD mode for HLS streams that omit #EXT-X-ENDLIST (Stalker, Castle, etc.)
           await nativePlayer.setProperty('stream-live', 'no');
         }
         
-        // Explicit Audio/Video Synchronization and drift correction
-          await nativePlayer.setProperty('video-sync', 'audio');
-          await nativePlayer.setProperty('autosync', '10');
-          await nativePlayer.setProperty('force-seekable', 'yes');
+        // Smooth Audio/Video Synchronization without aggressive frame drops
+        await nativePlayer.setProperty('video-sync', 'audio');
+        await nativePlayer.setProperty('framedrop', 'vo');
+        await nativePlayer.setProperty('force-seekable', 'yes');
+        if (Platform.isAndroid) {
           await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
+        } else if (Platform.isIOS) {
+          await nativePlayer.setProperty('ao', 'audiounit,');
+        }
         
         // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
         await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
