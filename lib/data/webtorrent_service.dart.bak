@@ -1,0 +1,144 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+// import 'package:dart_torrent/dart_torrent.dart';
+// Uncomment the above when dart_torrent is added to pubspec.yaml.
+// Run: flutter pub add dart_torrent
+
+/// Abstraction for torrent streaming via dart_torrent.
+/// dart_torrent is a pure Dart BitTorrent client with no native dependencies.
+/// It downloads torrent pieces in Dart and serves them via a local HTTP server
+/// that media_kit can play from.
+class WebTorrentService {
+  static final WebTorrentService _instance = WebTorrentService._internal();
+  factory WebTorrentService() => _instance;
+  WebTorrentService._internal();
+
+  // TorrentClient? _client;
+  HttpServer? _httpServer;
+  String? _currentFilePath;
+  int _serverPort = 0;
+  bool _isActive = false;
+  Timer? _progressTimer;
+
+  static const int _bufferSeconds = 10; // seconds of video to buffer before playing
+  static const int _bufferBytes = 5 * 1024 * 1024; // or 5MB min
+
+  /// Starts torrent download and returns a local streaming URL.
+  Future<String?> startTorrent(String magnetUrl, {String? name}) async {
+    debugPrint('WebTorrent: Starting torrent...');
+    _isActive = true;
+
+    try {
+      // 1. Create temp directory for download
+      final dir = Directory.systemTemp.createTempSync('torrent_${DateTime.now().millisecondsSinceEpoch}');
+      final downloadPath = '${dir.path}/video';
+
+      // 2. Start local HTTP server to serve the growing file
+      await _startHttpServer(downloadPath);
+
+      // 3. Initialize dart_torrent client and start download
+      // _client = TorrentClient(downloadPath: downloadPath);
+      // await _client!.add(magnetUrl, onPiece: (piece) {
+      //   _checkBufferReady();
+      // });
+      // 
+      // NOTE: The actual dart_torrent API may differ from the placeholder above.
+      // After running `flutter pub add dart_torrent`:
+      // - Check the package docs for the exact API
+      // - Replace the placeholder code with the actual API calls
+      // 
+      // Typical API:
+      // final client = TorrentClient();
+      // final torrent = await client.addTorrent(magnetUrl);
+      // torrent.onPiece.listen((_) => _checkBufferReady());
+      // torrent.startDownload(downloadPath);
+      // 
+      // The client creates a local HTTP server at a known port.
+      // media_kit plays from http://localhost:{port}/stream
+
+      _currentFilePath = downloadPath;
+      _startProgressTimer();
+
+      // Return the local streaming URL
+      return 'http://127.0.0.1:$_serverPort/stream';
+    } catch (e) {
+      debugPrint('WebTorrent: Error - $e');
+      await stop();
+      return null;
+    }
+  }
+
+  Future<void> _startHttpServer(String filePath) async {
+    _httpServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    _serverPort = _httpServer!.port;
+    debugPrint('WebTorrent: HTTP server on port $_serverPort');
+
+    _httpServer!.listen((HttpRequest request) async {
+      if (request.uri.path == '/stream') {
+        final file = File(filePath);
+        if (await file.exists()) {
+          final length = await file.length();
+          request.response.headers.contentType = ContentType('video', 'mp4');
+          request.response.headers.set('Accept-Ranges', 'bytes');
+          request.response.headers.contentLength = length;
+
+          // Handle range requests for seeking
+          final range = request.headers.value('range');
+          if (range != null && range.startsWith('bytes=')) {
+            final parts = range.substring(6).split('-');
+            final start = int.tryParse(parts[0]) ?? 0;
+            final end = parts.length > 1 && parts[1].isNotEmpty ? int.tryParse(parts[1]) : length - 1;
+            request.response.statusCode = 206;
+            request.response.headers.set('Content-Range', 'bytes $start-$end/$length');
+            final stream = file.openRead(start, (end ?? length - 1) + 1);
+            await request.response.addStream(stream);
+          } else {
+            await request.response.addStream(file.openRead());
+          }
+        } else {
+          request.response.statusCode = 404;
+          request.response.write('Downloading...');
+        }
+      } else if (request.uri.path == '/progress') {
+        final file = File(filePath);
+        final size = await file.exists() ? await file.length() : 0;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write('{"bytes": $size, "ready": ${_isReady}}');
+      } else {
+        request.response.statusCode = 404;
+        request.response.write('Not found');
+      }
+      await request.response.close();
+    });
+  }
+
+  void _startProgressTimer() {
+    _progressTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _checkBufferReady();
+    });
+  }
+
+  bool _isReady = false;
+
+  void _checkBufferReady() {
+    if (_currentFilePath == null) return;
+    final file = File(_currentFilePath!);
+    if (!file.existsSync()) return;
+    final size = file.lengthSync();
+    if (size >= _bufferBytes && !_isReady) {
+      _isReady = true;
+      debugPrint('WebTorrent: Buffer ready ($size bytes)');
+    }
+  }
+
+  Future<void> stop() async {
+    _isActive = false;
+    _progressTimer?.cancel();
+    // await _client?.stop();
+    await _httpServer?.close(force: true);
+    _httpServer = null;
+    _isReady = false;
+    debugPrint('WebTorrent: Stopped');
+  }
+}
