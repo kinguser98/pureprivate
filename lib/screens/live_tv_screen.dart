@@ -1278,31 +1278,49 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
                   : Colors.white.withValues(alpha: 0.06)),
         ),
       ),
-      child: isGrid ? _buildGridChannelContent(ch, channelId, name, logoUrl) : _buildListChannelContent(ch, channelId, name, logoUrl, currentProg),
+      child: isGrid ? _buildGridChannelContent(ch, channelId, name, logoUrl, currentProg) : _buildListChannelContent(ch, channelId, name, logoUrl, currentProg),
     );
   }
 
-  Widget _buildGridChannelContent(Map<String, dynamic> ch, String channelId, String name, String logoUrl) {
+  Widget _buildGridChannelContent(Map<String, dynamic> ch, String channelId, String name, String logoUrl, EpgProgram? currentProg) {
+    final epgTitle = currentProg != null ? currentProg.title : 'Live Stream';
+
     return InkWell(
       onTap: () => _playChannel(ch),
       borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(6),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              width: 48,
-              height: 48,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8)),
               child: logoUrl.isNotEmpty
                   ? Image.network(logoUrl, headers: _logoHeaders, fit: BoxFit.contain, errorBuilder: (_, __, ___) => _buildFallbackLogo(name))
                   : _buildFallbackLogo(name),
             ),
-            const SizedBox(height: 6),
-            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11), textAlign: TextAlign.center),
-            Text(channelId, style: const TextStyle(color: Colors.white38, fontSize: 9)),
+            const SizedBox(height: 5),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 2),
+            SizedBox(
+              height: 14,
+              child: AutoScrollEpgText(
+                text: epgTitle,
+                style: TextStyle(
+                  color: currentProg != null ? AppColors.accentBright : Colors.white38,
+                  fontSize: 9,
+                  fontWeight: currentProg != null ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1406,7 +1424,8 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           final name = ch['name']?.toString() ?? 'Live Stream';
           final logoUrl = (ch['logo_url']?.toString().isNotEmpty == true) ? ch['logo_url'].toString() : (EpgService.getChannelLogo(channelId, name) ?? '');
           final isPlayingNow = _activeMiniChannel != null && (_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString() == channelId;
-          return _buildChannelItem(ch, channelId, name, logoUrl, isPlayingNow, null, isGrid: true);
+          final currentProg = EpgService.getCurrentProgram(channelId, name);
+          return _buildChannelItem(ch, channelId, name, logoUrl, isPlayingNow, currentProg, isGrid: true);
         },
       );
     }
@@ -1634,6 +1653,66 @@ class TvPortalPickerDialog extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class AutoScrollEpgText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+
+  const AutoScrollEpgText({super.key, required this.text, required this.style});
+
+  @override
+  State<AutoScrollEpgText> createState() => _AutoScrollEpgTextState();
+}
+
+class _AutoScrollEpgTextState extends State<AutoScrollEpgText> {
+  late ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startScroll());
+  }
+
+  void _startScroll() async {
+    if (!mounted || !_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    if (maxScroll > 0) {
+      await Future.delayed(const Duration(seconds: 1));
+      while (mounted && _scrollController.hasClients) {
+        await _scrollController.animateTo(
+          maxScroll,
+          duration: Duration(milliseconds: (maxScroll * 45).toInt().clamp(2000, 8000)),
+          curve: Curves.linear,
+        );
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted || !_scrollController.hasClients) break;
+        await _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+        );
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: _scrollController,
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      child: Text(widget.text, style: widget.style),
     );
   }
 }

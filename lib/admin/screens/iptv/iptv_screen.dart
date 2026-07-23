@@ -13,6 +13,12 @@ import '../../utils/drawer_helper.dart';
 import '../../utils/admin_api_client.dart';
 import '../../widgets/common/glass_card.dart';
 import '../../../data/stalker_resolver.dart';
+import '../../utils/master_channel_repository.dart';
+import '../../models/master_channel.dart';
+import '../../../widgets/epg_picker_dialog.dart';
+import '../../../widgets/master_channel_picker_dialog.dart';
+import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class IptvScreen extends ConsumerStatefulWidget {
   const IptvScreen({super.key});
@@ -114,29 +120,142 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
     return sorted;
   }
 
+  bool _isSelectionMode = false;
+  final Set<int> _selectedChannelIds = {};
+
+  void _toggleChannelSelection(int channelId) {
+    setState(() {
+      if (_selectedChannelIds.contains(channelId)) {
+        _selectedChannelIds.remove(channelId);
+        if (_selectedChannelIds.isEmpty) _isSelectionMode = false;
+      } else {
+        _selectedChannelIds.add(channelId);
+        _isSelectionMode = true;
+      }
+    });
+  }
+
+  void _selectAllChannels(List<IptvChannel> channels) {
+    setState(() {
+      _isSelectionMode = true;
+      for (final ch in channels) {
+        _selectedChannelIds.add(ch.id);
+      }
+    });
+  }
+
+  void _deselectAllChannels() {
+    setState(() {
+      _selectedChannelIds.clear();
+      _isSelectionMode = false;
+    });
+  }
+
+  void _confirmBulkDeleteChannels() {
+    if (_selectedChannelIds.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF131722),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+        title: Row(
+          children: [
+            const Icon(Icons.delete_sweep_rounded, color: Color(0xFFEF4444), size: 22),
+            const SizedBox(width: 8),
+            Text('Bulk Delete Channels', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text('Are you sure you want to delete ${_selectedChannelIds.length} selected stream channels?', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final idsToDelete = List<int>.from(_selectedChannelIds);
+              _deselectAllChannels();
+              _showLoadingOverlay();
+              for (final id in idsToDelete) {
+                await _adminApi.deleteChannel(id);
+              }
+              _hideLoadingOverlay();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('${idsToDelete.length} channels deleted successfully'), backgroundColor: const Color(0xFF22C55E)),
+                );
+                ref.read(iptvProvider.notifier).fetchChannels();
+              }
+            },
+            child: Text('Delete (${_selectedChannelIds.length})', style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final iptvState = ref.watch(iptvProvider);
     final settingsMap = ref.watch(settingsProvider).settings;
+    final filteredChannels = _getFilteredChannels(iptvState);
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
+      backgroundColor: const Color(0xFF0D1117),
       appBar: AppBar(
         leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: DrawerProvider.openDrawer,
+          icon: Icon(_isSelectionMode ? Icons.close : Icons.menu),
+          onPressed: () {
+            if (_isSelectionMode) {
+              _deselectAllChannels();
+            } else {
+              DrawerProvider.openDrawer();
+            }
+          },
         ),
-        title: const Text('IPTV Channels'),
+        title: Text(_isSelectionMode ? '${_selectedChannelIds.length} Selected' : 'IPTV Channels'),
         backgroundColor: const Color(0xFF0D1117).withOpacity(0.7),
         elevation: 0,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              ref.read(iptvProvider.notifier).fetchChannels();
-              ref.read(settingsProvider.notifier).fetchSettings();
-            },
-          ),
+          if (_isSelectionMode) ...[
+            TextButton(
+              onPressed: () {
+                if (_selectedChannelIds.length >= filteredChannels.length) {
+                  _deselectAllChannels();
+                } else {
+                  _selectAllChannels(filteredChannels);
+                }
+              },
+              child: Text(
+                _selectedChannelIds.length >= filteredChannels.length ? 'Deselect' : 'Select All',
+                style: const TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_forever_rounded, color: Color(0xFFEF4444)),
+              onPressed: _confirmBulkDeleteChannels,
+            ),
+          ] else ...[
+            IconButton(
+              icon: const Icon(Icons.select_all_rounded, color: Colors.white70),
+              onPressed: () => _selectAllChannels(filteredChannels),
+            ),
+            IconButton(
+              tooltip: 'Master Channel Registry',
+              icon: const Icon(Icons.playlist_add_check_circle_rounded, color: Color(0xFF8B5CF6)),
+              onPressed: () => context.push('/master-channels'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: () {
+                ref.read(iptvProvider.notifier).fetchChannels();
+                ref.read(settingsProvider.notifier).fetchSettings();
+              },
+            ),
+          ],
         ],
       ),
       body: Stack(
@@ -276,19 +395,13 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
   }
 
   Widget _buildGlassContainer({required Widget child, double opacity = 0.4}) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1F2E).withOpacity(opacity),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
-          ),
-          child: child,
-        ),
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
       ),
+      child: child,
     );
   }
 
@@ -665,8 +778,14 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                       },
                     )
                   else
-                    Column(
-                      children: renderChannels.map((channel) => _buildChannelItem(channel, key: ValueKey(channel.id))).toList(),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: renderChannels.length,
+                      itemBuilder: (context, idx) {
+                        final channel = renderChannels[idx];
+                        return _buildChannelItem(channel, key: ValueKey(channel.id));
+                      },
                     ),
                 ],
               ),
@@ -676,26 +795,46 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
   }
 
   Widget _buildChannelItem(IptvChannel channel, {required Key key, bool isReorderMode = false, int reorderIndex = 0}) {
+    final isSelected = _selectedChannelIds.contains(channel.id);
+
     return Padding(
       key: key,
       padding: const EdgeInsets.only(bottom: 6),
-      child: Container(
-        decoration: BoxDecoration(
-          color: channel.enabled
-              ? const Color(0xFF1A1F2E).withOpacity(0.85)
-              : Colors.red.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: channel.enabled
-                ? Colors.white.withOpacity(0.06)
-                : Colors.red.withOpacity(0.15),
+      child: InkWell(
+        onLongPress: () => _toggleChannelSelection(channel.id),
+        onTap: _isSelectionMode ? () => _toggleChannelSelection(channel.id) : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFFEF4444).withOpacity(0.2)
+                : (channel.enabled
+                    ? const Color(0xFF1A1F2E).withOpacity(0.85)
+                    : Colors.red.withOpacity(0.12)),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected
+                  ? const Color(0xFFEF4444)
+                  : (channel.enabled
+                      ? Colors.white.withOpacity(0.06)
+                      : Colors.red.withOpacity(0.15)),
+              width: isSelected ? 1.5 : 1,
+            ),
           ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Row(
-                children: [
-                  if (isReorderMode) ...[
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                if (_isSelectionMode)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Icon(
+                      isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                      color: isSelected ? const Color(0xFFEF4444) : Colors.white38,
+                      size: 20,
+                    ),
+                  ),
+                if (isReorderMode) ...[
                     ReorderableDragStartListener(
                       index: reorderIndex,
                       child: const Padding(
@@ -720,18 +859,6 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                     ),
                     const SizedBox(width: 2),
                   ],
-                  SizedBox(
-                    width: 28,
-                    child: Text(
-                      '${isReorderMode ? reorderIndex + 1 : channel.position}',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.3),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
                   const SizedBox(width: 4),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
@@ -778,14 +905,15 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            channel.displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
+                          SizedBox(
+                            height: 20,
+                            child: AutoScrollEpgText(
+                              text: channel.displayName,
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -819,54 +947,31 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                     ),
                   ),
                   if (!isReorderMode) ...[
-                    Switch(
-                      value: channel.enabled,
-                      onChanged: (_) => _toggleChannel(channel),
-                      activeColor: const Color(0xFF10B981),
-                      activeTrackColor: const Color(0xFF10B981).withOpacity(0.3),
-                      inactiveThumbColor: Colors.red.withOpacity(0.6),
-                      inactiveTrackColor: Colors.red.withOpacity(0.15),
+                    Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: channel.enabled,
+                        onChanged: (_) => _toggleChannel(channel),
+                        activeColor: const Color(0xFF10B981),
+                        activeTrackColor: const Color(0xFF10B981).withOpacity(0.3),
+                        inactiveThumbColor: Colors.red.withOpacity(0.6),
+                        inactiveTrackColor: Colors.red.withOpacity(0.15),
+                      ),
                     ),
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: channel.enabled ? const Color(0xFF10B981) : Colors.red.withOpacity(0.6),
-                            shape: BoxShape.circle,
-                            boxShadow: channel.enabled
-                                ? [
-                                    BoxShadow(
-                                      color: const Color(0xFF10B981).withOpacity(0.6),
-                                      blurRadius: 6,
-                                      spreadRadius: 1,
-                                    ),
-                                  ]
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          channel.enabled ? 'Live' : 'Off',
-                          style: TextStyle(
-                            color: channel.enabled
-                                ? const Color(0xFF10B981)
-                                : Colors.white.withOpacity(0.35),
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 20),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => _confirmDeleteChannel(channel),
                     ),
-                    const SizedBox(width: 4),
-                  ]
+                    const SizedBox(width: 6),
+                  ],
                 ],
               ),
             ),
           ),
-        );
+        ),
+      );
   }
 
   void _openCategorySettingsSheet(String categoryName, String currentDispName, bool isCurrentlyHidden, int portalId) {
@@ -1010,12 +1115,122 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 14),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFEF4444),
+                      side: const BorderSide(color: Color(0xFFEF4444)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _confirmDeleteCategory(categoryName, portalId, currentDispName);
+                    },
+                    icon: const Icon(Icons.delete_sweep_rounded, size: 18),
+                    label: const Text('DELETE FOLDER & ALL CHANNELS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
                 ],
               ),
             );
           },
         );
       },
+    );
+  }
+
+  void _confirmDeleteChannel(IptvChannel channel) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF131722),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+        title: Row(
+          children: [
+            const Icon(Icons.delete_forever_rounded, color: Color(0xFFEF4444), size: 22),
+            const SizedBox(width: 8),
+            Text('Delete Stream Channel', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text('Are you sure you want to delete "${channel.displayName}" from IPTV channels?', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              _showLoadingOverlay();
+              final res = await _adminApi.deleteChannel(channel.id);
+              _hideLoadingOverlay();
+              if (mounted) {
+                if (res['success'] == true) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Channel deleted successfully'), backgroundColor: Color(0xFF22C55E)),
+                  );
+                  ref.read(iptvProvider.notifier).fetchChannels();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Delete failed: ${res['error']}'), backgroundColor: const Color(0xFFEF4444)),
+                  );
+                }
+              }
+            },
+            child: const Text('Delete Channel', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteCategory(String categoryName, int portalId, String dispName) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF131722),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+        title: Row(
+          children: [
+            const Icon(Icons.folder_delete_rounded, color: Color(0xFFEF4444), size: 22),
+            const SizedBox(width: 8),
+            Text('Delete Category Folder', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text('Are you sure you want to delete category "$dispName" and ALL channels inside it from your IPTV list?', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              _showLoadingOverlay();
+              final res = await _adminApi.deleteCategory(categoryName, portalId);
+              _hideLoadingOverlay();
+              if (mounted) {
+                if (res['success'] == true) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Category folder & channels deleted'), backgroundColor: Color(0xFF22C55E)),
+                  );
+                  ref.read(iptvProvider.notifier).fetchChannels();
+                  ref.read(settingsProvider.notifier).fetchSettings();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Delete failed: ${res['error']}'), backgroundColor: const Color(0xFFEF4444)),
+                  );
+                }
+              }
+            },
+            child: const Text('Delete Folder', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1128,100 +1343,279 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
   void _openChannelEditDialog(IptvChannel channel) {
     final nameCtrl = TextEditingController(text: channel.displayName);
     final logoCtrl = TextEditingController(text: channel.logoUrl);
+    final epgCtrl = TextEditingController(text: channel.stalkerId ?? channel.name);
+    String selectedLanguage = 'Malayalam';
 
     showDialog(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF161B22),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(color: Colors.white.withOpacity(0.08)),
-          ),
-          title: Text(
-            'Edit Channel #${channel.position}',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('CUSTOM CHANNEL NAME', style: TextStyle(color: Colors.white30, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.06)),
-                ),
-                child: TextField(
-                  controller: nameCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: const InputDecoration(
-                    hintText: 'Enter name override',
-                    hintStyle: TextStyle(color: Colors.white30),
-                    border: InputBorder.none,
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final logoUrlText = logoCtrl.text.trim();
+            return Dialog(
+              backgroundColor: const Color(0xFF131722),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.88,
+                padding: const EdgeInsets.all(20),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFEF4444), Color(0xFFF59E0B)],
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(color: const Color(0xFFEF4444).withOpacity(0.3), blurRadius: 10, spreadRadius: 1),
+                              ],
+                            ),
+                            child: const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Edit Stream Channel',
+                                  style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17),
+                                ),
+                                Text(
+                                  'Channel #${channel.position} • Portal Stream',
+                                  style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      InkWell(
+                        onTap: () async {
+                          final pickedMaster = await MasterChannelPickerDialog.show(ctx);
+                          if (pickedMaster != null) {
+                            setDialogState(() {
+                              nameCtrl.text = pickedMaster.displayName;
+                              if (pickedMaster.logoUrl.isNotEmpty) logoCtrl.text = pickedMaster.logoUrl;
+                              if (pickedMaster.epgId.isNotEmpty) epgCtrl.text = pickedMaster.epgId;
+                              if (pickedMaster.language != null) selectedLanguage = pickedMaster.language!;
+                            });
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [const Color(0xFF8B5CF6).withOpacity(0.2), const Color(0xFF6366F1).withOpacity(0.1)],
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.4)),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.playlist_add_check_rounded, color: Color(0xFFA855F7), size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Link to Master Channel Catalog',
+                                style: TextStyle(color: Color(0xFFA855F7), fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      const Text('CUSTOM CHANNEL NAME', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: TextField(
+                          controller: nameCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                          decoration: const InputDecoration(
+                            hintText: 'Enter channel name override',
+                            hintStyle: TextStyle(color: Colors.white30),
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('LOGO URL', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.04),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white.withOpacity(0.08)),
+                              ),
+                              child: TextField(
+                                controller: logoCtrl,
+                                maxLines: 2,
+                                style: const TextStyle(color: Colors.white, fontSize: 12),
+                                decoration: const InputDecoration(
+                                  hintText: 'http://...',
+                                  hintStyle: TextStyle(color: Colors.white30),
+                                  border: InputBorder.none,
+                                ),
+                                onChanged: (_) => setDialogState(() {}),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withOpacity(0.08)),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: logoUrlText.startsWith('http')
+                                  ? CachedNetworkImage(
+                                      imageUrl: logoUrlText,
+                                      fit: BoxFit.cover,
+                                      errorWidget: (_, __, ___) => const Icon(Icons.tv, size: 20, color: Colors.white30),
+                                    )
+                                  : const Icon(Icons.tv, size: 20, color: Colors.white30),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('LINKED EPG CHANNEL ID', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: TextField(
+                          controller: epgCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          decoration: const InputDecoration(
+                            hintText: 'EPG channel ID...',
+                            hintStyle: TextStyle(color: Colors.white30),
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('LANGUAGE CATEGORY', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedLanguage,
+                            dropdownColor: const Color(0xFF131722),
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            isExpanded: true,
+                            items: ['Malayalam', 'Tamil', 'Hindi', 'English', 'Telugu', 'Kannada', 'Sports', 'News', 'Kids']
+                                .map((lang) => DropdownMenuItem(value: lang, child: Text(lang)))
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) setDialogState(() => selectedLanguage = val);
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFEF4444),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                              elevation: 4,
+                            ),
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              _showLoadingOverlay();
+                              
+                              final res = await _adminApi.updateChannelDetails(
+                                channel.id,
+                                nameCtrl.text.trim(),
+                                logoCtrl.text.trim(),
+                              );
+                              
+                              // Sync to Master Registry MySQL database
+                              final master = MasterChannel(
+                                id: 'master_${channel.id}',
+                                displayName: nameCtrl.text.trim().isNotEmpty ? nameCtrl.text.trim() : channel.name,
+                                logoUrl: logoCtrl.text.trim().isNotEmpty ? logoCtrl.text.trim() : channel.logoUrl,
+                                epgId: epgCtrl.text.trim(),
+                                categoryName: channel.categoryName,
+                                language: selectedLanguage,
+                                aliases: [channel.name.toLowerCase().trim()],
+                              );
+                              await MasterChannelRepository.save(master);
+
+                              _hideLoadingOverlay();
+                              
+                              if (mounted) {
+                                if (res['success'] == true) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Channel details & Master EPG synced successfully!'), backgroundColor: Color(0xFF22C55E)),
+                                  );
+                                  ref.read(iptvProvider.notifier).fetchChannels();
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Failed to edit channel'), backgroundColor: Color(0xFFEF4444)),
+                                  );
+                                }
+                              }
+                            },
+                            child: const Text('Update Channel Details', style: TextStyle(fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text('LOGO URL', style: TextStyle(color: Colors.white30, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.06)),
-                ),
-                child: TextField(
-                  controller: logoCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: const InputDecoration(
-                    hintText: 'http://...',
-                    hintStyle: TextStyle(color: Colors.white30),
-                    border: InputBorder.none,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(ctx);
-                _showLoadingOverlay();
-                
-                final res = await _adminApi.updateChannelDetails(
-                  channel.id,
-                  nameCtrl.text.trim(),
-                  logoCtrl.text.trim(),
-                );
-                
-                _hideLoadingOverlay();
-                
-                if (mounted) {
-                  if (res['success'] == true) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Channel details updated successfully'), backgroundColor: Color(0xFF22C55E)),
-                    );
-                    ref.read(iptvProvider.notifier).fetchChannels();
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Failed to edit channel'), backgroundColor: Color(0xFFEF4444)),
-                    );
-                  }
-                }
-              },
-              child: const Text('Update', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.bold)),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -1409,6 +1803,66 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class AutoScrollEpgText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+
+  const AutoScrollEpgText({super.key, required this.text, required this.style});
+
+  @override
+  State<AutoScrollEpgText> createState() => _AutoScrollEpgTextState();
+}
+
+class _AutoScrollEpgTextState extends State<AutoScrollEpgText> {
+  late ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startScroll());
+  }
+
+  void _startScroll() async {
+    if (!mounted || !_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    if (maxScroll > 0) {
+      await Future.delayed(const Duration(seconds: 1));
+      while (mounted && _scrollController.hasClients) {
+        await _scrollController.animateTo(
+          maxScroll,
+          duration: Duration(milliseconds: (maxScroll * 45).toInt().clamp(2000, 8000)),
+          curve: Curves.linear,
+        );
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted || !_scrollController.hasClients) break;
+        await _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+        );
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: _scrollController,
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      child: Text(widget.text, style: widget.style),
     );
   }
 }
