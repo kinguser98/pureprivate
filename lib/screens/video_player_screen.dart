@@ -455,11 +455,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         if (widget.isLive) {
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
-          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '3');
+          await nativePlayer.setProperty('cache-secs', '5');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
-          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
         } else if (!isLocalStream) {
           // Network timeout & buffering for proxied & Telegram local server streams
           await nativePlayer.setProperty('network-timeout', '60');

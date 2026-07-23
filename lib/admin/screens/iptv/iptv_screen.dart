@@ -12,6 +12,7 @@ import '../../utils/drawer_helper.dart';
 import '../../utils/admin_api_client.dart';
 import '../../widgets/common/glass_card.dart';
 import '../../../data/stalker_resolver.dart';
+import '../../../data/dns_proxy.dart';
 
 class IptvScreen extends ConsumerStatefulWidget {
   const IptvScreen({super.key});
@@ -1293,6 +1294,28 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
           headers = resolved.headers;
         } catch (e) {
           debugPrint('ChannelPlayerDialog failed to resolve stalker stream: $e');
+        }
+      }
+
+      // Rewrite URL through local DNS proxy relay (same as live_tv_screen)
+      if (playUrl.startsWith('http')) {
+        try {
+          final uri = Uri.parse(playUrl);
+          final dnsProxy = CustomDnsProxy();
+          if (dnsProxy.port != null) {
+            var cleanUri = uri;
+            if (!uri.queryParameters.containsKey('local_proxy_headers') && headers.isNotEmpty) {
+              final newParams = Map<String, String>.from(uri.queryParameters);
+              newParams['local_proxy_headers'] = jsonEncode(headers);
+              cleanUri = uri.replace(queryParameters: newParams);
+            }
+            final hostWithPort = cleanUri.hasPort ? '${cleanUri.host}:${cleanUri.port}' : cleanUri.host;
+            playUrl = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
+            headers = {}; // headers are encoded in the proxy URL
+            debugPrint('ChannelPlayerDialog: Rewrote source to proxy relay: $playUrl');
+          }
+        } catch (e) {
+          debugPrint('ChannelPlayerDialog error rewriting proxy URL: $e');
         }
       }
 
