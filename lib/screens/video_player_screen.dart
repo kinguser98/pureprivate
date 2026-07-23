@@ -244,10 +244,39 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
+    _startProxyStatsTimer();
+  }
+
+  Timer? _proxyStatsTimer;
+  int _lastDemuxerBytesRead = 0;
+
+  void _startProxyStatsTimer() {
+    _proxyStatsTimer?.cancel();
+    _lastDemuxerBytesRead = 0;
+    ProxyStats.reset();
+    _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (mounted && _player.platform is NativePlayer) {
+        final nativePlayer = _player.platform as NativePlayer;
+        try {
+          final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
+          var bytes = int.tryParse(res1.toString()) ?? 0;
+          if (bytes == 0) {
+            final res2 = await nativePlayer.getProperty('bytes-read');
+            bytes = int.tryParse(res2.toString()) ?? 0;
+          }
+          if (bytes > _lastDemuxerBytesRead) {
+            final delta = bytes - _lastDemuxerBytesRead;
+            ProxyStats.addBytes(delta);
+            _lastDemuxerBytesRead = bytes;
+          }
+        } catch (_) {}
+      }
+    });
   }
 
   @override
   void dispose() {
+    _proxyStatsTimer?.cancel();
     _hideControlsTimer?.cancel();
     _hudTimer?.cancel();
     _clockTimer?.cancel();
@@ -455,10 +484,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         if (widget.isLive) {
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '3');
-          await nativePlayer.setProperty('cache-secs', '5');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
+          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
+          await nativePlayer.setProperty('cache-pause-wait', '1');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
+          await nativePlayer.setProperty('framedrop', 'vo');
+          await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('correct-pts', 'yes');
+          await nativePlayer.setProperty('audio-pitch-correction', 'yes');
         } else if (!isLocalStream) {
           // Network timeout & buffering for proxied & Telegram local server streams
           await nativePlayer.setProperty('network-timeout', '60');

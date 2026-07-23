@@ -1,10 +1,11 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:video_player/video_player.dart';
-import 'package:chewie/chewie.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import '../../providers/iptv_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../models/iptv_channel.dart';
@@ -12,7 +13,6 @@ import '../../utils/drawer_helper.dart';
 import '../../utils/admin_api_client.dart';
 import '../../widgets/common/glass_card.dart';
 import '../../../data/stalker_resolver.dart';
-import '../../../data/dns_proxy.dart';
 
 class IptvScreen extends ConsumerStatefulWidget {
   const IptvScreen({super.key});
@@ -468,23 +468,19 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isHidden 
-                  ? const Color(0xFFEF4444).withOpacity(0.04) 
-                  : const Color(0xFF1A1F2E).withOpacity(0.3),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isHidden 
-                    ? const Color(0xFFEF4444).withOpacity(0.15) 
-                    : Colors.white.withOpacity(0.05)
-              ),
-            ),
-            child: Theme(
+      child: Container(
+        decoration: BoxDecoration(
+          color: isHidden 
+              ? const Color(0xFFEF4444).withOpacity(0.08) 
+              : const Color(0xFF1A1F2E).withOpacity(0.7),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isHidden 
+                ? const Color(0xFFEF4444).withOpacity(0.15) 
+                : Colors.white.withOpacity(0.05)
+          ),
+        ),
+        child: Theme(
               data: Theme.of(context).copyWith(
                 dividerColor: Colors.transparent,
                 unselectedWidgetColor: Colors.white.withOpacity(0.3),
@@ -676,8 +672,6 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
               ),
             ),
           ),
-        ),
-      ),
     );
   }
 
@@ -685,23 +679,21 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
     return Padding(
       key: key,
       padding: const EdgeInsets.only(bottom: 6),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1F2E).withOpacity(0.25),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: channel.enabled
-                    ? Colors.white.withOpacity(0.06)
-                    : Colors.red.withOpacity(0.15),
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
+      child: Container(
+        decoration: BoxDecoration(
+          color: channel.enabled
+              ? const Color(0xFF1A1F2E).withOpacity(0.85)
+              : Colors.red.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: channel.enabled
+                ? Colors.white.withOpacity(0.06)
+                : Colors.red.withOpacity(0.15),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
                 children: [
                   if (isReorderMode) ...[
                     ReorderableDragStartListener(
@@ -874,9 +866,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
               ),
             ),
           ),
-        ),
-      ),
-    );
+        );
   }
 
   void _openCategorySettingsSheet(String categoryName, String currentDispName, bool isCurrentlyHidden, int portalId) {
@@ -1255,14 +1245,17 @@ class ChannelPlayerDialog extends StatefulWidget {
 }
 
 class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
-  VideoPlayerController? _videoPlayerController;
-  ChewieController? _chewieController;
+  Player? _player;
+  VideoController? _videoController;
+  Timer? _keepAliveTimer;
   bool _isLoading = true;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _player = Player();
+    _videoController = VideoController(_player!);
     _initPlayer();
   }
 
@@ -1297,53 +1290,34 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
         }
       }
 
-      // Rewrite URL through local DNS proxy relay (same as live_tv_screen)
-      if (playUrl.startsWith('http')) {
-        try {
-          final uri = Uri.parse(playUrl);
-          final dnsProxy = CustomDnsProxy();
-          if (dnsProxy.port != null) {
-            var cleanUri = uri;
-            if (!uri.queryParameters.containsKey('local_proxy_headers') && headers.isNotEmpty) {
-              final newParams = Map<String, String>.from(uri.queryParameters);
-              newParams['local_proxy_headers'] = jsonEncode(headers);
-              cleanUri = uri.replace(queryParameters: newParams);
-            }
-            final hostWithPort = cleanUri.hasPort ? '${cleanUri.host}:${cleanUri.port}' : cleanUri.host;
-            playUrl = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
-            headers = {}; // headers are encoded in the proxy URL
-            debugPrint('ChannelPlayerDialog: Rewrote source to proxy relay: $playUrl');
-          }
-        } catch (e) {
-          debugPrint('ChannelPlayerDialog error rewriting proxy URL: $e');
-        }
+      final dynamic platform = _player!.platform;
+      try {
+        await platform.setProperty('hwdec', 'auto-safe');
+        await platform.setProperty('framedrop', 'vo');
+        await platform.setProperty('autosync', '0');
+        await platform.setProperty('correct-pts', 'yes');
+        await platform.setProperty('audio-pitch-correction', 'yes');
+        await platform.setProperty('cache', 'yes');
+        await platform.setProperty('cache-on-disk', 'no');
+        await platform.setProperty('demuxer-max-bytes', '33554432');
+        await platform.setProperty('demuxer-readahead-secs', '15');
+        await platform.setProperty('cache-secs', '15');
+        await platform.setProperty('network-timeout', '15');
+        await platform.setProperty('hr-seek', 'no');
+      } catch (_) {}
+
+      await _player!.open(
+        Media(playUrl, httpHeaders: headers),
+        play: true,
+      );
+
+      if (widget.portalId > 0) {
+        _keepAliveTimer?.cancel();
+        _keepAliveTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+          StalkerResolver.keepAlive(widget.portalId);
+        });
       }
 
-      _videoPlayerController = VideoPlayerController.networkUrl(
-        Uri.parse(playUrl),
-        httpHeaders: headers,
-      );
-      await _videoPlayerController!.initialize();
-      
-      _chewieController = ChewieController(
-        videoPlayerController: _videoPlayerController!,
-        autoPlay: true,
-        isLive: true,
-        aspectRatio: _videoPlayerController!.value.aspectRatio,
-        errorBuilder: (context, errorMessage) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                'Playback Error: $errorMessage',
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          );
-        },
-      );
-      
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -1361,8 +1335,8 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
 
   @override
   void dispose() {
-    _chewieController?.dispose();
-    _videoPlayerController?.dispose();
+    _keepAliveTimer?.cancel();
+    _player?.dispose();
     super.dispose();
   }
 
@@ -1427,7 +1401,7 @@ class _ChannelPlayerDialogState extends State<ChannelPlayerDialog> {
                                 ),
                               ),
                             )
-                          : Chewie(controller: _chewieController!),
+                          : Video(controller: _videoController!),
                 ),
               ),
               const SizedBox(height: 16),

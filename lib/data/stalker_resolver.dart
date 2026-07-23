@@ -335,6 +335,46 @@ class StalkerResolver {
     return token;
   }
 
+  /// Sends Stalker portal keep_alive heartbeat to maintain stream token on CDN
+  static Future<void> keepAlive(int portalId) async {
+    try {
+      final settings = await _getSettings(portalId);
+      final token = await _authenticate(portalId, settings);
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final macAddress = (settings['mac_address'] ?? '').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      final cookiesStr = _cachedCookiesMap[portalId] ?? 'mac=$macAddress; token=$token; Bearer=$token';
+
+      final headers = {
+        'User-Agent': userAgent,
+        'Cookie': _getMergedCookies(portalId, cookiesStr),
+        'Authorization': 'Bearer $token',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+
+      // 1. Standard Live TV heartbeat: type=itv&action=keep_alive
+      var keepAliveUrl = '$portalUrl?type=itv&action=keep_alive&mac=${Uri.encodeComponent(macAddress)}';
+      keepAliveUrl = _appendDeviceParams(keepAliveUrl, deviceId);
+
+      var res = await _stalkerGet(keepAliveUrl, headers: headers, portalId: portalId, timeoutSeconds: 5);
+
+      // 2. Fallback if portal returns non-200 (e.g. 500): type=stb&action=get_profile
+      if (res.statusCode != 200) {
+        var profileUrl = '$portalUrl?type=stb&action=get_profile&mac=${Uri.encodeComponent(macAddress)}';
+        profileUrl = _appendDeviceParams(profileUrl, deviceId);
+        res = await _stalkerGet(profileUrl, headers: headers, portalId: portalId, timeoutSeconds: 5);
+      }
+
+      debugPrint('Stalker keepAlive status (${res.statusCode}) for portal $portalId');
+    } catch (e) {
+      debugPrint('Stalker keepAlive error: $e');
+    }
+  }
+
   /// Resolves the direct channel stream link from Stalker cmd
   static Future<StalkerStream> resolveStream(String cmd, int portalId, {bool isLive = true}) async {
     final settings = await _getSettings(portalId);
