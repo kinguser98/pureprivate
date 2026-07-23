@@ -165,6 +165,15 @@ class TelegramFileStreamServer {
       throw StateError('message $msgId on peer $pid has no downloadable media');
     }
 
+    // Warm up the target DC synchronously to prevent the client player from 
+    // requesting data before authorization export/import is completed.
+    try {
+      print('[STREAM SERVER] Synchronous warmup of target DC: ${resolved.dcId}');
+      await warmup(dcId: resolved.dcId, workers: 2);
+    } catch (e) {
+      print('[STREAM SERVER] Warmup failed/skipped for DC ${resolved.dcId}: $e');
+    }
+
     // Auto-refresh: if file_reference expires mid-stream, drop the cache
     // entry and re-resolve so the next chunk gets a fresh location.
     Future<InputFileLocation> refresher(InputFileLocation _) async {

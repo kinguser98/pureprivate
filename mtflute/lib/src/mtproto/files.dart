@@ -83,16 +83,22 @@ Future<_WorkerPool> _buildPool(MtpClient main, int dcId, int count) async {
 
   while (workers.length < count) {
     try {
+      print('[POOL] exportToDc($dcId) start (mainDc=${main.dcId})');
       final w = await main.exportToDc(dcId);
+      print('[POOL] exportToDc($dcId) success');
       if (!isSameDc || w != main) main.addSenderFor(dcId, w);
       workers.add(w);
-    } catch (_) {
+    } catch (e, st) {
+      print('[POOL] exportToDc($dcId) FAILED: $e\n$st');
       if (workers.isEmpty && isSameDc) workers.add(main);
       break;
     }
   }
 
-  if (workers.isEmpty) workers.add(main);
+  if (workers.isEmpty) {
+    print('[POOL] WARNING: No workers for DC $dcId — falling back to main client (DC ${main.dcId}). This will fail for cross-DC downloads!');
+    workers.add(main);
+  }
   return _WorkerPool(workers, main: main);
 }
 
