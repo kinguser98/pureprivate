@@ -28,6 +28,7 @@ import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/widgets/person_detail_sheet.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
@@ -5082,48 +5083,69 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 20,
-                                backgroundColor: AppColors.surface,
-                                backgroundImage:
-                                    _directorProfileUrl != null &&
-                                        _directorProfileUrl!.isNotEmpty
-                                    ? NetworkImage(_directorProfileUrl!)
-                                    : null,
-                                child:
-                                    _directorProfileUrl == null ||
-                                        _directorProfileUrl!.isEmpty
-                                    ? const Icon(
-                                        Icons.person_rounded,
-                                        color: Colors.white30,
-                                      )
-                                    : null,
-                              ),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          InkWell(
+                            onTap: () {
+                              if (_dynamicDirector != null && _dynamicDirector!.isNotEmpty) {
+                                PersonDetailSheet.show(
+                                  context,
+                                  personName: _dynamicDirector!,
+                                  photoUrl: _directorProfileUrl,
+                                );
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(12),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    _dynamicDirector!,
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                    ),
+                                  CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor: AppColors.surface,
+                                    backgroundImage:
+                                        _directorProfileUrl != null &&
+                                            _directorProfileUrl!.isNotEmpty
+                                        ? NetworkImage(_directorProfileUrl!)
+                                        : null,
+                                    child:
+                                        _directorProfileUrl == null ||
+                                            _directorProfileUrl!.isEmpty
+                                        ? const Icon(
+                                            Icons.person_rounded,
+                                            color: Colors.white30,
+                                          )
+                                        : null,
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Director',
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white38,
-                                      fontSize: 12,
-                                    ),
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _dynamicDirector!,
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            'Director',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white38,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFFA855F7), size: 10),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
+                            ),
                           ),
                           const SizedBox(height: 24),
                         ],
@@ -5147,49 +5169,59 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   const SizedBox(width: 14),
                               itemBuilder: (context, index) {
                                 final actor = _dynamicCast[index];
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 60,
-                                      height: 60,
-                                      decoration: BoxDecoration(
-                                        color: AppColors.surface,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.white12,
-                                          width: 0.8,
+                                return InkWell(
+                                  onTap: () {
+                                    PersonDetailSheet.show(
+                                      context,
+                                      personName: actor.name,
+                                      photoUrl: actor.profileUrl,
+                                    );
+                                  },
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 60,
+                                        height: 60,
+                                        decoration: BoxDecoration(
+                                          color: AppColors.surface,
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Colors.white12,
+                                            width: 0.8,
+                                          ),
+                                        ),
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(12),
+                                          child: actor.profileUrl.isNotEmpty
+                                              ? MovieImage(
+                                                  source: actor.profileUrl,
+                                                  fit: BoxFit.cover,
+                                                )
+                                              : const Icon(
+                                                  Icons.person_rounded,
+                                                  color: Colors.white30,
+                                                  size: 24,
+                                                ),
                                         ),
                                       ),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: actor.profileUrl.isNotEmpty
-                                            ? MovieImage(
-                                                source: actor.profileUrl,
-                                                fit: BoxFit.cover,
-                                              )
-                                            : const Icon(
-                                                Icons.person_rounded,
-                                                color: Colors.white30,
-                                                size: 24,
-                                              ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    SizedBox(
-                                      width: 80,
-                                      child: Text(
-                                        actor.name,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 11,
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: 80,
+                                        child: Text(
+                                          actor.name,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 11,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 );
                               },
                             ),

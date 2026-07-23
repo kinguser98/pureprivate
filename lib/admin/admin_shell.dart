@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:private_cinema_mobile/admin/config/theme.dart';
@@ -12,6 +12,7 @@ import 'package:private_cinema_mobile/admin/screens/iptv/iptv_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/add_movie/add_movie_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/edit_movie/edit_movie_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/languages/languages_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/master_channels/master_channels_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/iptv_settings/iptv_settings_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/app_settings/app_settings_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/bulk_updater/bulk_updater_screen.dart';
@@ -72,6 +73,7 @@ final _adminRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/dashboard', builder: (context, state) => const DashboardScreen()),
           GoRoute(path: '/movies', builder: (context, state) => const MoviesScreen()),
           GoRoute(path: '/iptv', builder: (context, state) => const IptvScreen()),
+          GoRoute(path: '/master-channels', builder: (context, state) => const MasterChannelsScreen()),
           GoRoute(path: '/add-movie', builder: (context, state) => const AddMovieScreen()),
           GoRoute(path: '/edit-movie', builder: (context, state) {
             final id = state.uri.queryParameters['id'] ?? '';

@@ -33,9 +33,46 @@ class TmdbDetails {
 }
 
 class TmdbCast {
+  final int id;
   final String name;
   final String? photoPath;
-  TmdbCast({required this.name, this.photoPath});
+  TmdbCast({required this.name, this.photoPath, this.id = 0});
+}
+
+class TmdbPersonDetails {
+  final int id;
+  final String name;
+  final String? biography;
+  final String? profilePath;
+  final String? birthday;
+  final String? placeOfBirth;
+  final String? knownForDepartment;
+  TmdbPersonDetails({
+    required this.id,
+    required this.name,
+    this.biography,
+    this.profilePath,
+    this.birthday,
+    this.placeOfBirth,
+    this.knownForDepartment,
+  });
+}
+
+class TmdbPersonFilmography {
+  final int id;
+  final String title;
+  final String? posterPath;
+  final String? releaseDate;
+  final String? mediaType;
+  final String? characterOrJob;
+  TmdbPersonFilmography({
+    required this.id,
+    required this.title,
+    this.posterPath,
+    this.releaseDate,
+    this.mediaType,
+    this.characterOrJob,
+  });
 }
 
 class TmdbService {
@@ -79,7 +116,8 @@ class TmdbService {
       if (data == null || data['success'] == false) return null;
 
       final credits = data['credits'] as Map? ?? {};
-      final castList = (credits['cast'] as List? ?? []).take(10).map<TmdbCast>((c) => TmdbCast(
+      final castList = (credits['cast'] as List? ?? []).take(15).map<TmdbCast>((c) => TmdbCast(
+        id: c['id'] ?? 0,
         name: c['name'] ?? '',
         photoPath: c['profile_path'] != null ? '$_profileBase${c['profile_path']}' : null,
       )).toList();
@@ -107,6 +145,98 @@ class TmdbService {
     } catch (e) {
       debugPrint('TMDB details error: $e');
       return null;
+    }
+  }
+
+  static Future<int?> searchPersonId(String name) async {
+    if (name.isEmpty) return null;
+    try {
+      final res = await _dio.get('$_baseUrl/search/person', queryParameters: {'api_key': _apiKey, 'query': name});
+      final results = res.data?['results'] as List?;
+      if (results != null && results.isNotEmpty) {
+        return results.first['id'] as int?;
+      }
+    } catch (e) {
+      debugPrint('TMDB searchPersonId error: $e');
+    }
+    return null;
+  }
+
+  static Future<TmdbPersonDetails?> getPersonDetails(int personId) async {
+    try {
+      final res = await _dio.get('$_baseUrl/person/$personId', queryParameters: {'api_key': _apiKey});
+      final d = res.data;
+      if (d == null) return null;
+      return TmdbPersonDetails(
+        id: d['id'] ?? personId,
+        name: d['name'] ?? '',
+        biography: d['biography'],
+        profilePath: d['profile_path'] != null ? '$_profileBase${d['profile_path']}' : null,
+        birthday: d['birthday'],
+        placeOfBirth: d['place_of_birth'],
+        knownForDepartment: d['known_for_department'],
+      );
+    } catch (e) {
+      debugPrint('TMDB getPersonDetails error: $e');
+      return null;
+    }
+  }
+
+  static Future<List<TmdbPersonFilmography>> getPersonFilmography(int personId) async {
+    try {
+      final res = await _dio.get('$_baseUrl/person/$personId/combined_credits', queryParameters: {'api_key': _apiKey});
+      final data = res.data;
+      if (data == null) return [];
+
+      final List<TmdbPersonFilmography> list = [];
+      final cast = data['cast'] as List? ?? [];
+      final crew = data['crew'] as List? ?? [];
+
+      for (final item in cast) {
+        final title = item['title'] ?? item['name'] ?? '';
+        if (title.isEmpty) continue;
+        list.add(TmdbPersonFilmography(
+          id: item['id'] ?? 0,
+          title: title,
+          posterPath: item['poster_path'] != null ? '$_posterBase${item['poster_path']}' : null,
+          releaseDate: item['release_date'] ?? item['first_air_date'],
+          mediaType: item['media_type'] ?? 'movie',
+          characterOrJob: item['character'],
+        ));
+      }
+
+      for (final item in crew) {
+        if (item['job'] == 'Director') {
+          final title = item['title'] ?? item['name'] ?? '';
+          if (title.isEmpty) continue;
+          final isDup = list.any((e) => e.id == item['id']);
+          if (!isDup) {
+            list.add(TmdbPersonFilmography(
+              id: item['id'] ?? 0,
+              title: title,
+              posterPath: item['poster_path'] != null ? '$_posterBase${item['poster_path']}' : null,
+              releaseDate: item['release_date'] ?? item['first_air_date'],
+              mediaType: item['media_type'] ?? 'movie',
+              characterOrJob: 'Director',
+            ));
+          }
+        }
+      }
+
+      // Sort filmography: latest release date first (descending order)
+      list.sort((a, b) {
+        final dateA = a.releaseDate ?? '';
+        final dateB = b.releaseDate ?? '';
+        if (dateA.isEmpty && dateB.isEmpty) return 0;
+        if (dateA.isEmpty) return 1;
+        if (dateB.isEmpty) return -1;
+        return dateB.compareTo(dateA);
+      });
+
+      return list;
+    } catch (e) {
+      debugPrint('TMDB getPersonFilmography error: $e');
+      return [];
     }
   }
 }

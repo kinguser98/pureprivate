@@ -54,6 +54,7 @@ class AppDrawer extends ConsumerWidget {
                   _divider(),
                   _sectionHeader('IPTV'),
                   _navItem(context, ref, Icons.tv, 'IPTV Channels', '/iptv', currentRoute == '/iptv'),
+                  _navItem(context, ref, Icons.playlist_add_check_circle_rounded, 'Master Channels', '/master-channels', currentRoute == '/master-channels'),
                   _navItem(context, ref, Icons.settings_input_component, 'IPTV Settings', '/iptv-settings', false),
                   _divider(),
                   _sectionHeader('Tools'),

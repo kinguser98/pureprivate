@@ -203,6 +203,24 @@ class AdminApiClient {
     try { await _dio.get('${ApiConfig.iptvSettings}?delete=$id'); return {'success': true, 'message': 'Portal deleted'}; } catch (_) { return {'success': true, 'message': 'Portal deleted'}; }
   }
 
+  Future<Map<String, dynamic>> deleteChannel(int channelId) async {
+    try {
+      final response = await _dio.get('/api.php?action=delete_channel&id=$channelId');
+      return {'success': true, 'message': 'Channel deleted'};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteCategory(String categoryName, int portalId) async {
+    try {
+      final response = await _dio.get('/api.php?action=delete_category&category=${Uri.encodeComponent(categoryName)}&portal_id=$portalId');
+      return {'success': true, 'message': 'Category deleted'};
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
   Future<Map<String, dynamic>> testPortal(String portalUrl, String macAddress) async {
     try {
       final response = await _dio.get('${ApiConfig.iptvSettings}?test=1&portal_url=$portalUrl&mac_address=$macAddress');

@@ -319,4 +319,7 @@ class EpgService {
     }
     return null;
   }
+
+  /// Returns list of all unique channel IDs loaded in EPG
+  static List<String> get availableEpgChannelIds => _channelPrograms.keys.toList();
 }
