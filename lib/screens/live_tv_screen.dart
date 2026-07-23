@@ -57,6 +57,14 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
   Timer? _miniEpgTimer;
   EpgProgram? _miniCurrentProgram;
 
+  // Auto-reconnect & Stalker keep_alive state
+  bool _userStoppedMini = false;
+  DateTime? _miniPlaybackStarted;
+  Timer? _reconnectDebounce;
+  Timer? _stalkerKeepAliveTimer;
+  Timer? _proxyStatsTimer;
+  int _lastDemuxerBytesRead = 0;
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +77,23 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     _miniController = VideoController(_miniPlayer!);
     _miniPlayer!.stream.playing.listen((playing) {
       if (mounted) setState(() => _isMiniPlayerPlaying = playing);
+      if (playing) {
+        _miniPlaybackStarted ??= DateTime.now();
+        _startStalkerKeepAliveTimer();
+      } else {
+        _stalkerKeepAliveTimer?.cancel();
+        // Fallback auto-reconnect ONLY if stream stops unexpectedly (e.g. network drop)
+        if (!_userStoppedMini && _activeMiniChannel != null && _miniPlaybackStarted != null) {
+          final elapsed = DateTime.now().difference(_miniPlaybackStarted!).inSeconds;
+          if (elapsed >= 3) {
+            _reconnectDebounce?.cancel();
+            if (mounted && !_userStoppedMini) {
+              debugPrint('LiveTvScreen: Stream stopped unexpectedly after ${elapsed}s — fallback auto-reconnecting...');
+              _autoReconnectMini();
+            }
+          }
+        }
+      }
     });
     _miniPlayer!.stream.volume.listen((vol) {
       if (mounted) setState(() => _isMiniPlayerMuted = vol == 0.0);
@@ -81,11 +106,81 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   @override
   void dispose() {
+    _proxyStatsTimer?.cancel();
+    _stalkerKeepAliveTimer?.cancel();
+    _reconnectDebounce?.cancel();
     _miniEpgTimer?.cancel();
     _miniPlayer?.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  void _startProxyStatsTimer() {
+    _proxyStatsTimer?.cancel();
+    _lastDemuxerBytesRead = 0;
+    ProxyStats.reset();
+    _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (mounted && _miniPlayer != null && _miniPlayer!.platform is NativePlayer) {
+        final nativePlayer = _miniPlayer!.platform as NativePlayer;
+        try {
+          final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
+          var bytes = int.tryParse(res1.toString()) ?? 0;
+          if (bytes == 0) {
+            final res2 = await nativePlayer.getProperty('bytes-read');
+            bytes = int.tryParse(res2.toString()) ?? 0;
+          }
+          if (bytes > _lastDemuxerBytesRead) {
+            final delta = bytes - _lastDemuxerBytesRead;
+            ProxyStats.addBytes(delta);
+            _lastDemuxerBytesRead = bytes;
+          }
+        } catch (_) {}
+      }
+    });
+  }
+
+  void _startStalkerKeepAliveTimer() {
+    _stalkerKeepAliveTimer?.cancel();
+    // Send initial keep_alive heartbeat immediately
+    if (_activeMiniChannel != null) {
+      final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
+      StalkerResolver.keepAlive(portalId);
+    }
+    // Periodically send keep_alive every 8 seconds to prevent Stalker portal from revoking stream token
+    _stalkerKeepAliveTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
+      if (mounted && _activeMiniChannel != null && !_userStoppedMini && _isMiniPlayerPlaying) {
+        final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
+        StalkerResolver.keepAlive(portalId);
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  /// Silently re-resolves the current Stalker stream and reopens the player.
+  /// Called as emergency fallback if the stream stalls unexpectedly.
+  Future<void> _autoReconnectMini() async {
+    if (_activeMiniChannel == null || _miniPlayer == null || _userStoppedMini) return;
+    final channel = _activeMiniChannel!;
+    final cmd = channel['cmd']?.toString() ?? '';
+    if (cmd.isEmpty) return;
+    try {
+      final portalId = int.tryParse(channel['portal_id']?.toString() ?? '') ?? 1;
+      final resolved = await StalkerResolver.resolveStream(cmd, portalId);
+      if (!mounted || _activeMiniChannel != channel || _userStoppedMini) return;
+      _userStoppedMini = true;
+      _miniPlaybackStarted = null;
+      await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
+      _userStoppedMini = false;
+      _miniPlaybackStarted = DateTime.now();
+      _startStalkerKeepAliveTimer();
+      _startProxyStatsTimer();
+      debugPrint('LiveTvScreen: Auto-reconnect successful for ${channel["name"]}');
+    } catch (e) {
+      debugPrint('LiveTvScreen: Auto-reconnect failed: $e');
+      _userStoppedMini = false;
+    }
   }
 
   void _loadEPGData() {
@@ -397,6 +492,11 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       return;
     }
 
+    // Mark intentional stop to suppress auto-reconnect & cancel keep_alive
+    _stalkerKeepAliveTimer?.cancel();
+    _reconnectDebounce?.cancel();
+    _userStoppedMini = true;
+    _miniPlaybackStarted = null;
     if (_miniPlayer != null) {
       try {
         await _miniPlayer!.stop();
@@ -457,40 +557,25 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '104857600'); // 100MB buffer limit
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30');   // 30 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '30');               // 30 seconds cache
+          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
+          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
+          await nativePlayer.setProperty('cache-pause-wait', '1');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
-          await nativePlayer.setProperty('video-sync', 'audio');
-          await nativePlayer.setProperty('autosync', '10');
-          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+          await nativePlayer.setProperty('framedrop', 'vo');
+          await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('correct-pts', 'yes');
+          await nativePlayer.setProperty('audio-pitch-correction', 'yes');
         }
 
-        ProxyStats.reset();
-
-        var resolvedUrl = resolved.url;
-        if (resolvedUrl.startsWith('http')) {
-          try {
-            final uri = Uri.parse(resolvedUrl);
-            final dnsProxy = CustomDnsProxy();
-            if (dnsProxy.port != null) {
-              var cleanUri = uri;
-              if (!uri.queryParameters.containsKey('local_proxy_headers') && resolved.headers.isNotEmpty) {
-                final newParams = Map<String, String>.from(uri.queryParameters);
-                newParams['local_proxy_headers'] = jsonEncode(resolved.headers);
-                cleanUri = uri.replace(queryParameters: newParams);
-              }
-              final hostWithPort = cleanUri.hasPort ? '${cleanUri.host}:${cleanUri.port}' : cleanUri.host;
-              resolvedUrl = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
-              debugPrint('LiveTvScreen: Rewrote source to proxy relay: $resolvedUrl');
-            }
-          } catch (e) {
-            debugPrint('LiveTvScreen error rewriting proxy URL: $e');
-          }
-        }
-
-        await _miniPlayer!.open(Media(resolvedUrl, httpHeaders: resolved.headers), play: true);
+        _userStoppedMini = true; // suppress reconnect trigger during open transition
+        await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
+        _userStoppedMini = false;
+        _miniPlaybackStarted = DateTime.now();
+        _startStalkerKeepAliveTimer();
+        _startProxyStatsTimer();
 
         final channelId = channel['stalker_id']?.toString() ?? channel['id']?.toString();
         

@@ -244,10 +244,39 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
+    _startProxyStatsTimer();
+  }
+
+  Timer? _proxyStatsTimer;
+  int _lastDemuxerBytesRead = 0;
+
+  void _startProxyStatsTimer() {
+    _proxyStatsTimer?.cancel();
+    _lastDemuxerBytesRead = 0;
+    ProxyStats.reset();
+    _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (mounted && _player.platform is NativePlayer) {
+        final nativePlayer = _player.platform as NativePlayer;
+        try {
+          final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
+          var bytes = int.tryParse(res1.toString()) ?? 0;
+          if (bytes == 0) {
+            final res2 = await nativePlayer.getProperty('bytes-read');
+            bytes = int.tryParse(res2.toString()) ?? 0;
+          }
+          if (bytes > _lastDemuxerBytesRead) {
+            final delta = bytes - _lastDemuxerBytesRead;
+            ProxyStats.addBytes(delta);
+            _lastDemuxerBytesRead = bytes;
+          }
+        } catch (_) {}
+      }
+    });
   }
 
   @override
   void dispose() {
+    _proxyStatsTimer?.cancel();
     _hideControlsTimer?.cancel();
     _hudTimer?.cancel();
     _clockTimer?.cancel();
@@ -376,18 +405,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       }
 
       final Map<String, String> playHeaders = {};
-      if (widget.headers != null) {
-        playHeaders.addAll(widget.headers!);
-      } else if (widget.videoSource.startsWith('http')) {
-        playHeaders.addAll({
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          if (widget.videoSource.contains('.m3u8') || widget.videoSource.contains('/hls/'))
-            'Referer': 'https://streamimdb.ru/',
-        });
+      final isLocalStream = widget.videoSource.contains('127.0.0.1') || 
+                            widget.videoSource.contains('localhost') || 
+                            widget.videoSource.contains('/f/');
+
+      if (!isLocalStream) {
+        if (widget.headers != null) {
+          playHeaders.addAll(widget.headers!);
+        } else if (widget.videoSource.startsWith('http')) {
+          playHeaders.addAll({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            if (widget.videoSource.contains('.m3u8') || widget.videoSource.contains('/hls/'))
+              'Referer': 'https://streamimdb.ru/',
+          });
+        }
       }
       
       // Parse inline headers from the stream URL if present
-      if (widget.videoSource.startsWith('http')) {
+      if (!isLocalStream && widget.videoSource.startsWith('http')) {
         try {
           final uri = Uri.parse(widget.videoSource);
           if (uri.queryParameters.containsKey('headers')) {
@@ -414,7 +449,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
         }
         
-        if (playHeaders.isNotEmpty) {
+        if (isLocalStream) {
+          // Exact diagnostic configuration for local/loopback Telegram streams
+          await nativePlayer.setProperty('network-timeout', '60');
+          await nativePlayer.setProperty('demuxer-max-bytes', '32MiB');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8MiB');
+          await nativePlayer.setProperty('cache', 'yes');
+        } else if (playHeaders.isNotEmpty) {
           final userAgent = playHeaders['User-Agent'] ?? playHeaders['user-agent'];
           if (userAgent != null) {
             await nativePlayer.setProperty('user-agent', userAgent);
@@ -431,7 +472,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             await nativePlayer.setProperty('http-header-fields', headerList.join(','));
           }
         }
-        // Enable hardware decoding
+        // Hardware decoding configuration
         if (Platform.isAndroid) {
           await nativePlayer.setProperty('hwdec', 'auto');
         } else if (Platform.isIOS || Platform.isMacOS) {
@@ -441,43 +482,38 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
         
         if (widget.isLive) {
-          // Live stream optimizations (small buffer to handle network jitter, low latency)
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB buffer limit
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '30'); // 30 seconds cache
+          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
+          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
+          await nativePlayer.setProperty('cache-pause-wait', '1');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
-          await nativePlayer.setProperty('force-seekable', 'yes');
-        } else {
-          // Increase network timeout to prevent slow proxied sources from timing out
+          await nativePlayer.setProperty('framedrop', 'vo');
+          await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('audio-pitch-correction', 'yes');
+        } else if (!isLocalStream) {
+          // Network timeout & buffering for proxied & Telegram local server streams
           await nativePlayer.setProperty('network-timeout', '60');
-          
-          // Buffering/Streaming optimizations for low latency and smooth 60fps playback
           await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no'); // Prevent file cache errors, use memory
+          await nativePlayer.setProperty('cache-on-disk', 'no'); // Use memory cache
           await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB memory buffer
           await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216'); // 16MB backward seek cache
           await nativePlayer.setProperty('demuxer-readahead-secs', '60'); // 60 seconds readahead
           await nativePlayer.setProperty('cache-secs', '60'); // 60 seconds cache duration
           await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer 2 seconds before resuming
-          // Force VOD mode for HLS streams that omit #EXT-X-ENDLIST (Stalker, Castle, etc.)
           await nativePlayer.setProperty('stream-live', 'no');
         }
         
-        // Smooth Audio/Video Synchronization without aggressive frame drops
-        await nativePlayer.setProperty('video-sync', 'audio');
-        await nativePlayer.setProperty('framedrop', 'vo');
         await nativePlayer.setProperty('force-seekable', 'yes');
         if (Platform.isAndroid) {
           await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
         } else if (Platform.isIOS) {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
-        
-        // Disable HTTP persistent connections to avoid avformat_open_input() "Cannot reuse HTTP connection for different host" failures
-        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
       }
 
       var resolvedSource = widget.videoSource;
@@ -499,13 +535,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           );
           if (lowerSubtitle.contains('stalker') ||
               lowerSubtitle.contains('castle') ||
+              lowerSubtitle.contains('telegram') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
+              lowerSourceName.contains('telegram') ||
               lowerUrl.contains('hlowb.com') ||
               lowerUrl.contains('castle') ||
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
+              lowerUrl.contains('/f/') ||
               hasStalkerCookie) {
             shouldProxy = false;
           }

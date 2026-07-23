@@ -125,7 +125,7 @@ Future<void> _telegramStartup() async {
     await TelegramService.instance.init();
     if (TelegramService.instance.status.value == TelegramStatus.ready) {
       // Silently refresh the index so it's always up-to-date on every launch.
-      await TelegramService.instance.loadSavedMessages(limit: 200);
+      await TelegramService.instance.loadSavedMessages();
     }
   } catch (e) {
     debugPrint('Telegram startup error: $e');

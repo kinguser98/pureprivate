@@ -1691,7 +1691,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       if (match == null) {
         // Not in cache → try to refresh and re-search.
-        await TelegramService.instance.loadSavedMessages(limit: 200);
+        await TelegramService.instance.loadSavedMessages();
         final items2 = await TelegramIndexDb.instance.all();
         for (final i in items2) {
           if (i.localId == localId) {
@@ -1716,9 +1716,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         return _playWithResolution(
           resolved,
           resumeDirectly: resumeDirectly,
-          sourceName: sourceName,
-          forceNative: forceNative,
-          forceWeb: forceWeb,
+          sourceName: 'mp4/mkv',
+          forceNative: true,
+          forceWeb: false,
           headers: headers,
         );
       } catch (e) {
@@ -3620,7 +3620,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
       if (match == null) {
-        await TelegramService.instance.loadSavedMessages(limit: 200);
+        await TelegramService.instance.loadSavedMessages();
         final items2 = await TelegramIndexDb.instance.all();
         for (final item in items2) {
           if (item.localId == localId) {

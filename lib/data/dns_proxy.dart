@@ -5,6 +5,7 @@ import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'stalker_resolver.dart';
 
 class CustomDnsProxy {
   static final CustomDnsProxy _instance = CustomDnsProxy._internal();
@@ -15,6 +16,7 @@ class CustomDnsProxy {
   int? port;
   final Map<String, String> _dnsCache = {};
   HttpClient? _httpClient;
+  static final Map<String, String> _stalkerTokenReplacements = {};
 
   HttpClient _getHttpClient() {
     if (_httpClient == null) {
@@ -334,32 +336,49 @@ class CustomDnsProxy {
         // Construct a clean target URL without the 'headers' query parameter
         String cleanTargetUrl = targetUrl;
         final Map<String, String> extraHeaders = {};
+        String? stalkerCmd;
+        int? stalkerPortalId;
         try {
-          final targetUri = Uri.parse(targetUrl);
-          if (targetUri.queryParameters.containsKey('local_proxy_headers')) {
-            final headersParam = targetUri.queryParameters['local_proxy_headers'];
-            if (headersParam != null && headersParam.isNotEmpty) {
-              final decodedJson = jsonDecode(headersParam);
-              if (decodedJson is Map) {
-                decodedJson.forEach((key, value) {
-                  extraHeaders[key.toString()] = value.toString();
-                });
+          if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) {
+            final targetUri = Uri.parse(targetUrl);
+            stalkerCmd = targetUri.queryParameters['stalker_cmd'];
+            stalkerPortalId = int.tryParse(targetUri.queryParameters['stalker_portal_id'] ?? '');
+
+            if (targetUri.queryParameters.containsKey('local_proxy_headers')) {
+              final headersParam = targetUri.queryParameters['local_proxy_headers'];
+              if (headersParam != null && headersParam.isNotEmpty) {
+                final decodedJson = jsonDecode(headersParam);
+                if (decodedJson is Map) {
+                  decodedJson.forEach((key, value) {
+                    extraHeaders[key.toString()] = value.toString();
+                  });
+                }
               }
-            }
-            final cleanParams = Map<String, String>.from(targetUri.queryParameters);
-            cleanParams.remove('local_proxy_headers');
-            if (cleanParams.isEmpty) {
-              cleanTargetUrl = targetUri.replace(query: '').toString();
-              if (cleanTargetUrl.endsWith('?')) {
-                cleanTargetUrl = cleanTargetUrl.substring(0, cleanTargetUrl.length - 1);
+
+              final cleanParams = Map<String, String>.from(targetUri.queryParameters);
+              cleanParams.remove('local_proxy_headers');
+              cleanParams.remove('stalker_cmd');
+              cleanParams.remove('stalker_portal_id');
+              if (cleanParams.isEmpty) {
+                cleanTargetUrl = targetUri.replace(query: '').toString();
+                if (cleanTargetUrl.endsWith('?')) {
+                  cleanTargetUrl = cleanTargetUrl.substring(0, cleanTargetUrl.length - 1);
+                }
+              } else {
+                cleanTargetUrl = targetUri.replace(queryParameters: cleanParams).toString();
               }
-            } else {
-              cleanTargetUrl = targetUri.replace(queryParameters: cleanParams).toString();
             }
           }
         } catch (e) {
           debugPrint('CustomDnsProxy: Error extracting query headers: $e');
         }
+
+        // Apply active Stalker token replacements if any
+        _stalkerTokenReplacements.forEach((oldToken, newToken) {
+          if (cleanTargetUrl.contains(oldToken)) {
+            cleanTargetUrl = cleanTargetUrl.replaceAll(oldToken, newToken);
+          }
+        });
         
         debugPrint('CustomDnsProxy HTTP Relay: Fetching $cleanTargetUrl with retry loop');
         
@@ -421,9 +440,44 @@ class CustomDnsProxy {
         if (resp == null) {
           throw lastError ?? Exception('Failed to fetch after retries');
         }
-        request.response.statusCode = resp.statusCode;
+
+        final HttpClientResponse targetResp = resp!;
+
+        // Transparent 403/401 Stalker token auto-refresh
+        if ((targetResp.statusCode == 403 || targetResp.statusCode == 401) && stalkerCmd != null && stalkerPortalId != null) {
+          debugPrint('CustomDnsProxy: 403/401 Forbidden on Stalker stream ($cleanTargetUrl). Auto re-resolving token...');
+          try {
+            final freshStream = await StalkerResolver.resolveStream(stalkerCmd, stalkerPortalId);
+            final freshUri = Uri.parse(freshStream.url);
+            final freshToken = freshUri.queryParameters['token'];
+            final oldToken = Uri.parse(cleanTargetUrl).queryParameters['token'];
+            if (freshToken != null && freshToken.isNotEmpty && oldToken != null && oldToken.isNotEmpty) {
+              _stalkerTokenReplacements[oldToken] = freshToken;
+              cleanTargetUrl = cleanTargetUrl.replaceAll(oldToken, freshToken);
+              
+              final retryReq = await client.openUrl(request.method, Uri.parse(cleanTargetUrl)).timeout(const Duration(seconds: 30));
+              retryReq.followRedirects = false;
+              request.headers.forEach((name, values) {
+                final nameLower = name.toLowerCase();
+                if (nameLower != 'host' && nameLower != 'connection' && nameLower != 'keep-alive' && nameLower != 'user-agent') {
+                  for (final value in values) { retryReq.headers.add(name, value); }
+                }
+              });
+              retryReq.headers.set('Host', targetHostRaw);
+              retryReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+              extraHeaders.forEach((key, value) { retryReq.headers.set(key, value); });
+              resp = await retryReq.close().timeout(const Duration(seconds: 30));
+              debugPrint('CustomDnsProxy: Auto-refresh retry status: ${resp!.statusCode} for $cleanTargetUrl');
+            }
+          } catch (e) {
+            debugPrint('CustomDnsProxy: Error re-resolving Stalker token on 403: $e');
+          }
+        }
+
+        final HttpClientResponse activeResp = resp!;
+        request.response.statusCode = activeResp.statusCode;
         
-        resp.headers.forEach((name, values) {
+        activeResp.headers.forEach((name, values) {
           final nameLower = name.toLowerCase();
           if (nameLower == 'location') {
             for (final value in values) {
@@ -458,8 +512,8 @@ class CustomDnsProxy {
         
         // If it's HLS playlist, rewrite absolute and relative stream URLs to go through our proxy
         if (targetUrl.contains('.m3u8')) {
-          final bodyBytes = await resp.fold<List<int>>([], (p, e) => p..addAll(e));
-          final contentEncoding = resp.headers.value('content-encoding')?.toLowerCase() ?? '';
+          final bodyBytes = await activeResp.fold<List<int>>([], (p, e) => p..addAll(e));
+          final contentEncoding = activeResp.headers.value('content-encoding')?.toLowerCase() ?? '';
           List<int> decodedBytes;
           if (contentEncoding.contains('gzip')) {
             try {

@@ -1093,7 +1093,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     try {
                                       final items =
                                           await TelegramService.instance
-                                              .loadSavedMessages(limit: 200);
+                                              .loadSavedMessages();
                                       if (!context.mounted) return;
                                       messenger.showSnackBar(SnackBar(
                                         content: Text(
@@ -1348,22 +1348,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         String searchQuery = '';
         List<TelegramVideoItem> allFiles = [];
         bool isLoadingFiles = true;
+        bool isLoadingMore = false;
+        bool hasMore = false;
 
         return StatefulBuilder(
           builder: (context, setState) {
             if (isLoadingFiles) {
-              TelegramIndexDb.instance.all().then((items) {
+              Future.wait([
+                TelegramIndexDb.instance.all(),
+                TelegramIndexDb.loadSyncHasMore(),
+              ]).then((results) {
                 if (context.mounted) {
                   setState(() {
-                    allFiles = items;
+                    allFiles = results[0] as List<TelegramVideoItem>;
+                    hasMore = results[1] as bool;
                     isLoadingFiles = false;
                   });
                 }
               }).catchError((_) {
                 if (context.mounted) {
-                  setState(() {
-                    isLoadingFiles = false;
-                  });
+                  setState(() => isLoadingFiles = false);
                 }
               });
             }
@@ -1399,13 +1403,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             children: [
                               Icon(Icons.send_rounded, color: AppColors.accentBright, size: 24),
                               const SizedBox(width: 12),
-                              Text(
-                                'Telegram Files',
-                                style: GoogleFonts.outfit(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Telegram Files',
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  if (!isLoadingFiles)
+                                    Text(
+                                      '${allFiles.length} synced${hasMore ? ' • more available' : ' • all loaded'}',
+                                      style: GoogleFonts.outfit(
+                                        color: Colors.white38,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                ],
                               ),
                             ],
                           ),
@@ -1590,6 +1607,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     },
                                   ),
                       ),
+                      // Load More button — only visible when more pages exist
+                      if (!isLoadingFiles && hasMore && searchQuery.isEmpty) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: isLoadingMore
+                                ? null
+                                : () async {
+                                    setState(() => isLoadingMore = true);
+                                    try {
+                                      final stillMore = await TelegramService.instance.loadMoreMessages();
+                                      final newItems = await TelegramIndexDb.instance.all();
+                                      if (context.mounted) {
+                                        setState(() {
+                                          allFiles = newItems;
+                                          hasMore = stillMore;
+                                          isLoadingMore = false;
+                                        });
+                                      }
+                                    } catch (_) {
+                                      if (context.mounted) setState(() => isLoadingMore = false);
+                                    }
+                                  },
+                            icon: isLoadingMore
+                                ? SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: AppColors.accentBright,
+                                    ),
+                                  )
+                                : Icon(Icons.expand_more_rounded, color: AppColors.accentBright, size: 18),
+                            label: Text(
+                              isLoadingMore ? 'Loading next 100...' : 'Load next 100 movies',
+                              style: GoogleFonts.outfit(
+                                color: isLoadingMore ? Colors.white38 : AppColors.accentBright,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              side: BorderSide(color: AppColors.accentBright.withOpacity(0.4)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
