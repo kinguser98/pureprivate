@@ -2087,11 +2087,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
     } else {
       final isLocalTelegram = source.contains('127.0.0.1') || source.contains('localhost') || source.contains('/tg/');
-      if (isLocalTelegram) {
+      final isStalkerOrDirect = (sourceName != null && sourceName.toLowerCase().contains('stalker')) || headers != null;
+      if (isLocalTelegram || isStalkerOrDirect) {
+        final uri = Uri.tryParse(source);
+        final Map<String, String> finalHeaders = {};
+        if (headers != null) finalHeaders.addAll(headers);
+        if (uri != null && uri.queryParameters.containsKey('headers')) {
+          try {
+            final jsonHeaders = json.decode(uri.queryParameters['headers']!);
+            if (jsonHeaders is Map) {
+              jsonHeaders.forEach((k, v) {
+                finalHeaders[k.toString()] = v.toString();
+              });
+            }
+          } catch (_) {}
+        }
         _play(
           source,
           resumeDirectly: resumeDirectly,
-          headers: headers,
+          headers: finalHeaders.isEmpty ? null : finalHeaders,
           sourceName: sourceName,
         );
         return;
