@@ -28,8 +28,6 @@ import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
-import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
-import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/widgets/person_detail_sheet.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
@@ -1682,54 +1680,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     source = _sanitizeUrl(source);
 
     // Telegram Saved-Message file: resolve to a streamable URL first.
-    if (TelegramSources.isTelegramUrl(source) || source.toLowerCase().contains('telegram') || (sourceName != null && (sourceName.toLowerCase().contains('telegram') || sourceName.toLowerCase().startsWith('tg ')))) {
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext context) {
-          return ResolvingProgressDialog(
-            title: movie.title,
-            subtitle: 'Resolving Telegram Bot Stream Source...',
-          );
-        },
-      );
-
-      try {
-        final localId = TelegramSources.extractLocalId(source);
-        final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
-        TelegramVideoItem? match;
-        for (final i in items) {
+    if (TelegramSources.isTelegramUrl(source)) {
+      final localId = TelegramSources.extractLocalId(source);
+      final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+      TelegramVideoItem? match;
+      for (final i in items) {
+        if (i.localId == localId) {
+          match = i;
+          break;
+        }
+      }
+      if (match == null) {
+        // Not in cache → try to refresh and re-search.
+        await TelegramService.instance.loadSavedMessages();
+        final items2 = await TelegramIndexDb.instance.all();
+        for (final i in items2) {
           if (i.localId == localId) {
             match = i;
             break;
           }
         }
-        if (match == null) {
-          // Not in cache → try to refresh and re-search.
-          await TelegramService.instance.loadSavedMessages();
-          final items2 = await TelegramIndexDb.instance.all();
-          for (final i in items2) {
-            if (i.localId == localId) {
-              match = i;
-              break;
-            }
-          }
+      }
+      if (match == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
+            backgroundColor: const Color(0xFFEF4444),
+          ));
         }
-        if (match == null) {
-          if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(
-                  'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
-              backgroundColor: const Color(0xFFEF4444),
-            ));
-          }
-          return;
-        }
-
+        return;
+      }
+      try {
         final resolved = await TelegramService.instance.resolveStream(match);
-        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
-
         // Re-enter playback with the resolved URL.
         return _playWithResolution(
           resolved,
@@ -1740,7 +1723,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           headers: headers,
         );
       } catch (e) {
-        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Telegram resolve failed: $e'),
@@ -1775,12 +1757,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             if (mounted) Navigator.of(context).pop();
             debugPrint('Seedr error: $e');
           }
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Failed to resolve Stremio magnet stream. Add Seedr token in Settings → Debrid.'),
-            backgroundColor: Color(0xFFEF4444),
-          ));
+        } else {
+          if (mounted) Navigator.of(context).pop();
         }
+        // Fallback to WebView
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => WebViewPlayerScreen(
+              embedUrl: source,
+              title: movie.title,
+              backdropUrl: movie.displayBackdrop,
+            ),
+          ),
+        );
       }
       return;
     }
@@ -1844,8 +1833,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       return;
     }
-
-
 
     // Intercept Streamtape or Strcloud links to resolve natively completely in-app
     final lowerSource = source.toLowerCase();
