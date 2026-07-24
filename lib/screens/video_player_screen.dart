@@ -96,6 +96,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   double _audioDelay = 0.0;
   double _subtitleDelay = 0.0;
 
+  String? _resolvedSourceUrl;
+  Map<String, String>? _resolvedSourceHeaders;
+  bool _hasAttemptedFallback = false;
+
   EpgProgram? _currentProgram;
   EpgProgram? _nextProgram;
   List<EpgProgram> _upcomingPrograms = [];
@@ -371,9 +375,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
       }
     });
-    _player.stream.error.listen((e) {
+    _player.stream.error.listen((e) async {
       debugPrint('VideoPlayerScreen player error: $e');
       if (mounted) {
+        final errorStr = e.toString().toLowerCase();
+        if (!_hasAttemptedFallback && 
+            _resolvedSourceUrl != null &&
+            (errorStr.contains('codec') || 
+             errorStr.contains('decode') || 
+             errorStr.contains('open') || 
+             errorStr.contains('fail') || 
+             errorStr.contains('format') ||
+             errorStr.contains('load'))) {
+          _hasAttemptedFallback = true;
+          debugPrint('VideoPlayerScreen: Codec error. Retrying with software decoding...');
+          if (_player.platform is NativePlayer) {
+            final nativePlayer = _player.platform as NativePlayer;
+            await nativePlayer.setProperty('hwdec', 'no');
+            await _player.open(
+              Media(_resolvedSourceUrl!, httpHeaders: _resolvedSourceHeaders),
+              play: true,
+            );
+            return;
+          }
+        }
+
         setState(() {
           _hasError = true;
         });
@@ -384,10 +410,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             duration: const Duration(seconds: 8),
           ),
         );
-        // If the player is not ready or has not started playing yet, automatically pop with failure status after 2 seconds
-        if (!_ready || !_hasStartedPlaying) {
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted) {
+        if (!_ready && !_hasStartedPlaying) {
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted && !_hasStartedPlaying) {
               Navigator.of(context).pop(true);
             }
           });
@@ -480,7 +505,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             headerList.add('$key: $value');
           });
           if (headerList.isNotEmpty) {
-            await nativePlayer.setProperty('http-header-fields', headerList.join(','));
+            await nativePlayer.setProperty('http-header-fields', headerList.join('\r\n'));
           }
         }
         // Hardware decoding configuration
@@ -601,6 +626,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           debugPrint('VideoPlayerScreen: Error stripping headers param: $e');
         }
       }
+      _resolvedSourceUrl = resolvedSource;
+      _resolvedSourceHeaders = playHeaders;
+      _hasAttemptedFallback = false;
       await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: false);
       
       if (seekToMs > 0) {
