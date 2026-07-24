@@ -139,15 +139,6 @@ class StremioAddonResolver {
             streamUrl = 'magnet:?xt=urn:btih:$infoHash&dn=${Uri.encodeComponent(dn)}';
           }
           if (streamUrl.isEmpty) continue;
-          
-          // Filter by size from magnet xl= parameter
-          if (streamUrl.startsWith('magnet:')) {
-            final xlMatch = RegExp(r'xl=(\d+)').firstMatch(streamUrl);
-            if (xlMatch != null) {
-              final xlBytes = int.tryParse(xlMatch.group(1)!) ?? 0;
-              if (xlBytes > 4 * 1024 * 1024 * 1024) continue;
-            }
-          }
 
           final headers = <String, String>{};
           final reqHeaders = item['behaviorHints']?['proxyHeaders']?['request'] as Map?;

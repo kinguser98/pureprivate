@@ -28,6 +28,8 @@ import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
+import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/widgets/person_detail_sheet.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
@@ -1773,19 +1775,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             if (mounted) Navigator.of(context).pop();
             debugPrint('Seedr error: $e');
           }
-        } else {
-          if (mounted) Navigator.of(context).pop();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Failed to resolve Stremio magnet stream. Add Seedr token in Settings → Debrid.'),
+            backgroundColor: Color(0xFFEF4444),
+          ));
         }
-        // Fallback to WebView
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => WebViewPlayerScreen(
-              embedUrl: source,
-              title: movie.title,
-              backdropUrl: movie.displayBackdrop,
-            ),
-          ),
-        );
       }
       return;
     }

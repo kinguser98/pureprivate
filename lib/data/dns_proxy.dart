@@ -447,7 +447,8 @@ class CustomDnsProxy {
         if ((targetResp.statusCode == 403 || targetResp.statusCode == 401) && stalkerCmd != null && stalkerPortalId != null) {
           debugPrint('CustomDnsProxy: 403/401 Forbidden on Stalker stream ($cleanTargetUrl). Auto re-resolving token...');
           try {
-            final freshStream = await StalkerResolver.resolveStream(stalkerCmd, stalkerPortalId);
+            final bool isVod = stalkerCmd.contains('.mp4') || stalkerCmd.contains('.mkv') || stalkerCmd.contains('.avi') || stalkerCmd.contains('.mpg') || stalkerCmd.contains('/vod/') || stalkerCmd.contains('/media/');
+            final freshStream = await StalkerResolver.resolveStream(stalkerCmd, stalkerPortalId, isLive: !isVod);
             final freshUri = Uri.parse(freshStream.url);
             final freshToken = freshUri.queryParameters['token'];
             final oldToken = Uri.parse(cleanTargetUrl).queryParameters['token'];
