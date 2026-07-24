@@ -19,7 +19,35 @@ class StalkerStream {
   StalkerStream({required this.url, required this.headers});
 }
 
+class StalkerUrlParams {
+  final int portalId;
+  final String cmd;
+  StalkerUrlParams({required this.portalId, required this.cmd});
+}
+
 class StalkerResolver {
+  static StalkerUrlParams parseStalkerUrl(String rawUrl) {
+    if (rawUrl.startsWith('stalker://')) {
+      final stripped = rawUrl.substring(10);
+      final slashIndex = stripped.indexOf('/');
+      if (slashIndex != -1) {
+        final hostPart = stripped.substring(0, slashIndex).trim();
+        final cmdPart = stripped.substring(slashIndex);
+        final pid = int.tryParse(hostPart) ?? 1;
+        return StalkerUrlParams(portalId: pid, cmd: cmdPart);
+      } else {
+        final match = RegExp(r'^(\d+)(.*)$').firstMatch(stripped);
+        if (match != null) {
+          final pid = int.tryParse(match.group(1)!) ?? 1;
+          var cmdPart = match.group(2)!.trim();
+          if (cmdPart.isEmpty) cmdPart = stripped;
+          return StalkerUrlParams(portalId: pid, cmd: cmdPart);
+        }
+      }
+    }
+    return StalkerUrlParams(portalId: 1, cmd: rawUrl);
+  }
+
   static final Map<int, String> _cachedTokens = {};
   static final Map<int, String> _cachedCookiesMap = {};
   static final Map<int, DateTime> _tokenExpiries = {};

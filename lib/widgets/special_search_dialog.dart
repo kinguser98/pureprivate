@@ -1422,12 +1422,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ),
       );
       try {
-        final uri = Uri.parse(source.url);
-        final portalId = int.parse(uri.host);
-        final cmd = uri.path;
+        final params = StalkerResolver.parseStalkerUrl(source.url);
         final resolved = await StalkerResolver.resolveStream(
-          cmd,
-          portalId,
+          params.cmd,
+          params.portalId,
           isLive: false,
         );
         if (mounted) {
