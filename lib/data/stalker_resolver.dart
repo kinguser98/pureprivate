@@ -663,10 +663,13 @@ class StalkerResolver {
     final playerHeaders = <String, String>{
       'User-Agent': userAgent,
       'Cookie': playerCookies,
+      'Referer': portalUrl,
     };
     if (token.isNotEmpty) {
       playerHeaders['Authorization'] = 'Bearer $token';
     }
+
+    debugPrint('Stalker Stream Resolved -> URL: $streamUrl, Headers: $playerHeaders');
 
     return StalkerStream(
       url: streamUrl,

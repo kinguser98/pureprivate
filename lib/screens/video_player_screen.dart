@@ -629,20 +629,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       _resolvedSourceUrl = resolvedSource;
       _resolvedSourceHeaders = playHeaders;
       _hasAttemptedFallback = false;
-      await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: false);
+      await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: true);
       
       if (seekToMs > 0) {
-        // Wait reactively for media metadata/duration to resolve before seeking
-        await _player.stream.duration.firstWhere((d) => d > Duration.zero).timeout(
-          const Duration(seconds: 10),
+        _player.stream.duration.firstWhere((d) => d > Duration.zero).timeout(
+          const Duration(seconds: 8),
           onTimeout: () => Duration.zero,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-        await _player.seek(Duration(milliseconds: seekToMs));
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        ).then((d) async {
+          if (d > Duration.zero && mounted) {
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            await _player.seek(Duration(milliseconds: seekToMs));
+          }
+        });
       }
-      
-      await _player.play();
 
       if (mounted) setState(() => _ready = true);
       _armHideControls();
