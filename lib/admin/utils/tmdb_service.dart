@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
@@ -302,5 +303,69 @@ class TmdbService {
       debugPrint('TMDB getPersonFilmography error: $e');
       return [];
     }
+  }
+
+  static Future<List<String>> getFanartImages(int tmdbId, {String? imdbId, bool isPoster = true}) async {
+    final List<String> images = [];
+    final List<String> queryIds = [];
+    if (tmdbId > 0) queryIds.add(tmdbId.toString());
+    if (imdbId != null && imdbId.isNotEmpty && imdbId != '0' && imdbId != 'null') queryIds.add(imdbId);
+
+    for (final id in queryIds) {
+      try {
+        final res = await _dio.get(
+          'https://webservice.fanart.tv/v3/movies/$id',
+          options: Options(
+            headers: {
+              'api-key': '4d1fd752b36b281f62111d4f6c4c9258',
+              'Accept': 'application/json',
+            },
+          ),
+          queryParameters: {
+            'api_key': '4d1fd752b36b281f62111d4f6c4c9258',
+          },
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+        if (data is Map) {
+          if (isPoster) {
+            final keys = ['movieposter', 'moviethumb', 'moviebanner', 'movieart'];
+            for (final k in keys) {
+              final list = data[k] as List? ?? [];
+              for (final item in list) {
+                final url = item['url']?.toString();
+                if (url != null && url.startsWith('http') && !images.contains(url)) {
+                  images.add(url);
+                }
+              }
+            }
+          } else {
+            final keys = ['moviebackground', 'hdmovieclearart', 'hdmovielogo', 'movielogo', 'hdmovieart'];
+            for (final k in keys) {
+              final list = data[k] as List? ?? [];
+              for (final item in list) {
+                final url = item['url']?.toString();
+                if (url != null && url.startsWith('http') && !images.contains(url)) {
+                  images.add(url);
+                }
+              }
+            }
+          }
+          if (images.isNotEmpty) break;
+        }
+      } catch (e) {
+        debugPrint('Fanart API error for id $id: $e');
+      }
+    }
+
+    if (images.isEmpty && tmdbId > 0) {
+      final tmdbImages = await getMovieImages(tmdbId, imdbId: imdbId);
+      final fallback = isPoster ? tmdbImages.posters : tmdbImages.backdrops;
+      images.addAll(fallback);
+    }
+
+    return images;
   }
 }

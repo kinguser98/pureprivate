@@ -1,4 +1,4 @@
-package com.privatecinema.private_cinema_mobile
+package com.goxio.mob
 
 import android.app.PictureInPictureParams
 import android.os.Build
@@ -8,7 +8,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.privatecinema.private_cinema_mobile/pip"
+    private val CHANNEL = "com.goxio.mob/pip"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

@@ -6,6 +6,7 @@ import 'package:private_cinema_mobile/data/mock_catalog.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_card.dart';
 import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 Widget getOttLogo(String name, {String? logoUrl, double size = 38}) {
   final lower = name.toLowerCase();
@@ -101,12 +102,17 @@ Widget getOttLogo(String name, {String? logoUrl, double size = 38}) {
   if (primaryUrl != null && primaryUrl.isNotEmpty) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(size * 0.28),
-      child: Image.network(
-        primaryUrl,
+      child: CachedNetworkImage(
+        imageUrl: primaryUrl,
         width: size,
         height: size,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => fallbackWidget,
+        memCacheWidth: 100,
+        memCacheHeight: 100,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        placeholder: (_, __) => fallbackWidget,
+        errorWidget: (_, __, ___) => fallbackWidget,
       ),
     );
   }

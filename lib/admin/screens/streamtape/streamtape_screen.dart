@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../utils/admin_api_client.dart';
 import '../../utils/drawer_helper.dart';
 import '../../widgets/common/glass_card.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class StreamtapeScreen extends ConsumerStatefulWidget {
   const StreamtapeScreen({super.key});
@@ -204,132 +205,150 @@ class _StreamtapeScreenState extends ConsumerState<StreamtapeScreen> {
   }
 
   Widget _buildAnalyticsOverview() {
-    return GridView.count(
-      crossAxisCount: 1,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      childAspectRatio: 2.8,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Account Info Card
-        GlassCard(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEF4444).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(Icons.person, color: Color(0xFFEF4444), size: 22),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'STREAMTAPE ACCOUNT',
-                      style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _accountInfo != null ? (_accountInfo!['email']?.toString() ?? 'Configured') : 'Not Configured',
-                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (_accountInfo != null && _accountInfo!['signup_at'] != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Member since: ${_accountInfo!['signup_at']}',
-                        style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 10),
-                      ),
-                    ] else if (_accountError != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        _accountError!,
-                        style: const TextStyle(color: Color(0xFFEF4444), fontSize: 10),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // Monitored & Progress Layout
-        Row(
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.5,
           children: [
-            Expanded(
-              child: GlassCard(
-                margin: const EdgeInsets.only(right: 6),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'VIDEOS MONITORED',
-                      style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$_filesCount',
-                      style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900),
-                    ),
-                    if (_cachedTime != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Synced $_cachedTime',
-                        style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 9),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+            // Account Info Card
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF4444).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.person, color: Color(0xFFEF4444), size: 16),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'ACCOUNT',
+                          style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+                        ),
                       ),
                     ],
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _accountInfo != null ? (_accountInfo!['email']?.toString() ?? 'Configured') : 'Not Configured',
+                    style: GoogleFonts.outfit(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (_accountInfo != null && _accountInfo!['signup_at'] != null)
+                    Text(
+                      'Since: ${_accountInfo!['signup_at']}',
+                      style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10),
+                    ),
+                ],
               ),
             ),
-            Expanded(
-              child: GlassCard(
-                margin: const EdgeInsets.only(left: 6),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
+
+            // Storage / API Card
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF38BDF8).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.cloud_done_rounded, color: Color(0xFF38BDF8), size: 16),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'STATUS',
+                          style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _accountInfo != null ? 'Connected' : 'Offline',
+                    style: GoogleFonts.outfit(
+                      color: _accountInfo != null ? const Color(0xFF10B981) : Colors.orangeAccent,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    'API Limit: 100% Free',
+                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+
+            // Monitored Videos Card
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'MONITORED VIDEOS',
+                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$_filesCount',
+                    style: GoogleFonts.outfit(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900),
+                  ),
+                  if (_cachedTime != null)
                     Text(
-                      'BATCH OFFSET PROGRESS',
-                      style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+                      'Synced $_cachedTime',
+                      style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 9),
                     ),
-                    const SizedBox(height: 4),
-                    RichText(
-                      text: TextSpan(
-                        children: [
-                          TextSpan(text: '$_offset', style: const TextStyle(color: Color(0xFF10B981), fontSize: 28, fontWeight: FontWeight.w900)),
-                          TextSpan(text: ' / $_filesCount', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 16, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
+                ],
+              ),
+            ),
+
+            // Batch Offset Progress Card
+            GlassCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'BATCH OFFSET',
+                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1),
+                  ),
+                  const SizedBox(height: 4),
+                  RichText(
+                    text: TextSpan(
+                      children: [
+                        TextSpan(text: '$_offset', style: GoogleFonts.outfit(color: const Color(0xFF10B981), fontSize: 24, fontWeight: FontWeight.w900)),
+                        TextSpan(text: ' / $_filesCount', style: GoogleFonts.outfit(color: Colors.white.withOpacity(0.3), fontSize: 13, fontWeight: FontWeight.bold)),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: _filesCount > 0 ? (_offset / _filesCount) : 0.0,
-                        backgroundColor: Colors.white.withOpacity(0.05),
-                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
-                        minHeight: 4,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ],

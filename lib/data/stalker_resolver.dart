@@ -568,6 +568,21 @@ class StalkerResolver {
       }
     }
 
+    // Try variation 3: fallback typeParam if VOD fails (try 'stb' or 'itv')
+    if ((streamUrl.isEmpty || streamUrl == 'nothing_to_play') && !isLive) {
+      for (final altType in ['stb', 'itv']) {
+        try {
+          var linkUrl = '$portalUrl?type=$altType&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&disable_ad=1&download=0&play_lite=0';
+          linkUrl = _appendDeviceParams(linkUrl, deviceId);
+          debugPrint('Stalker Resolving Single Cmd (Alt Type $altType): $linkUrl');
+          streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
+          if (streamUrl.isNotEmpty && streamUrl != 'nothing_to_play') break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+    }
+
     if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
       throw lastErr ?? Exception('nothing_to_play');
     }
@@ -587,6 +602,18 @@ class StalkerResolver {
       }
     }
 
+    // Resolve relative paths (e.g. '/vod/movie.mp4' or 'vod/movie.mp4') to absolute URLs with host
+    if (!streamUrl.startsWith('http://') && !streamUrl.startsWith('https://')) {
+      try {
+        final uri = Uri.parse(portalUrl);
+        final hostBase = '${uri.scheme}://${uri.host}${uri.hasPort ? ":${uri.port}" : ""}';
+        if (!streamUrl.startsWith('/')) {
+          streamUrl = '/$streamUrl';
+        }
+        streamUrl = '$hostBase$streamUrl';
+      } catch (_) {}
+    }
+
     // Resolve localhost / 127.0.0.1 loopbacks back to portal host
     if (streamUrl.contains('://localhost') || streamUrl.contains('://127.0.0.1')) {
       try {
@@ -597,17 +624,25 @@ class StalkerResolver {
       } catch (_) {}
     }
 
-    var playerCookies = 'mac=$macAddress';
-    if (deviceId.isNotEmpty) {
+    var playerCookies = _cachedCookiesMap[portalId] ?? 'mac=${Uri.encodeComponent(macAddress)}';
+    if (!playerCookies.contains('mac=')) {
+      playerCookies = 'mac=${Uri.encodeComponent(macAddress)}; $playerCookies';
+    }
+    if (deviceId.isNotEmpty && !playerCookies.contains('device_id=')) {
       playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+    }
+
+    final playerHeaders = <String, String>{
+      'User-Agent': userAgent,
+      'Cookie': playerCookies,
+    };
+    if (token.isNotEmpty) {
+      playerHeaders['Authorization'] = 'Bearer $token';
     }
 
     return StalkerStream(
       url: streamUrl,
-      headers: {
-        'User-Agent': userAgent,
-        'Cookie': playerCookies,
-      },
+      headers: playerHeaders,
     );
   }
 

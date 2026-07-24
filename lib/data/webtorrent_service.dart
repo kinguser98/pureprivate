@@ -113,8 +113,7 @@ class WebTorrentService {
     final token = authToken ?? await _getToken();
     if (token == null || token.isEmpty) return null;
 
-    final torrentUrl = magnetToTorrentUrl(magnetUrl);
-    if (torrentUrl == null) return null;
+    final torrentUrl = magnetToTorrentUrl(magnetUrl) ?? magnetUrl;
 
     final headers = {
       'Authorization': 'Bearer $token',
