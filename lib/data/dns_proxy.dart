@@ -511,8 +511,8 @@ class CustomDnsProxy {
         
         // If it's HLS playlist, rewrite absolute and relative stream URLs to go through our proxy
         if (targetUrl.contains('.m3u8')) {
-          final bodyBytes = await finalResp.fold<List<int>>([], (p, e) => p..addAll(e));
-          final contentEncoding = finalResp.headers.value('content-encoding')?.toLowerCase() ?? '';
+          final bodyBytes = await activeResp.fold<List<int>>([], (p, e) => p..addAll(e));
+          final contentEncoding = activeResp.headers.value('content-encoding')?.toLowerCase() ?? '';
           List<int> decodedBytes;
           if (contentEncoding.contains('gzip')) {
             try {

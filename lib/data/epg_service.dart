@@ -30,16 +30,18 @@ class EpgService {
 
   /// Fetches EPG files, decompresses using GZip, and parses active programs.
   /// Caches current and future programs to keep memory footprint light.
-  static Future<void> loadEpg() async {
+  static Future<void> loadEpg([List<String>? customUrls]) async {
     if (_isLoading) return;
     _isLoading = true;
     _channelPrograms.clear();
     _channelLogos.clear();
 
-    final urls = [
-      'https://avkb.short.gy/jioepg.xml.gz',
-      'https://avkb.short.gy/tsepg.xml.gz',
-    ];
+    final urls = (customUrls != null && customUrls.where((u) => u.trim().isNotEmpty).isNotEmpty)
+        ? customUrls.where((u) => u.trim().isNotEmpty).toList()
+        : [
+            'https://avkb.short.gy/jioepg.xml.gz',
+            'https://avkb.short.gy/tsepg.xml.gz',
+          ];
 
     final now = DateTime.now();
 
@@ -319,4 +321,7 @@ class EpgService {
     }
     return null;
   }
+
+  /// Returns list of all unique channel IDs loaded in EPG
+  static List<String> get availableEpgChannelIds => _channelPrograms.keys.toList();
 }

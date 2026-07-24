@@ -41,6 +41,9 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _stravoUrlCtrl = TextEditingController();
   final _netmirrorDomainsCtrl = TextEditingController();
   final _seedrTokenCtrl = TextEditingController();
+  final _epgUrlsCtrl = TextEditingController();
+  final _tmdbApiKeyCtrl = TextEditingController();
+  final _fanartApiKeyCtrl = TextEditingController();
   
   // Track expanded addon states
   final Set<String> _expandedAddons = {};
@@ -62,6 +65,9 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _stravoUrlCtrl.dispose();
     _netmirrorDomainsCtrl.dispose();
     _seedrTokenCtrl.dispose();
+    _epgUrlsCtrl.dispose();
+    _tmdbApiKeyCtrl.dispose();
+    _fanartApiKeyCtrl.dispose();
     super.dispose();
   }
 
@@ -162,11 +168,14 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _tgApiIdCtrl.text = settingsMap['telegram_api_id'] ?? '';
       _tgApiHashCtrl.text = settingsMap['telegram_api_hash'] ?? '';
 
-      // 10. Parse Provider Addons & Seedr Token
+      // 10. Parse Provider Addons, EPG & External API Keys
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
       _netmirrorDomainsCtrl.text = settingsMap['netmirror_domains'] ?? '';
       _seedrTokenCtrl.text = settingsMap['seedr_token'] ?? '';
+      _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
+      _tmdbApiKeyCtrl.text = settingsMap['tmdb_api_key'] ?? '';
+      _fanartApiKeyCtrl.text = settingsMap['fanart_api_key'] ?? '';
 
       if (mounted) {
         setState(() {
@@ -315,7 +324,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'netmirror_domains': _netmirrorDomainsCtrl.text.trim(),
         'seedr_token': _seedrTokenCtrl.text.trim(),
+        'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
+        'tmdb_api_key': _tmdbApiKeyCtrl.text.trim(),
+        'fanart_api_key': _fanartApiKeyCtrl.text.trim(),
       };
+      
+      TmdbService.customApiKey = _tmdbApiKeyCtrl.text.trim();
+      TmdbService.customFanartApiKey = _fanartApiKeyCtrl.text.trim();
       
       for (final s in _sources) {
         newSettings['source_show_${s['key']}'] = s['enabled'] == true ? 'true' : 'false';
@@ -363,6 +378,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                       _buildSourcePrioritySection(),
                       const SizedBox(height: 16),
                        _buildMaxStreamSizeSection(),
+                       const SizedBox(height: 16),
+                       _buildEpgAndExternalApiSection(),
                        const SizedBox(height: 16),
                        _buildAddonUrlsAndTorrentsSection(),
                        const SizedBox(height: 16),
@@ -494,6 +511,67 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 ),
               );
             },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEpgAndExternalApiSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle('EPG URLs & External API Keys', subtitle: 'Manage multi EPG feeds and custom TMDB/Fanart API keys.'),
+        GlassCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Live TV Multi EPG URLs (XML / GZ)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              const SizedBox(height: 4),
+              const Text('Enter XML or GZ EPG URLs (one per line). Apps will combine all feeds automatically.', style: TextStyle(color: Colors.white54, fontSize: 11)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _epgUrlsCtrl,
+                maxLines: 3,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                decoration: InputDecoration(
+                  hintText: 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz',
+                  hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                  filled: true,
+                  fillColor: Colors.black26,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('TMDB API Key Override', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              const SizedBox(height: 4),
+              TextField(
+                controller: _tmdbApiKeyCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                decoration: InputDecoration(
+                  hintText: 'Default: 8baba8ab6b8bbe247645bcae7df63d0d',
+                  hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                  filled: true,
+                  fillColor: Colors.black26,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Fanart.tv API Key Override', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              const SizedBox(height: 4),
+              TextField(
+                controller: _fanartApiKeyCtrl,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                decoration: InputDecoration(
+                  hintText: 'Default: 0604b904d9e0303e83b1029320d91244',
+                  hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                  filled: true,
+                  fillColor: Colors.black26,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                ),
+              ),
+            ],
           ),
         ),
       ],
