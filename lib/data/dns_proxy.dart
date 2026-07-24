@@ -338,38 +338,39 @@ class CustomDnsProxy {
         final Map<String, String> extraHeaders = {};
         String? stalkerCmd;
         int? stalkerPortalId;
-
-        if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) {
-          try {
+        try {
+          if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://')) {
             final targetUri = Uri.parse(targetUrl);
             stalkerCmd = targetUri.queryParameters['stalker_cmd'];
             stalkerPortalId = int.tryParse(targetUri.queryParameters['stalker_portal_id'] ?? '');
 
-            final headersParam = targetUri.queryParameters['local_proxy_headers'];
-            if (headersParam != null && headersParam.isNotEmpty) {
-              final decodedJson = jsonDecode(headersParam);
-              if (decodedJson is Map) {
-                decodedJson.forEach((key, value) {
-                  extraHeaders[key.toString()] = value.toString();
-                });
+            if (targetUri.queryParameters.containsKey('local_proxy_headers')) {
+              final headersParam = targetUri.queryParameters['local_proxy_headers'];
+              if (headersParam != null && headersParam.isNotEmpty) {
+                final decodedJson = jsonDecode(headersParam);
+                if (decodedJson is Map) {
+                  decodedJson.forEach((key, value) {
+                    extraHeaders[key.toString()] = value.toString();
+                  });
+                }
               }
-            }
 
-            final cleanParams = Map<String, String>.from(targetUri.queryParameters);
-            cleanParams.remove('local_proxy_headers');
-            cleanParams.remove('stalker_cmd');
-            cleanParams.remove('stalker_portal_id');
-            if (cleanParams.isEmpty) {
-              cleanTargetUrl = targetUri.replace(query: '').toString();
-              if (cleanTargetUrl.endsWith('?')) {
-                cleanTargetUrl = cleanTargetUrl.substring(0, cleanTargetUrl.length - 1);
+              final cleanParams = Map<String, String>.from(targetUri.queryParameters);
+              cleanParams.remove('local_proxy_headers');
+              cleanParams.remove('stalker_cmd');
+              cleanParams.remove('stalker_portal_id');
+              if (cleanParams.isEmpty) {
+                cleanTargetUrl = targetUri.replace(query: '').toString();
+                if (cleanTargetUrl.endsWith('?')) {
+                  cleanTargetUrl = cleanTargetUrl.substring(0, cleanTargetUrl.length - 1);
+                }
+              } else {
+                cleanTargetUrl = targetUri.replace(queryParameters: cleanParams).toString();
               }
-            } else {
-              cleanTargetUrl = targetUri.replace(queryParameters: cleanParams).toString();
             }
-          } catch (e) {
-            debugPrint('CustomDnsProxy: Error extracting query headers: $e');
           }
+        } catch (e) {
+          debugPrint('CustomDnsProxy: Error extracting query headers: $e');
         }
 
         // Apply active Stalker token replacements if any

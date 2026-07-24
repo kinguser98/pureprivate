@@ -427,7 +427,7 @@ packages:
   mtflute:
     dependency: "direct main"
     description:
-      path: "../../mtflute_diagnostic/packages/mtflute"
+      path: "../mtflute_diagnostic/packages/mtflute"
       relative: true
     source: path
     version: "0.5.0"

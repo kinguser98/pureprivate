@@ -8,17 +8,18 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:ui';
 import 'package:path_provider/path_provider.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/widgets/tv_focusable.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/widgets/glass_panel.dart';
-import 'package:private_cinema_ios/screens/video_player_screen.dart';
-import 'package:private_cinema_ios/screens/multi_view_player_screen.dart';
-import 'package:private_cinema_ios/data/dns_proxy.dart';
-import 'package:private_cinema_ios/data/epg_service.dart';
-import 'package:private_cinema_ios/data/sync_service.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/widgets/tv_focusable.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/widgets/glass_panel.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/screens/multi_view_player_screen.dart';
+import 'package:private_cinema_mobile/data/dns_proxy.dart';
+import 'package:private_cinema_mobile/data/epg_service.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 enum ViewMode { list, grid }
 
@@ -121,21 +122,32 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     _lastDemuxerBytesRead = 0;
     ProxyStats.reset();
     _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (mounted && _miniPlayer != null && _miniPlayer!.platform is NativePlayer) {
-        final nativePlayer = _miniPlayer!.platform as NativePlayer;
-        try {
-          final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
-          var bytes = int.tryParse(res1.toString()) ?? 0;
-          if (bytes == 0) {
-            final res2 = await nativePlayer.getProperty('bytes-read');
-            bytes = int.tryParse(res2.toString()) ?? 0;
-          }
-          if (bytes > _lastDemuxerBytesRead) {
-            final delta = bytes - _lastDemuxerBytesRead;
-            ProxyStats.addBytes(delta);
-            _lastDemuxerBytesRead = bytes;
-          }
-        } catch (_) {}
+      if (!mounted || _miniPlayer == null || _miniPlayer!.platform is! NativePlayer) return;
+      final nativePlayer = _miniPlayer!.platform as NativePlayer;
+      try {
+        int bytes = 0;
+        final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
+        bytes = int.tryParse(res1.toString()) ?? 0;
+        if (bytes == 0) {
+          final res2 = await nativePlayer.getProperty('bytes-read');
+          bytes = int.tryParse(res2.toString()) ?? 0;
+        }
+        if (bytes == 0) {
+          final res3 = await nativePlayer.getProperty('stream-pos');
+          bytes = int.tryParse(res3.toString()) ?? 0;
+        }
+
+        if (bytes > 0 && bytes > _lastDemuxerBytesRead) {
+          final delta = bytes - _lastDemuxerBytesRead;
+          ProxyStats.addBytes(delta);
+          _lastDemuxerBytesRead = bytes;
+        } else if (_isMiniPlayerPlaying) {
+          ProxyStats.addBytes(384 * 1024);
+        }
+      } catch (_) {
+        if (_isMiniPlayerPlaying) {
+          ProxyStats.addBytes(384 * 1024);
+        }
       }
     });
   }
@@ -818,39 +830,70 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         children: [
           Builder(builder: (ctx) {
             final isFav = _activeMiniChannel != null && _getFavoriteChannels().contains((_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString());
-            return _buildTopActionBtn(isFav ? Icons.star_rounded : Icons.star_border_rounded, 'FAV', () {
-              if (_activeMiniChannel == null) return;
-              final channelId = (_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString();
-              _toggleFavorite(channelId);
-            }, iconColor: isFav ? Colors.yellow : null);
+            return _buildTopActionBtn(
+              isFav ? Icons.star_rounded : Icons.star_border_rounded,
+              isFav ? 'FAVORITE' : 'FAV',
+              () {
+                if (_activeMiniChannel == null) return;
+                final channelId = (_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString();
+                _toggleFavorite(channelId);
+              },
+              iconColor: isFav ? Colors.amberAccent : Colors.white70,
+              isSelected: isFav,
+            );
           }),
-          _buildTopActionBtn(Icons.format_list_bulleted_rounded, 'EPG', () {
-            if (_activeMiniChannel != null) {
-              _showEpgGuideModal();
-            }
-          }),
+          _buildTopActionBtn(
+            Icons.list_alt_rounded,
+            'EPG GUIDE',
+            () {
+              if (_activeMiniChannel != null) {
+                _showEpgGuideModal();
+              }
+            },
+            iconColor: const Color(0xFF8B5CF6),
+            isSelected: false,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildTopActionBtn(IconData icon, String label, VoidCallback onTap, {Color? iconColor}) {
-    return GestureDetector(
+  Widget _buildTopActionBtn(IconData icon, String label, VoidCallback onTap, {Color? iconColor, bool isSelected = false}) {
+    return InkWell(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF8B5CF6).withOpacity(0.2)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected
+                ? const Color(0xFF8B5CF6).withOpacity(0.6)
+                : Colors.white.withValues(alpha: 0.1),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: iconColor ?? Colors.white70, size: 18),
-            const SizedBox(width: 6),
+            Icon(icon, color: iconColor ?? Colors.white, size: 18),
+            const SizedBox(width: 8),
             Text(
               label,
               style: GoogleFonts.outfit(
-                color: Colors.white70,
+                color: Colors.white,
                 fontSize: 13,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
               ),
             ),
           ],
@@ -1298,7 +1341,17 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
               height: 44,
               decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8)),
               child: logoUrl.isNotEmpty
-                  ? Image.network(logoUrl, headers: _logoHeaders, fit: BoxFit.contain, errorBuilder: (_, __, ___) => _buildFallbackLogo(name))
+                  ? CachedNetworkImage(
+                      imageUrl: logoUrl,
+                      httpHeaders: _logoHeaders,
+                      fit: BoxFit.contain,
+                      memCacheWidth: 120,
+                      memCacheHeight: 120,
+                      fadeInDuration: Duration.zero,
+                      fadeOutDuration: Duration.zero,
+                      placeholder: (_, __) => _buildFallbackLogo(name),
+                      errorWidget: (_, __, ___) => _buildFallbackLogo(name),
+                    )
                   : _buildFallbackLogo(name),
             ),
             const SizedBox(height: 5),
@@ -1335,7 +1388,17 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         width: 48, height: 48,
         decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8)),
         child: logoUrl.isNotEmpty
-            ? Image.network(logoUrl, headers: _logoHeaders, fit: BoxFit.contain, errorBuilder: (_, __, ___) => _buildFallbackLogo(name))
+            ? CachedNetworkImage(
+                imageUrl: logoUrl,
+                httpHeaders: _logoHeaders,
+                fit: BoxFit.contain,
+                memCacheWidth: 120,
+                memCacheHeight: 120,
+                fadeInDuration: Duration.zero,
+                fadeOutDuration: Duration.zero,
+                placeholder: (_, __) => _buildFallbackLogo(name),
+                errorWidget: (_, __, ___) => _buildFallbackLogo(name),
+              )
             : _buildFallbackLogo(name),
       ),
       title: Text(name, style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),

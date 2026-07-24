@@ -8,7 +8,7 @@ import '../../widgets/common/loading_widget.dart';
 import '../../widgets/common/error_widget.dart';
 import '../../utils/drawer_helper.dart';
 
-enum MovieSort { az, za, views, date }
+enum MovieSort { az, za, views, date, addedOrder }
 
 class MoviesScreen extends ConsumerStatefulWidget {
   const MoviesScreen({super.key});
@@ -20,7 +20,7 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
   bool _showSearch = false;
-  MovieSort _sort = MovieSort.date;
+  MovieSort _sort = MovieSort.addedOrder;
 
   PopupMenuItem<MovieSort> _popupItem(String label, MovieSort sort, IconData icon) {
     return PopupMenuItem(
@@ -50,6 +50,9 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
   List<Movie> _sortMovies(List<Movie> movies) {
     final sorted = List<Movie>.from(movies);
     switch (_sort) {
+      case MovieSort.addedOrder:
+        sorted.sort((a, b) => b.id.compareTo(a.id));
+        break;
       case MovieSort.az:
         sorted.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
         break;
@@ -101,10 +104,11 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.white.withOpacity(0.1))),
             onSelected: (sort) => setState(() => _sort = sort),
             itemBuilder: (_) => [
+              _popupItem('Recently Added (System ID)', MovieSort.addedOrder, Icons.history_rounded),
               _popupItem('A-Z', MovieSort.az, Icons.sort_by_alpha),
               _popupItem('Z-A', MovieSort.za, Icons.sort_by_alpha),
               _popupItem('Most Views', MovieSort.views, Icons.visibility),
-              _popupItem('Newest', MovieSort.date, Icons.access_time),
+              _popupItem('Ingestion Date', MovieSort.date, Icons.access_time),
             ],
           ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.read(movieProvider.notifier).fetchMovies(refresh: true)),
@@ -135,7 +139,7 @@ class _MoviesScreenState extends ConsumerState<MoviesScreen> {
         child: Row(children: [
           Text('${displayMovies.length} movies', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13)),
           const Spacer(),
-          Text('Sorted: ${_sort == MovieSort.az ? "A-Z" : _sort == MovieSort.za ? "Z-A" : _sort == MovieSort.views ? "Views" : "Date"}', style: TextStyle(color: const Color(0xFFEF4444).withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.bold)),
+          Text('Sorted: ${_sort == MovieSort.addedOrder ? "Recently Added" : _sort == MovieSort.az ? "A-Z" : _sort == MovieSort.za ? "Z-A" : _sort == MovieSort.views ? "Views" : "Ingestion Date"}', style: TextStyle(color: const Color(0xFFEF4444).withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.bold)),
         ]),
       ),
       Expanded(

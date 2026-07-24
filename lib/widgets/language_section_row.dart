@@ -1,8 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/models/language_item.dart';
-import 'package:private_cinema_ios/widgets/movie_image.dart';
+import 'package:private_cinema_mobile/models/language_item.dart';
+import 'package:private_cinema_mobile/widgets/movie_image.dart';
 
 class LanguageSectionRow extends StatelessWidget {
   const LanguageSectionRow({

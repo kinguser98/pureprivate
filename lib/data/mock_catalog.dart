@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:private_cinema_ios/models/movie.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
 
 abstract final class MockCatalog {
   static const demoMp4Video =

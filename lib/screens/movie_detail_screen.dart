@@ -11,32 +11,33 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/data/download_manager.dart';
-import 'package:private_cinema_ios/data/playback_tracker.dart';
-import 'package:private_cinema_ios/data/youtube_service.dart';
-import 'package:private_cinema_ios/data/embed_resolver.dart';
-import 'package:private_cinema_ios/data/cinemm_resolver.dart';
-import 'package:private_cinema_ios/data/telegram_sources.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_mobile/data/youtube_service.dart';
+import 'package:private_cinema_mobile/data/embed_resolver.dart';
+import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
+import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
 import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
-import 'package:private_cinema_ios/models/movie.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/screens/all_movies_screen.dart';
-import 'package:private_cinema_ios/widgets/movie_image.dart';
-import 'package:private_cinema_ios/screens/video_player_screen.dart';
-import 'package:private_cinema_ios/widgets/resolving_dialog.dart';
-import 'package:private_cinema_ios/screens/webview_player_screen.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
-import 'package:private_cinema_ios/data/netmirror_resolver.dart';
-import 'package:private_cinema_ios/data/stremio_addon_resolver.dart';
-import 'package:private_cinema_ios/data/sync_service.dart';
-import 'package:private_cinema_ios/data/webview_scraper_executor.dart';
-import 'package:private_cinema_ios/data/hls_preflight.dart';
-import 'package:private_cinema_ios/data/webtorrent_service.dart';
-import 'package:private_cinema_ios/widgets/seedr_countdown_dialog.dart';
-import 'package:private_cinema_ios/widgets/stream_metadata_tile.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
+import 'package:private_cinema_mobile/widgets/movie_image.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
+import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
+import 'package:private_cinema_mobile/widgets/person_detail_sheet.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
+import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
+import 'package:private_cinema_mobile/data/hls_preflight.dart';
+import 'package:private_cinema_mobile/data/webtorrent_service.dart';
+import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -1679,39 +1680,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     source = _sanitizeUrl(source);
 
     // Telegram Saved-Message file: resolve to a streamable URL first.
-    if (TelegramSources.isTelegramUrl(source)) {
-      final localId = TelegramSources.extractLocalId(source);
-      final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
-      TelegramVideoItem? match;
-      for (final i in items) {
-        if (i.localId == localId) {
-          match = i;
-          break;
-        }
-      }
-      if (match == null) {
-        // Not in cache → try to refresh and re-search.
-        await TelegramService.instance.loadSavedMessages();
-        final items2 = await TelegramIndexDb.instance.all();
-        for (final i in items2) {
+    if (TelegramSources.isTelegramUrl(source) || source.toLowerCase().contains('telegram') || (sourceName != null && (sourceName.toLowerCase().contains('telegram') || sourceName.toLowerCase().startsWith('tg ')))) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Resolving Telegram Bot Stream Source...',
+          );
+        },
+      );
+
+      try {
+        final localId = TelegramSources.extractLocalId(source);
+        final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+        TelegramVideoItem? match;
+        for (final i in items) {
           if (i.localId == localId) {
             match = i;
             break;
           }
         }
-      }
-      if (match == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
-            backgroundColor: const Color(0xFFEF4444),
-          ));
+        if (match == null) {
+          // Not in cache → try to refresh and re-search.
+          await TelegramService.instance.loadSavedMessages();
+          final items2 = await TelegramIndexDb.instance.all();
+          for (final i in items2) {
+            if (i.localId == localId) {
+              match = i;
+              break;
+            }
+          }
         }
-        return;
-      }
-      try {
+        if (match == null) {
+          if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
+              backgroundColor: const Color(0xFFEF4444),
+            ));
+          }
+          return;
+        }
+
         final resolved = await TelegramService.instance.resolveStream(match);
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
+
         // Re-enter playback with the resolved URL.
         return _playWithResolution(
           resolved,
@@ -1722,6 +1738,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           headers: headers,
         );
       } catch (e) {
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Telegram resolve failed: $e'),
@@ -1832,6 +1849,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       return;
     }
+
+
 
     // Intercept Streamtape or Strcloud links to resolve natively completely in-app
     final lowerSource = source.toLowerCase();
@@ -5082,48 +5101,69 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 20,
-                                backgroundColor: AppColors.surface,
-                                backgroundImage:
-                                    _directorProfileUrl != null &&
-                                        _directorProfileUrl!.isNotEmpty
-                                    ? NetworkImage(_directorProfileUrl!)
-                                    : null,
-                                child:
-                                    _directorProfileUrl == null ||
-                                        _directorProfileUrl!.isEmpty
-                                    ? const Icon(
-                                        Icons.person_rounded,
-                                        color: Colors.white30,
-                                      )
-                                    : null,
-                              ),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          InkWell(
+                            onTap: () {
+                              if (_dynamicDirector != null && _dynamicDirector!.isNotEmpty) {
+                                PersonDetailSheet.show(
+                                  context,
+                                  personName: _dynamicDirector!,
+                                  photoUrl: _directorProfileUrl,
+                                );
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(12),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    _dynamicDirector!,
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                    ),
+                                  CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor: AppColors.surface,
+                                    backgroundImage:
+                                        _directorProfileUrl != null &&
+                                            _directorProfileUrl!.isNotEmpty
+                                        ? NetworkImage(_directorProfileUrl!)
+                                        : null,
+                                    child:
+                                        _directorProfileUrl == null ||
+                                            _directorProfileUrl!.isEmpty
+                                        ? const Icon(
+                                            Icons.person_rounded,
+                                            color: Colors.white30,
+                                          )
+                                        : null,
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Director',
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white38,
-                                      fontSize: 12,
-                                    ),
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _dynamicDirector!,
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            'Director',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white38,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFFA855F7), size: 10),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
+                            ),
                           ),
                           const SizedBox(height: 24),
                         ],
@@ -5147,49 +5187,59 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   const SizedBox(width: 14),
                               itemBuilder: (context, index) {
                                 final actor = _dynamicCast[index];
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 60,
-                                      height: 60,
-                                      decoration: BoxDecoration(
-                                        color: AppColors.surface,
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: Colors.white12,
-                                          width: 0.8,
+                                return InkWell(
+                                  onTap: () {
+                                    PersonDetailSheet.show(
+                                      context,
+                                      personName: actor.name,
+                                      photoUrl: actor.profileUrl,
+                                    );
+                                  },
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 60,
+                                        height: 60,
+                                        decoration: BoxDecoration(
+                                          color: AppColors.surface,
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: Colors.white12,
+                                            width: 0.8,
+                                          ),
+                                        ),
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(12),
+                                          child: actor.profileUrl.isNotEmpty
+                                              ? MovieImage(
+                                                  source: actor.profileUrl,
+                                                  fit: BoxFit.cover,
+                                                )
+                                              : const Icon(
+                                                  Icons.person_rounded,
+                                                  color: Colors.white30,
+                                                  size: 24,
+                                                ),
                                         ),
                                       ),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: actor.profileUrl.isNotEmpty
-                                            ? MovieImage(
-                                                source: actor.profileUrl,
-                                                fit: BoxFit.cover,
-                                              )
-                                            : const Icon(
-                                                Icons.person_rounded,
-                                                color: Colors.white30,
-                                                size: 24,
-                                              ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    SizedBox(
-                                      width: 80,
-                                      child: Text(
-                                        actor.name,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 11,
+                                      const SizedBox(height: 8),
+                                      SizedBox(
+                                        width: 80,
+                                        child: Text(
+                                          actor.name,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 11,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 );
                               },
                             ),

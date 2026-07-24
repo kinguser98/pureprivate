@@ -2,9 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import '../../utils/admin_api_client.dart';
 import '../../utils/drawer_helper.dart';
+import '../../utils/master_channel_repository.dart';
+import '../../utils/api_client.dart';
+import '../../config/api_config.dart';
+import '../../models/iptv_channel.dart';
 import '../../widgets/common/glass_card.dart';
 
 class IptvSettingsScreen extends ConsumerStatefulWidget {
@@ -522,6 +526,70 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
     }
   }
 
+  Future<void> _syncMasterChannels(int portalId) async {
+    setState(() {
+      _isSyncing = true;
+      _syncMessage = 'Fetching Stalker Live Categories...';
+    });
+
+    try {
+      final categories = await StalkerResolver.getLiveCategories(portalId);
+      if (!mounted) return;
+      setState(() => _isSyncing = false);
+
+      if (categories.isEmpty) {
+        throw Exception('No Live TV categories found on the Stalker Portal.');
+      }
+
+      final result = await showDialog<Map<String, dynamic>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => MasterCategoryPickerDialog(categories: categories),
+      );
+
+      if (result == null) return;
+      final chosenCategoryIds = result['categoryIds'] as List<String>?;
+      final selectedLanguage = result['language'] as String? ?? 'Malayalam';
+      if (chosenCategoryIds == null || chosenCategoryIds.isEmpty) return;
+
+      setState(() {
+        _isSyncing = true;
+        _syncMessage = 'Fetching Channels for Master Registry...';
+      });
+
+      final portalChannels = await StalkerResolver.fetchPortalChannelsForCategories(portalId, chosenCategoryIds);
+      if (portalChannels.isEmpty) {
+        throw Exception('No channels found in selected portal categories.');
+      }
+
+      final count = await MasterChannelRepository.bulkImportFromPortal(portalChannels, language: selectedLanguage);
+      setState(() => _isSyncing = false);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully imported $count Master Channels ($selectedLanguage) to MySQL Database!'),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync failed: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _syncVodMovies(int portalId) async {
     setState(() {
       _isSyncing = true;
@@ -892,6 +960,21 @@ class _IptvSettingsScreenState extends ConsumerState<IptvSettingsScreen> {
                         textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                       ),
                     ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        final portalId = int.tryParse(portal['id']?.toString() ?? '') ?? 0;
+                        if (portalId > 0) _syncMasterChannels(portalId);
+                      },
+                      icon: const Icon(Icons.playlist_add_check_rounded, size: 16),
+                      label: const Text('Sync Master Channels'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFA855F7),
+                        side: BorderSide(color: Colors.white.withOpacity(0.15)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1090,6 +1173,184 @@ class _AdminCategoryPickerDialogState extends State<AdminCategoryPickerDialog> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class MasterCategoryPickerDialog extends StatefulWidget {
+  final List<Map<String, String>> categories;
+
+  const MasterCategoryPickerDialog({super.key, required this.categories});
+
+  @override
+  State<MasterCategoryPickerDialog> createState() => _MasterCategoryPickerDialogState();
+}
+
+class _MasterCategoryPickerDialogState extends State<MasterCategoryPickerDialog> {
+  final Set<String> _selectedIds = {};
+  String _selectedLanguage = 'Malayalam';
+  final List<String> _languages = ['Malayalam', 'Tamil', 'Hindi', 'English', 'Telugu', 'Kannada', 'Sports', 'News', 'Kids'];
+
+  @override
+  void initState() {
+    super.initState();
+    for (final cat in widget.categories) {
+      _selectedIds.add(cat['id']!);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF151922),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.88,
+        height: MediaQuery.of(context).size.height * 0.7,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.playlist_add_check_rounded, color: Color(0xFFA855F7), size: 22),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Sync Master Channels',
+                      style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white60, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('SELECT TARGET LANGUAGE CATEGORY', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedLanguage,
+                  dropdownColor: const Color(0xFF151922),
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  isExpanded: true,
+                  items: _languages
+                      .map((lang) => DropdownMenuItem(value: lang, child: Text(lang)))
+                      .toList(),
+                  onChanged: (val) {
+                    if (val != null) setState(() => _selectedLanguage = val);
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('SELECT PORTAL CATEGORIES', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => setState(() => _selectedIds.addAll(widget.categories.map((c) => c['id']!))),
+                      child: const Text('Select All', style: TextStyle(color: Color(0xFFA855F7), fontSize: 11, fontWeight: FontWeight.bold)),
+                    ),
+                    TextButton(
+                      onPressed: () => setState(() => _selectedIds.clear()),
+                      child: Text('Deselect All', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  itemCount: widget.categories.length,
+                  separatorBuilder: (_, __) => Divider(color: Colors.white.withOpacity(0.04), height: 1),
+                  itemBuilder: (context, index) {
+                    final cat = widget.categories[index];
+                    final id = cat['id']!;
+                    final title = cat['title']!;
+                    final isChecked = _selectedIds.contains(id);
+
+                    return CheckboxListTile(
+                      value: isChecked,
+                      onChanged: (val) {
+                        setState(() {
+                          if (val == true) {
+                            _selectedIds.add(id);
+                          } else {
+                            _selectedIds.remove(id);
+                          }
+                        });
+                      },
+                      title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      activeColor: const Color(0xFFA855F7),
+                      checkColor: Colors.white,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      dense: true,
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _selectedIds.isEmpty ? Colors.white10 : const Color(0xFFA855F7),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                  onPressed: _selectedIds.isEmpty
+                      ? null
+                      : () {
+                          Navigator.pop(context, {
+                            'categoryIds': _selectedIds.toList(),
+                            'language': _selectedLanguage,
+                          });
+                        },
+                  child: Text(
+                    'Sync Master Registry (${_selectedIds.length})',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

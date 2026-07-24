@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 class ParsedStreamMeta {
   final String? quality;

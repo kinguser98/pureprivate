@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/utils/logo_cache_manager.dart';
 
 class MovieImage extends StatelessWidget {
   const MovieImage({
@@ -32,6 +33,7 @@ class MovieImage extends StatelessWidget {
 
     return CachedNetworkImage(
       imageUrl: source,
+      cacheManager: LogoCacheManager.instance,
       fit: fit,
       placeholder: (_, _) => _fallback(),
       errorWidget: (_, _, _) => _fallback(),

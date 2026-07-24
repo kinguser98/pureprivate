@@ -639,9 +639,10 @@ class _AddMovieScreenState extends ConsumerState<AddMovieScreen> {
             icon: const Icon(Icons.photo_library_rounded, size: 18, color: Color(0xFF8B5CF6)),
             tooltip: 'Pick from Gallery',
             onPressed: () async {
-              if (tmdbId <= 0) {
+              final movieTitle = _titleCtrl.text.trim();
+              if (movieTitle.isEmpty && tmdbId <= 0) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please select or enter a valid TMDB ID first to fetch image variants.')),
+                  const SnackBar(content: Text('Please enter a movie title or TMDB ID first to search images.')),
                 );
                 return;
               }
@@ -650,6 +651,7 @@ class _AddMovieScreenState extends ConsumerState<AddMovieScreen> {
                 builder: (_) => ImagePickerGalleryDialog(
                   tmdbId: tmdbId,
                   imdbId: _imdbCtrl.text.trim(),
+                  movieTitle: movieTitle,
                   isPoster: isPoster,
                 ),
               );

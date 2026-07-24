@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:private_cinema_ios/main.dart';
+import 'package:private_cinema_mobile/main.dart';
 
 void main() {
   testWidgets('App smoke test', (WidgetTester tester) async {

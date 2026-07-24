@@ -1,4 +1,4 @@
-name: private_cinema_ios
+name: private_cinema_mobile
 description: "GoXio - Mobile streaming app."
 publish_to: 'none'
 version: 1.0.0+3005

@@ -5,7 +5,9 @@ enum CinemaTheme {
   purple,
   crimson,
   emerald,
-  oceanic;
+  oceanic,
+  gold,
+  amoled;
 
   String get displayName {
     switch (this) {
@@ -17,6 +19,10 @@ enum CinemaTheme {
         return 'Emerald Lounge';
       case CinemaTheme.oceanic:
         return 'Oceanic Deep';
+      case CinemaTheme.gold:
+        return 'Electric Gold';
+      case CinemaTheme.amoled:
+        return 'Pure AMOLED Black';
     }
   }
 
@@ -30,6 +36,10 @@ enum CinemaTheme {
         return const Color(0xFF10B981);
       case CinemaTheme.oceanic:
         return const Color(0xFF0EA5E9);
+      case CinemaTheme.gold:
+        return const Color(0xFFF59E0B);
+      case CinemaTheme.amoled:
+        return const Color(0xFF8B5CF6);
     }
   }
 
@@ -43,6 +53,10 @@ enum CinemaTheme {
         return const Color(0xFF34D399);
       case CinemaTheme.oceanic:
         return const Color(0xFF38BDF8);
+      case CinemaTheme.gold:
+        return const Color(0xFFFBBF24);
+      case CinemaTheme.amoled:
+        return const Color(0xFFA855F7);
     }
   }
 
@@ -56,6 +70,10 @@ enum CinemaTheme {
         return const Color(0x8010B981);
       case CinemaTheme.oceanic:
         return const Color(0x800EA5E9);
+      case CinemaTheme.gold:
+        return const Color(0x80F59E0B);
+      case CinemaTheme.amoled:
+        return const Color(0x808B5CF6);
     }
   }
 
@@ -69,6 +87,10 @@ enum CinemaTheme {
         return const Color(0x6610B981);
       case CinemaTheme.oceanic:
         return const Color(0x660EA5E9);
+      case CinemaTheme.gold:
+        return const Color(0x66F59E0B);
+      case CinemaTheme.amoled:
+        return const Color(0x668B5CF6);
     }
   }
 
@@ -95,6 +117,18 @@ enum CinemaTheme {
       case CinemaTheme.oceanic:
         return const LinearGradient(
           colors: [Color(0xFF0369A1), Color(0xFF0EA5E9)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+      case CinemaTheme.gold:
+        return const LinearGradient(
+          colors: [Color(0xFFD97706), Color(0xFFF59E0B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        );
+      case CinemaTheme.amoled:
+        return const LinearGradient(
+          colors: [Color(0xFF6D28D9), Color(0xFF8B5CF6)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         );
@@ -127,6 +161,18 @@ enum CinemaTheme {
           end: Alignment.centerLeft,
           colors: [Color(0x400EA5E9), Color(0x000EA5E9)],
         );
+      case CinemaTheme.gold:
+        return const LinearGradient(
+          begin: Alignment.centerRight,
+          end: Alignment.centerLeft,
+          colors: [Color(0x40F59E0B), Color(0x00F59E0B)],
+        );
+      case CinemaTheme.amoled:
+        return const LinearGradient(
+          begin: Alignment.centerRight,
+          end: Alignment.centerLeft,
+          colors: [Color(0x408B5CF6), Color(0x008B5CF6)],
+        );
     }
   }
 }
@@ -148,7 +194,9 @@ class ThemeManager {
 }
 
 abstract final class AppColors {
-  static const background = Color(0xFF06080F);
+  static Color get background => ThemeManager.currentTheme == CinemaTheme.amoled 
+      ? const Color(0xFF000000) 
+      : const Color(0xFF06080F);
   static const surface = Color(0xFF12151F);
   static const rail = Color(0xFF0B0E17);
   static const card = Color(0xFF1A1F2E);

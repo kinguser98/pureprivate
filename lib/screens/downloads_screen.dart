@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/models/movie.dart';
-import 'package:private_cinema_ios/data/download_manager.dart';
-import 'package:private_cinema_ios/data/sync_service.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/widgets/movie_image.dart';
-import 'package:private_cinema_ios/screens/movie_detail_screen.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/widgets/movie_image.dart';
+import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});

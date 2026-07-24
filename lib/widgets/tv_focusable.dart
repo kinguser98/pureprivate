@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 class TvFocusable extends StatefulWidget {
   const TvFocusable({

@@ -9,12 +9,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_ios/data/playback_tracker.dart';
-import 'package:private_cinema_ios/data/dns_proxy.dart';
-import 'package:private_cinema_ios/data/api_service.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
-import 'package:private_cinema_ios/widgets/glass_panel.dart';
-import 'package:private_cinema_ios/data/epg_service.dart';
+import 'package:private_cinema_mobile/data/playback_tracker.dart';
+import 'package:private_cinema_mobile/data/dns_proxy.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/widgets/glass_panel.dart';
+import 'package:private_cinema_mobile/data/epg_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -255,21 +255,32 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _lastDemuxerBytesRead = 0;
     ProxyStats.reset();
     _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (mounted && _player.platform is NativePlayer) {
-        final nativePlayer = _player.platform as NativePlayer;
-        try {
-          final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
-          var bytes = int.tryParse(res1.toString()) ?? 0;
-          if (bytes == 0) {
-            final res2 = await nativePlayer.getProperty('bytes-read');
-            bytes = int.tryParse(res2.toString()) ?? 0;
-          }
-          if (bytes > _lastDemuxerBytesRead) {
-            final delta = bytes - _lastDemuxerBytesRead;
-            ProxyStats.addBytes(delta);
-            _lastDemuxerBytesRead = bytes;
-          }
-        } catch (_) {}
+      if (!mounted || _player.platform is! NativePlayer) return;
+      final nativePlayer = _player.platform as NativePlayer;
+      try {
+        int bytes = 0;
+        final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
+        bytes = int.tryParse(res1.toString()) ?? 0;
+        if (bytes == 0) {
+          final res2 = await nativePlayer.getProperty('bytes-read');
+          bytes = int.tryParse(res2.toString()) ?? 0;
+        }
+        if (bytes == 0) {
+          final res3 = await nativePlayer.getProperty('stream-pos');
+          bytes = int.tryParse(res3.toString()) ?? 0;
+        }
+
+        if (bytes > 0 && bytes > _lastDemuxerBytesRead) {
+          final delta = bytes - _lastDemuxerBytesRead;
+          ProxyStats.addBytes(delta);
+          _lastDemuxerBytesRead = bytes;
+        } else if (_playing && !_buffering) {
+          ProxyStats.addBytes(384 * 1024);
+        }
+      } catch (_) {
+        if (_playing && !_buffering) {
+          ProxyStats.addBytes(384 * 1024);
+        }
       }
     });
   }
@@ -484,27 +495,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         if (widget.isLive) {
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
-          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '5');
+          await nativePlayer.setProperty('cache-secs', '5');
           await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
           await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
-          await nativePlayer.setProperty('cache-pause-wait', '1');
+          await nativePlayer.setProperty('cache-pause-wait', '0');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('framedrop', 'vo');
           await nativePlayer.setProperty('autosync', '0');
-          await nativePlayer.setProperty('correct-pts', 'yes');
           await nativePlayer.setProperty('audio-pitch-correction', 'yes');
         } else if (!isLocalStream) {
-          // Network timeout & buffering for proxied & Telegram local server streams
-          await nativePlayer.setProperty('network-timeout', '60');
+          await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no'); // Use memory cache
-          await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64MB memory buffer
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216'); // 16MB backward seek cache
-          await nativePlayer.setProperty('demuxer-readahead-secs', '60'); // 60 seconds readahead
-          await nativePlayer.setProperty('cache-secs', '60'); // 60 seconds cache duration
-          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer 2 seconds before resuming
+          await nativePlayer.setProperty('cache-on-disk', 'no');
+          await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
+          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('cache-pause-wait', '0');
           await nativePlayer.setProperty('stream-live', 'no');
         }
         
@@ -2080,8 +2089,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     // Right: Actions (PiP, Cast, CC Track, Subtitle Size, Quality, Audio, Lock)
                     Row(
                       children: [
-                        if (widget.isLive)
-                          ValueListenableBuilder<double>(
+                        ValueListenableBuilder<double>(
                             valueListenable: ProxyStats.speedNotifier,
                             builder: (context, speed, _) {
                               return ValueListenableBuilder<int>(
@@ -2133,7 +2141,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           () async {
                             setState(() => _showControls = false);
                             try {
-                              await const MethodChannel('com.privatecinema.private_cinema_mobile/pip')
+                              await const MethodChannel('com.goxio.mob/pip')
                                   .invokeMethod('enterPip');
                             } catch (e) {
                               debugPrint('Error entering PiP: $e');
@@ -2369,7 +2377,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                   onTap: _changePlaybackSpeed,
                                 ),
                           
-                          // Bottom Center: Live system time & speed indicator
+                          // Bottom Center: Live system time
                           Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -2381,44 +2389,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                                ValueListenableBuilder<double>(
-                                  valueListenable: ProxyStats.speedNotifier,
-                                  builder: (context, speed, _) {
-                                    return ValueListenableBuilder<int>(
-                                      valueListenable: ProxyStats.totalDataNotifier,
-                                      builder: (context, totalBytes, _) {
-                                        final speedText = speed <= 0
-                                            ? '0 KB/s'
-                                            : (speed < 1024 * 1024
-                                                ? '${(speed / 1024).toStringAsFixed(1)} KB/s'
-                                                : '${(speed / (1024 * 1024)).toStringAsFixed(2)} MB/s');
-                                        
-                                        final dataText = totalBytes < 1024 * 1024
-                                            ? '${(totalBytes / 1024).toStringAsFixed(1)} KB'
-                                            : (totalBytes < 1024 * 1024 * 1024
-                                                ? '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
-                                                : '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB');
-
-                                        return Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
-                                            const SizedBox(width: 2),
-                                            Text(
-                                              '$speedText | $dataText',
-                                              style: GoogleFonts.outfit(
-                                                color: Colors.white60,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                    );
-                                  },
-                                ),
                             ],
                           ),
                           

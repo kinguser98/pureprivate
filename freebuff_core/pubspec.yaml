@@ -17,7 +17,6 @@ dependencies:
   json_annotation: ^4.9.0
   mtflute:
     path: ../mtflute
-  # add any other common dependencies here
 
 dev_dependencies:
   flutter_test:
@@ -27,4 +26,4 @@ dev_dependencies:
 
 dependency_overrides:
   mtflute:
-    path: ../../mtflute_diagnostic/packages/mtflute
+    path: ../mtflute

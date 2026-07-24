@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'api_service.dart';
+import '../admin/models/iptv_channel.dart';
 
 /// Simple response wrapper for dart:io HttpClient responses
 class _StalkerHttpResponse {
@@ -828,6 +829,100 @@ class StalkerResolver {
         'success': false,
         'error': e.toString(),
       };
+    }
+  }
+
+  /// Fetches raw IptvChannels from portal for specified category IDs (used for Master Channel Bulk Import).
+  static Future<List<IptvChannel>> fetchPortalChannelsForCategories(int portalId, List<String> selectedCategoryIds) async {
+    try {
+      final settings = await _getSettings(portalId);
+      final token = await _authenticate(portalId, settings);
+      final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
+      final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
+      var deviceId = (settings['device_id'] ?? '').toString().trim();
+      if (deviceId.contains(' ')) {
+        deviceId = deviceId.split(' ').last.trim();
+      }
+
+      var genresUrl = '$portalUrl?type=itv&action=get_genres';
+      genresUrl = _appendDeviceParams(genresUrl, deviceId);
+
+      final headers = {
+        'User-Agent': userAgent,
+        'Cookie': _cachedCookiesMap[portalId]!,
+        'Authorization': 'Bearer $token',
+        'X-User-Agent': _getXUserAgent(userAgent),
+      };
+
+      final genresResponse = await _stalkerGet(genresUrl, headers: headers, portalId: portalId, timeoutSeconds: 12);
+      final Map<String, String> genresMap = {};
+      if (genresResponse.statusCode == 200) {
+        final genresData = json.decode(genresResponse.body);
+        dynamic genresList = [];
+        if (genresData is Map) {
+          genresList = genresData['js'] ?? genresData['result'] ?? [];
+        } else if (genresData is List) {
+          genresList = genresData;
+        }
+        if (genresList is List) {
+          for (final g in genresList) {
+            if (g is Map) {
+              final id = g['id']?.toString() ?? '';
+              final title = g['title']?.toString() ?? '';
+              if (id.isNotEmpty && title.isNotEmpty) {
+                genresMap[id] = title;
+              }
+            }
+          }
+        }
+      }
+
+      var channelsUrl = '$portalUrl?type=itv&action=get_all_channels';
+      channelsUrl = _appendDeviceParams(channelsUrl, deviceId);
+
+      final channelsResponse = await _stalkerGet(channelsUrl, headers: headers, portalId: portalId, timeoutSeconds: 20);
+      if (channelsResponse.statusCode != 200) return [];
+
+      final channelsData = json.decode(channelsResponse.body);
+      dynamic rawChannelsList = [];
+      if (channelsData is Map) {
+        rawChannelsList = channelsData['result'] ?? channelsData['js'] ?? [];
+        if (rawChannelsList is Map) rawChannelsList = rawChannelsList['data'] ?? [];
+      } else if (channelsData is List) {
+        rawChannelsList = channelsData;
+      }
+      if (rawChannelsList is! List) return [];
+
+      final List<IptvChannel> list = [];
+      for (final ch in rawChannelsList) {
+        final id = ch['id']?.toString() ?? ch['number']?.toString() ?? '';
+        final name = ch['name']?.toString() ?? '';
+        final logo = ch['logo']?.toString() ?? '';
+        final cmd = ch['cmd']?.toString() ?? '';
+        final catId = ch['tv_genre_id']?.toString() ?? '';
+
+        if (selectedCategoryIds.isNotEmpty && !selectedCategoryIds.contains(catId)) {
+          continue;
+        }
+
+        var category = genresMap[catId] ?? 'General';
+        final logoUrl = resolveStalkerLogo(logo, portalUrl);
+
+        if (id.isNotEmpty && name.isNotEmpty) {
+          list.add(IptvChannel(
+            id: int.tryParse(id) ?? DateTime.now().millisecondsSinceEpoch,
+            name: name,
+            logoUrl: logoUrl,
+            cmd: cmd.isNotEmpty ? cmd : 'ffmpeg http://...',
+            categoryName: category,
+            stalkerId: id,
+          ));
+        }
+      }
+      return list;
+    } catch (e) {
+      debugPrint('fetchPortalChannelsForCategories error: $e');
+      return [];
     }
   }
 

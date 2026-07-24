@@ -1,12 +1,12 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:private_cinema_ios/screens/home_screen.dart';
-import 'package:private_cinema_ios/screens/all_movies_screen.dart';
-import 'package:private_cinema_ios/screens/downloads_screen.dart';
-import 'package:private_cinema_ios/screens/favorites_screen.dart';
-import 'package:private_cinema_ios/screens/settings_screen.dart';
-import 'package:private_cinema_ios/screens/live_tv_screen.dart';
-import 'package:private_cinema_ios/theme/app_colors.dart';
+import 'package:private_cinema_mobile/screens/home_screen.dart';
+import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
+import 'package:private_cinema_mobile/screens/downloads_screen.dart';
+import 'package:private_cinema_mobile/screens/favorites_screen.dart';
+import 'package:private_cinema_mobile/screens/settings_screen.dart';
+import 'package:private_cinema_mobile/screens/live_tv_screen.dart';
+import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 class NavigationHolder extends StatefulWidget {
   const NavigationHolder({super.key});
