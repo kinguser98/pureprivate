@@ -10,6 +10,7 @@ import '../../utils/admin_api_client.dart';
 import '../../utils/drawer_helper.dart';
 import '../../utils/tmdb_service.dart';
 import '../../widgets/common/loading_widget.dart';
+import '../../../widgets/image_picker_gallery_dialog.dart';
 
 class EditMovieScreen extends ConsumerStatefulWidget {
   final String movieId;
@@ -661,6 +662,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
   }
 
   Widget _imageField(String label, TextEditingController ctrl, bool isPoster) {
+    final tmdbId = int.tryParse(_tmdbCtrl.text.trim()) ?? 0;
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF1A1F2E).withOpacity(0.5),
@@ -673,6 +675,33 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         decoration: InputDecoration(
           labelText: label, labelStyle: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
           prefixIcon: Icon(Icons.image, size: 16, color: Colors.white.withOpacity(0.4)),
+          suffixIcon: IconButton(
+            icon: const Icon(Icons.photo_library_rounded, size: 18, color: Color(0xFF8B5CF6)),
+            tooltip: 'Pick from Gallery',
+            onPressed: () async {
+              if (tmdbId <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please select or enter a valid TMDB ID first to fetch image variants.')),
+                );
+                return;
+              }
+              final selectedUrl = await showDialog<String>(
+                context: context,
+                builder: (_) => ImagePickerGalleryDialog(
+                  tmdbId: tmdbId,
+                  imdbId: _imdbCtrl.text.trim(),
+                  isPoster: isPoster,
+                ),
+              );
+              if (selectedUrl != null && mounted) {
+                ctrl.text = selectedUrl;
+                setState(() {
+                  if (isPoster) _posterPreviewUrl = selectedUrl;
+                  else _backdropPreviewUrl = selectedUrl;
+                });
+              }
+            },
+          ),
           border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12), isDense: true,
         ),
       ),

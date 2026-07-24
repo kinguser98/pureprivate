@@ -75,8 +75,19 @@ class TmdbPersonFilmography {
   });
 }
 
+class TmdbMovieImages {
+  final List<String> posters;
+  final List<String> backdrops;
+  TmdbMovieImages({required this.posters, required this.backdrops});
+}
+
 class TmdbService {
   static const String _apiKey = '8baba8ab6b8bbe247645bcae7df63d0d';
+  static String customApiKey = '';
+  static String customFanartApiKey = '0604b904d9e0303e83b1029320d91244';
+
+  static String get apiKey => customApiKey.isNotEmpty ? customApiKey : _apiKey;
+
   static const String _baseUrl = 'https://api.themoviedb.org/3';
   static const String _posterBase = 'https://image.tmdb.org/t/p/w500';
   static const String _backdropBase = 'https://image.tmdb.org/t/p/original';
@@ -91,10 +102,63 @@ class TmdbService {
     return d;
   }
 
+  static Future<TmdbMovieImages> getMovieImages(int tmdbId, {String? imdbId}) async {
+    final List<String> posters = [];
+    final List<String> backdrops = [];
+
+    try {
+      final res = await _dio.get('$_baseUrl/movie/$tmdbId/images', queryParameters: {
+        'api_key': apiKey,
+        'include_image_language': 'en,null,hi,ta,te,ml',
+      });
+      final data = res.data;
+      if (data != null) {
+        final pList = data['posters'] as List? ?? [];
+        for (final p in pList) {
+          if (p['file_path'] != null) {
+            posters.add('$_posterBase${p['file_path']}');
+          }
+        }
+        final bList = data['backdrops'] as List? ?? [];
+        for (final b in bList) {
+          if (b['file_path'] != null) {
+            backdrops.add('$_backdropBase${b['file_path']}');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('TMDB getMovieImages error: $e');
+    }
+
+    try {
+      final fanartKey = customFanartApiKey.isNotEmpty ? customFanartApiKey : '0604b904d9e0303e83b1029320d91244';
+      final res = await _dio.get('https://webservice.fanart.tv/v3/movies/$tmdbId', queryParameters: {
+        'api_key': fanartKey,
+      });
+      final data = res.data;
+      if (data != null) {
+        final fPosters = data['movieposter'] as List? ?? [];
+        for (final fp in fPosters) {
+          if (fp['url'] != null && !posters.contains(fp['url'])) {
+            posters.add(fp['url'].toString());
+          }
+        }
+        final fBackdrops = data['moviebackground'] as List? ?? [];
+        for (final fb in fBackdrops) {
+          if (fb['url'] != null && !backdrops.contains(fb['url'])) {
+            backdrops.add(fb['url'].toString());
+          }
+        }
+      }
+    } catch (_) {}
+
+    return TmdbMovieImages(posters: posters, backdrops: backdrops);
+  }
+
   static Future<List<TmdbMovie>> search(String query) async {
     if (query.isEmpty) return [];
     try {
-      final res = await _dio.get('$_baseUrl/search/movie', queryParameters: {'api_key': _apiKey, 'query': query});
+      final res = await _dio.get('$_baseUrl/search/movie', queryParameters: {'api_key': apiKey, 'query': query});
       final data = res.data;
       if (data == null || data['results'] == null) return [];
       final results = data['results'] as List;
@@ -111,7 +175,7 @@ class TmdbService {
 
   static Future<TmdbDetails?> getDetails(int id) async {
     try {
-      final res = await _dio.get('$_baseUrl/movie/$id', queryParameters: {'api_key': _apiKey, 'append_to_response': 'credits,videos'});
+      final res = await _dio.get('$_baseUrl/movie/$id', queryParameters: {'api_key': apiKey, 'append_to_response': 'credits,videos'});
       final data = res.data;
       if (data == null || data['success'] == false) return null;
 
@@ -151,7 +215,7 @@ class TmdbService {
   static Future<int?> searchPersonId(String name) async {
     if (name.isEmpty) return null;
     try {
-      final res = await _dio.get('$_baseUrl/search/person', queryParameters: {'api_key': _apiKey, 'query': name});
+      final res = await _dio.get('$_baseUrl/search/person', queryParameters: {'api_key': apiKey, 'query': name});
       final results = res.data?['results'] as List?;
       if (results != null && results.isNotEmpty) {
         return results.first['id'] as int?;
@@ -164,7 +228,7 @@ class TmdbService {
 
   static Future<TmdbPersonDetails?> getPersonDetails(int personId) async {
     try {
-      final res = await _dio.get('$_baseUrl/person/$personId', queryParameters: {'api_key': _apiKey});
+      final res = await _dio.get('$_baseUrl/person/$personId', queryParameters: {'api_key': apiKey});
       final d = res.data;
       if (d == null) return null;
       return TmdbPersonDetails(
@@ -184,7 +248,7 @@ class TmdbService {
 
   static Future<List<TmdbPersonFilmography>> getPersonFilmography(int personId) async {
     try {
-      final res = await _dio.get('$_baseUrl/person/$personId/combined_credits', queryParameters: {'api_key': _apiKey});
+      final res = await _dio.get('$_baseUrl/person/$personId/combined_credits', queryParameters: {'api_key': apiKey});
       final data = res.data;
       if (data == null) return [];
 
