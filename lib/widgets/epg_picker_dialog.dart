@@ -45,11 +45,17 @@ class _EpgPickerDialogState extends State<EpgPickerDialog> {
 
   void _filter(String query) {
     final q = query.trim().toLowerCase();
+    final namesMap = EpgService.channelDisplayNames;
     setState(() {
       if (q.isEmpty) {
         _filteredIds = List.from(_allIds);
       } else {
-        _filteredIds = _allIds.where((id) => id.toLowerCase().contains(q)).toList();
+        _filteredIds = _allIds.where((id) {
+          final idMatch = id.toLowerCase().contains(q);
+          final displayName = namesMap[id]?.toLowerCase() ?? '';
+          final nameMatch = displayName.contains(q);
+          return idMatch || nameMatch;
+        }).toList();
       }
     });
   }
@@ -93,7 +99,7 @@ class _EpgPickerDialogState extends State<EpgPickerDialog> {
               onChanged: _filter,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Search EPG channel name or ID...',
+                hintText: 'Search EPG channel name or ID (e.g. Surya TV, ts521)...',
                 hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
                 prefixIcon: const Icon(Icons.search, color: Colors.white38, size: 18),
                 filled: true,
@@ -123,6 +129,10 @@ class _EpgPickerDialogState extends State<EpgPickerDialog> {
                             final epgId = _filteredIds[index];
                             final logoUrl = EpgService.getChannelLogo(epgId, epgId);
                             final isSelected = widget.initialEpgId == epgId;
+                            final displayName = EpgService.channelDisplayNames[epgId];
+                            final titleText = (displayName != null && displayName.isNotEmpty)
+                                ? '$displayName ($epgId)'
+                                : epgId;
 
                             return ListTile(
                               leading: ClipRRect(
@@ -143,7 +153,7 @@ class _EpgPickerDialogState extends State<EpgPickerDialog> {
                                       ),
                               ),
                               title: Text(
-                                epgId,
+                                titleText,
                                 style: TextStyle(
                                   color: isSelected ? const Color(0xFF8B5CF6) : Colors.white,
                                   fontSize: 13,
