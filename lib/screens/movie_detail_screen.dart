@@ -2078,52 +2078,38 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     } else {
       final isLocalTelegram = source.contains('127.0.0.1') || source.contains('localhost') || source.contains('/tg/');
       final isStalkerOrDirect = (sourceName != null && sourceName.toLowerCase().contains('stalker')) || headers != null;
-      if (isLocalTelegram || isStalkerOrDirect) {
-        final uri = Uri.tryParse(source);
-        final Map<String, String> finalHeaders = {};
-        if (headers != null) finalHeaders.addAll(headers);
-        if (uri != null && uri.queryParameters.containsKey('headers')) {
-          try {
-            final jsonHeaders = json.decode(uri.queryParameters['headers']!);
-            if (jsonHeaders is Map) {
-              jsonHeaders.forEach((k, v) {
-                finalHeaders[k.toString()] = v.toString();
-              });
-            }
-          } catch (_) {}
+
+      String playUrl = source;
+      Map<String, String>? playHeaders = headers;
+
+      if (!isLocalTelegram && !isStalkerOrDirect) {
+        // Show resolving dialog
+        if (mounted) {
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => ResolvingProgressDialog(
+              title: movie.title,
+              subtitle: 'Resolving stream...',
+            ),
+          );
         }
-        _play(
-          source,
-          resumeDirectly: resumeDirectly,
-          headers: finalHeaders.isEmpty ? null : finalHeaders,
-          sourceName: sourceName,
+        final result = await runHlsPreflight(
+          context: context,
+          url: source,
+          movieTitle: movie.title,
+          headers: headers,
         );
-        return;
+        if (mounted) Navigator.of(context).pop();
+        if (result?.url != null) {
+          playUrl = result!.url;
+        }
       }
 
-      // Show resolving dialog
-      if (mounted) {
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => ResolvingProgressDialog(
-            title: movie.title,
-            subtitle: 'Resolving stream...',
-          ),
-        );
-      }
-      final result = await runHlsPreflight(
-        context: context,
-        url: source,
-        movieTitle: movie.title,
-        headers: headers,
-      );
-      if (mounted) Navigator.of(context).pop();
-      final playUrl = result?.url ?? source;
       final uri = Uri.tryParse(playUrl);
       final Map<String, String> finalHeaders = {};
-      if (headers != null) {
-        finalHeaders.addAll(headers);
+      if (playHeaders != null) {
+        finalHeaders.addAll(playHeaders);
       }
       if (uri != null && uri.queryParameters.containsKey('headers')) {
         try {
@@ -2137,12 +2123,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           debugPrint('Failed to parse stream headers: $e');
         }
       }
-      _play(
-        playUrl,
-        resumeDirectly: resumeDirectly,
-        headers: finalHeaders.isEmpty ? null : finalHeaders,
-        sourceName: sourceName,
-      );
+
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => VideoPlayerScreen(
+              videoSource: playUrl,
+              title: movie.title,
+              subtitle: sourceName ?? 'Stalker Portal',
+              movieId: movie.id,
+              resumeDirectly: resumeDirectly,
+              headers: finalHeaders.isEmpty ? null : finalHeaders,
+              sourceName: sourceName,
+            ),
+          ),
+        );
+      }
     }
   }
 
