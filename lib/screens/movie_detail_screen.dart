@@ -1792,21 +1792,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         },
       );
 
-      var stalkerCmd = source;
-      var portalId = 1;
-
+      final params = StalkerResolver.parseStalkerUrl(source);
       try {
-        if (source.startsWith('stalker://')) {
-          final uri = Uri.parse(source);
-          portalId = int.tryParse(uri.host) ?? 1;
-          stalkerCmd = uri.path;
-          if (uri.query.isNotEmpty) {
-            stalkerCmd += '?${uri.query}';
-          }
-        }
         final stalkerStream = await StalkerResolver.resolveStream(
-          stalkerCmd,
-          portalId,
+          params.cmd,
+          params.portalId,
           isLive: false,
         );
         if (mounted) Navigator.of(context).pop(); // Dismiss progress
@@ -1823,7 +1813,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Stalker VOD failed (Portal $portalId, cmd: $stalkerCmd): $e',
+                'Stalker VOD failed (Portal ${params.portalId}, cmd: ${params.cmd}): $e',
               ),
               backgroundColor: Colors.redAccent,
               duration: const Duration(seconds: 8),
