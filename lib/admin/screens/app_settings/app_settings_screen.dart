@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../utils/admin_api_client.dart';
+import '../../utils/tmdb_service.dart';
 import '../../providers/settings_provider.dart';
 import '../../widgets/common/glass_card.dart';
 

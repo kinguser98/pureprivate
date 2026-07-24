@@ -22,11 +22,14 @@ class EpgService {
   static final Map<String, List<EpgProgram>> _channelPrograms = {};
   // Cached channel logos extracted from EPG: channelId -> logo URL
   static final Map<String, String> _channelLogos = {};
+  // Cached channel display names: channelId -> display name (e.g., "Surya TV HD")
+  static final Map<String, String> _channelDisplayNames = {};
   static bool _isLoaded = false;
   static bool _isLoading = false;
 
   static bool get isLoaded => _isLoaded;
   static bool get isLoading => _isLoading;
+  static Map<String, String> get channelDisplayNames => _channelDisplayNames;
 
   /// Fetches EPG files, decompresses using GZip, and parses active programs.
   /// Caches current and future programs to keep memory footprint light.
@@ -35,6 +38,7 @@ class EpgService {
     _isLoading = true;
     _channelPrograms.clear();
     _channelLogos.clear();
+    _channelDisplayNames.clear();
 
     final urls = (customUrls != null && customUrls.where((u) => u.trim().isNotEmpty).isNotEmpty)
         ? customUrls.where((u) => u.trim().isNotEmpty).toList()
@@ -130,6 +134,7 @@ class EpgService {
           final dName = nameMatch.group(1)?.trim();
           if (dName != null && dName.isNotEmpty) {
             channelNames[channelId] = dName;
+            _channelDisplayNames[channelId] = dName;
             
             // Store logo by channel ID and by normalized channel name
             final iconMatch = iconExp.firstMatch(content);
