@@ -476,7 +476,7 @@ class CustomDnsProxy {
         }
 
         final HttpClientResponse activeResp = resp!;
-        request.response.statusCode = activeResp.statusCode;
+        request.response.statusCode = (cleanTargetUrl.contains('.m3u8') && activeResp.statusCode == 206) ? 200 : activeResp.statusCode;
         
         activeResp.headers.forEach((name, values) {
           final nameLower = name.toLowerCase();
@@ -700,6 +700,7 @@ class CustomDnsProxy {
           }
           bodyStr = lines.join('\n');
           request.response.headers.removeAll('content-encoding');
+          request.response.headers.set('content-type', 'application/vnd.apple.mpegurl');
           final rewrittenBytes = utf8.encode(bodyStr);
           ProxyStats.addBytes(rewrittenBytes.length);
           request.response.headers.set('content-length', rewrittenBytes.length.toString());
