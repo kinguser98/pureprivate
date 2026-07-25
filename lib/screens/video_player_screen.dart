@@ -505,7 +505,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             headerList.add('$key: $value');
           });
           if (headerList.isNotEmpty) {
-            await nativePlayer.setProperty('http-header-fields', headerList.join('\r\n'));
+            await nativePlayer.setProperty('http-header-fields', headerList.join(','));
           }
         }
         // Hardware decoding configuration
@@ -548,6 +548,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         } else if (Platform.isIOS) {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
+        
+        // Disable HTTP persistent connections to avoid avformat_open_input()
+        // "Cannot reuse HTTP connection for different host" failures with HLS CDN segments
+        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
       }
 
       var resolvedSource = widget.videoSource;
@@ -567,8 +571,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final hasStalkerCookie = playHeaders.entries.any(
             (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
           );
-          if (lowerSubtitle.contains('castle') ||
+          if (lowerSubtitle.contains('stalker') ||
+              lowerSubtitle.contains('castle') ||
               lowerSubtitle.contains('telegram') ||
+              lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerUrl.contains('hlowb.com') ||
@@ -576,7 +582,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
-              lowerUrl.contains('/f/')) {
+              lowerUrl.contains('/f/') ||
+              hasStalkerCookie) {
             shouldProxy = false;
           }
           if (shouldProxy) {
