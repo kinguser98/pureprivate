@@ -567,10 +567,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final hasStalkerCookie = playHeaders.entries.any(
             (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
           );
-          if (lowerSubtitle.contains('stalker') ||
-              lowerSubtitle.contains('castle') ||
+          if (lowerSubtitle.contains('castle') ||
               lowerSubtitle.contains('telegram') ||
-              lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerUrl.contains('hlowb.com') ||
@@ -578,8 +576,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
-              lowerUrl.contains('/f/') ||
-              hasStalkerCookie) {
+              lowerUrl.contains('/f/')) {
             shouldProxy = false;
           }
           if (shouldProxy) {
