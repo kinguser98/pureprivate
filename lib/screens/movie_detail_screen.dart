@@ -72,6 +72,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveVidlinkSources = [];
   List<StreamSource> _liveNetmirrorSources = [];
   List<StreamSource> _liveCinemmSources = [];
+  List<StreamSource> _liveMovieboxSources = [];
   List<StreamSource> _liveStalkerSources = [];
   List<StreamSource> _liveStravoSources = [];
   List<StreamSource> _liveStremioSources = [];
@@ -82,6 +83,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
+  bool _resolvingMoviebox = false;
   bool _resolvingStalker = false;
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
@@ -93,6 +95,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showCinemm = true;
+  bool _showMoviebox = true;
   bool _showStalker = true;
   bool _showStravo = true;
   bool _showTorrent = true;
@@ -157,6 +160,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showMoviebox = cloud.containsKey('source_show_moviebox') ? cloud['source_show_moviebox'] == 'true' : (prefs.getBool('source_show_moviebox') ?? true);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
         _blockedAddonGroups = blockedRaw
@@ -169,7 +173,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
-      setState(() => _sourceOrder = order);
+      final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
+      setState(() => _sourceOrder = mergedOrder);
     }
   }
 
@@ -192,6 +198,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (_showNetmirror) _resolveLiveNetmirror(movie.title);
     if (_showCinemm) _resolveLiveCinemm(movie.title);
+    if (_showMoviebox) _resolveLiveMoviebox(movie.title);
     if (_showStalker) _resolveLiveStalker(movie.title);
 
     final imdbId = movie.imdbId;
@@ -1681,37 +1688,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // Telegram Saved-Message file: resolve to a streamable URL first.
     if (TelegramSources.isTelegramUrl(source)) {
-      final localId = TelegramSources.extractLocalId(source);
-      final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
-      TelegramVideoItem? match;
-      for (final i in items) {
-        if (i.localId == localId) {
-          match = i;
-          break;
-        }
-      }
-      if (match == null) {
-        // Not in cache → try to refresh and re-search.
-        await TelegramService.instance.loadSavedMessages();
-        final items2 = await TelegramIndexDb.instance.all();
-        for (final i in items2) {
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Connecting to Telegram Server...',
+          );
+        },
+      );
+
+      try {
+        final localId = TelegramSources.extractLocalId(source);
+        final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+        TelegramVideoItem? match;
+        for (final i in items) {
           if (i.localId == localId) {
             match = i;
             break;
           }
         }
-      }
-      if (match == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
-            backgroundColor: const Color(0xFFEF4444),
-          ));
+        if (match == null) {
+          // Not in cache → try to refresh and re-search.
+          await TelegramService.instance.loadSavedMessages();
+          final items2 = await TelegramIndexDb.instance.all();
+          for (final i in items2) {
+            if (i.localId == localId) {
+              match = i;
+              break;
+            }
+          }
         }
-        return;
-      }
-      try {
+
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
+
+        if (match == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
+              backgroundColor: Color(0xFFEF4444),
+            ));
+          }
+          return;
+        }
+
         final resolved = await TelegramService.instance.resolveStream(match);
         // Re-enter playback with the resolved URL.
         return _playWithResolution(
@@ -1723,6 +1747,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           headers: headers,
         );
       } catch (e) {
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Telegram resolve failed: $e'),
@@ -2258,6 +2283,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
+            // MovieBox Server
+            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+              sourceWidgets['moviebox'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('moviebox')}. MovieBox Server',
+                subtitle: _resolvingMoviebox
+                    ? 'Searching MovieBox...'
+                    : '${_liveMovieboxSources.length} links available',
+                disabled: _resolvingMoviebox,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMovieboxSources.length == 1) {
+                    _playWithResolution(
+                      _liveMovieboxSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMovieboxSources.first.name,
+                      headers: _liveMovieboxSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVIEBOX STREAMS',
+                      _liveMovieboxSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
             // 6. Stalker VOD Server
             if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
               final uniquePortals = _liveStalkerSources.map((s) {
@@ -2761,20 +2816,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     StreamSource source, {
     bool resumeDirectly = false,
   }) async {
-    // Show loading
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => ResolvingProgressDialog(
-        title: movie.title,
-        subtitle: 'Pre-flight HLS NetMirror Checks...',
-      ),
-    );
-
     try {
       final uri = Uri.parse(source.url);
-
-      // Extract headers from URL query params
       final Map<String, String> headers = {};
       if (uri.queryParameters.containsKey('headers')) {
         final jsonHeaders = json.decode(uri.queryParameters['headers']!);
@@ -2785,244 +2828,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
 
-      // Fetch master playlist
-      final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 8);
-      final req = await client.getUrl(uri);
-      headers.forEach((k, v) {
-        req.headers.set(k, v);
-      });
-      final res = await req.close();
-
-      if (res.statusCode == 200) {
-        final body = await res.transform(utf8.decoder).join();
-        client.close();
-
-        // Parse audio tracks
-        final audioLines = body
-            .split('\n')
-            .where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO'))
-            .toList();
-        final List<String> audioLanguages = [];
-        for (final line in audioLines) {
-          final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
-          if (nameMatch != null) {
-            final langName = nameMatch.group(1)!;
-            if (!audioLanguages.contains(langName)) {
-              audioLanguages.add(langName);
-            }
-          }
-        }
-
-        if (mounted) Navigator.of(context).pop(); // Dismiss loader
-
-        String? selectedLanguage;
-        if (audioLanguages.length > 1 && mounted) {
-          selectedLanguage = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) {
-              return AlertDialog(
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                title: Text(
-                  'Select Audio Language',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: audioLanguages.length,
-                    itemBuilder: (context, index) {
-                      final lang = audioLanguages[index];
-                      return ListTile(
-                        title: Text(
-                          lang,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        leading: const Icon(
-                          Icons.audiotrack_rounded,
-                          color: Colors.tealAccent,
-                        ),
-                        onTap: () => Navigator.of(context).pop(lang),
-                      );
-                    },
-                  ),
-                ),
-              );
-            },
-          );
-        }
-
-        // Parse video qualities
-        final List<String> videoQualities = [];
-        final lines = body.split('\n');
-        for (final line in lines) {
-          if (line.startsWith('#EXT-X-STREAM-INF')) {
-            final resolutionMatch = RegExp(
-              r'RESOLUTION=(\d+x\d+)',
-            ).firstMatch(line);
-            if (resolutionMatch != null) {
-              final height = resolutionMatch.group(1)!.split('x')[1];
-              final q = '${height}p';
-              if (!videoQualities.contains(q)) videoQualities.add(q);
-            } else {
-              final bandwidthMatch = RegExp(
-                r'BANDWIDTH=(\d+)',
-              ).firstMatch(line);
-              if (bandwidthMatch != null) {
-                final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
-                String q = '360p';
-                if (bw > 3000000)
-                  q = '1080p';
-                else if (bw > 1500000)
-                  q = '720p';
-                else if (bw > 800000)
-                  q = '480p';
-                if (!videoQualities.contains(q)) videoQualities.add(q);
-              }
-            }
-          }
-        }
-
-        String? selectedQuality;
-        if (videoQualities.isNotEmpty && mounted) {
-          videoQualities.sort((a, b) {
-            final valA = int.tryParse(a.replaceAll('p', '')) ?? 0;
-            final valB = int.tryParse(b.replaceAll('p', '')) ?? 0;
-            return valB.compareTo(valA);
-          });
-          selectedQuality = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) {
-              return AlertDialog(
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                title: Text(
-                  'Select Video Quality',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: videoQualities.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == 0) {
-                        return ListTile(
-                          title: const Text(
-                            'Auto / Best Quality',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                          leading: const Icon(
-                            Icons.settings_backup_restore_rounded,
-                            color: Colors.tealAccent,
-                          ),
-                          onTap: () => Navigator.of(context).pop('Auto'),
-                        );
-                      }
-                      final q = videoQualities[index - 1];
-                      return ListTile(
-                        title: Text(
-                          q,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        leading: const Icon(
-                          Icons.video_settings_rounded,
-                          color: Colors.tealAccent,
-                        ),
-                        onTap: () => Navigator.of(context).pop(q),
-                      );
-                    },
-                  ),
-                ),
-              );
-            },
-          );
-        }
-
-        // Build final URL with selected audio and quality
-        if (mounted) {
-          var finalUrl = source.url;
-          final Map<String, String> queryParams = {};
-          if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
-            queryParams['selected_audio'] = selectedLanguage;
-          }
-          if (selectedQuality != null &&
-              selectedQuality.isNotEmpty &&
-              selectedQuality != 'Auto') {
-            queryParams['selected_quality'] = selectedQuality;
-          }
-          if (queryParams.isNotEmpty) {
-            final sourceUri = Uri.parse(source.url);
-            finalUrl = sourceUri
-                .replace(
-                  queryParameters: {
-                    ...sourceUri.queryParameters,
-                    ...queryParams,
-                  },
-                )
-                .toString();
-          }
-
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => VideoPlayerScreen(
-                videoSource: finalUrl,
-                title: movie.title,
-                subtitle: 'NetMirror Server',
-                movieId: movie.id,
-                resumeDirectly: resumeDirectly,
-                headers: headers,
-              ),
-            ),
-          );
-        }
-      } else {
-        client.close();
-        throw Exception(
-          'HLS Master playlist returned status ${res.statusCode}',
-        );
-      }
-    } catch (e) {
-      debugPrint('NetMirror pre-flight failed: $e. Launching directly.');
-      if (mounted) {
-        Navigator.of(context).pop(); // Dismiss loader
-        final uri = Uri.parse(source.url);
-        final Map<String, String> headers = {};
-        if (uri.queryParameters.containsKey('headers')) {
-          final jsonHeaders = json.decode(uri.queryParameters['headers']!);
-          if (jsonHeaders is Map) {
-            jsonHeaders.forEach((k, v) {
-              headers[k.toString()] = v.toString();
-            });
-          }
-        }
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => VideoPlayerScreen(
-              videoSource: source.url,
-              title: movie.title,
-              subtitle: 'NetMirror Server',
-              movieId: movie.id,
-              resumeDirectly: resumeDirectly,
-              headers: headers,
-            ),
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movie.title,
+            subtitle: 'NetMirror Server',
+            movieId: movie.id,
+            resumeDirectly: resumeDirectly,
+            headers: headers.isNotEmpty ? headers : null,
           ),
-        );
-      }
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Playback failed: $e'), backgroundColor: Colors.redAccent),
+      );
     }
   }
 
@@ -4019,6 +3840,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _downloadMovieboxStream(StreamSource source) async {
+    try {
+      final url = source.url;
+      if (url.isNotEmpty) {
+        await _promptAndStartDownload(url, headers: source.headers);
+      } else {
+        throw Exception('Failed to resolve MovieBox direct URL.');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
   Future<void> _downloadStreamtapeSource(StreamSource source) async {
     showDialog<void>(
       context: context,
@@ -4229,7 +4065,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false, bool isTelegram = false, bool isCastle = false, bool isTorrentSeedr = false}) {
+  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false, bool isTelegram = false, bool isCastle = false, bool isTorrentSeedr = false, bool isMoviebox = false}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,

@@ -7,12 +7,16 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
+import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/screens/cast_controller_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
+import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
@@ -67,6 +71,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showStravo = true;
   bool _showStalker = true;
   bool _showCinemm = true;
+  bool _showMoviebox = true;
   bool _showCastle = true;
   bool _showTorrent = true;
   bool _showStremioAddon = true;
@@ -79,12 +84,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu'];
+        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox'];
         _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
         _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
+        _showMoviebox = cloud.containsKey('source_show_moviebox') ? cloud['source_show_moviebox'] == 'true' : (prefs.getBool('source_show_moviebox') ?? true);
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true);
@@ -103,6 +109,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     if (order.isNotEmpty && mounted) {
       final List<String> mergedOrder = List<String>.from(order);
       if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
+      if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
       setState(() => _sourceOrder = mergedOrder);
     }
   }
@@ -421,6 +428,22 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         tasks.add(_resolveCinemm(title, year));
       }
 
+      // Resolve MovieBox
+      if (_showMoviebox) {
+        final year = _isSeriesSearch
+            ? ''
+            : (_selectedMovie?['release_date']?.toString().split('-').first ?? '');
+        tasks.add(
+          _resolveMoviebox(
+            title,
+            year,
+            isSeries: _isSeriesSearch,
+            season: season,
+            episode: episode,
+          ),
+        );
+      }
+
       // 7. Resolve Castle - movies only
       if (_showCastle && !_isSeriesSearch && tmdbId != null && tmdbId.isNotEmpty) {
         tasks.add(_resolveExtraScraper('castle', tmdbId));
@@ -585,6 +608,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('CineMM resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveMoviebox(String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+    try {
+      debugPrint('MovieBox Scraper: Resolving streams for $title...');
+      final streams = await MovieboxResolver.resolveStreams(
+        title: title,
+        year: year.isNotEmpty ? year : null,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('MovieBox resolution failed: $e');
     }
   }
 
@@ -1089,327 +1132,58 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       return;
     }
 
+    if (source.type == StreamSourceType.moviebox) {
+      final Map<String, String> headers = {};
+      if (source.headers != null) {
+        headers.addAll(source.headers!);
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: 'MovieBox Server',
+            movieId: 'special_search_${_selectedMovie['id']}',
+            resumeDirectly: false,
+            headers: headers.isNotEmpty ? headers : null,
+          ),
+        ),
+      );
+      return;
+    }
+
     if (isScraperSource) {
       final serverSubtitle = (source.type == StreamSourceType.stremioAddon || source.type == StreamSourceType.nuveoAddon)
           ? (source.addonName ?? 'Addon')
           : '${source.name.split(':')[0]} Server';
 
-      // 1. Show pre-flight loading indicator
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => ResolvingProgressDialog(
-          title: movieTitle,
-          subtitle: 'Performing pre-flight stream checks...',
-        ),
-      );
-
-      try {
-        final Map<String, String> headers = {};
-        if (source.headers != null) {
-          headers.addAll(source.headers!);
-        }
-        final uri = Uri.parse(source.url);
-
-        // Extract headers from URL parameters to fetch the playlist
-        if (uri.queryParameters.containsKey('headers')) {
-          final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
-          if (jsonHeaders is Map) {
-            jsonHeaders.forEach((k, v) {
-              headers[k.toString()] = v.toString();
-            });
-          }
-        }
-
-        // Fetch first chunk to determine if HLS
-        final client = HttpClient();
-        client.connectionTimeout = const Duration(seconds: 8);
-        final req = await client.getUrl(uri);
-        headers.forEach((k, v) {
-          req.headers.set(k, v);
-        });
-        final res = await req.close();
-
-        bool isHls = false;
-        String body = '';
-
-        if (res.statusCode == 200) {
-          // Read first chunk (up to 512 bytes)
-          final List<int> firstBytes = [];
-          await for (final chunk in res) {
-            firstBytes.addAll(chunk);
-            if (firstBytes.length >= 512) {
-              break;
-            }
-          }
-          client.close(force: true); // close connection immediately
-
-          final checkStr = utf8.decode(firstBytes, allowMalformed: true);
-          if (checkStr.startsWith('#EXTM3U')) {
-            isHls = true;
-            // Fetch full HLS master playlist
-            final playlistClient = HttpClient();
-            playlistClient.connectionTimeout = const Duration(seconds: 8);
-            final pReq = await playlistClient.getUrl(uri);
-            headers.forEach((k, v) {
-              pReq.headers.set(k, v);
-            });
-            final pRes = await pReq.close();
-            if (pRes.statusCode == 200) {
-              body = await pRes.transform(utf8.decoder).join();
-            }
-            playlistClient.close();
-          }
-        } else {
-          client.close(force: true);
-        }
-
-        if (mounted) {
-          Navigator.of(context).pop(); // Dismiss loader
-        }
-
-        List<String> audioLanguages = [];
-        List<String> videoQualities = [];
-
-        if (isHls && body.isNotEmpty) {
-          // Parse audio tracks: #EXT-X-MEDIA:TYPE=AUDIO,...,NAME="LanguageName",...
-          final audioLines = body
-              .split('\n')
-              .where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO'))
-              .toList();
-
-          for (final line in audioLines) {
-            final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
-            if (nameMatch != null) {
-              final langName = nameMatch.group(1)!;
-              if (!audioLanguages.contains(langName)) {
-                audioLanguages.add(langName);
-              }
-            }
-          }
-
-          // Parse video qualities: #EXT-X-STREAM-INF...
-          final lines = body.split('\n');
-          for (final line in lines) {
-            if (line.startsWith('#EXT-X-STREAM-INF')) {
-              final resolutionMatch = RegExp(r'RESOLUTION=(\d+x\d+)').firstMatch(line);
-              if (resolutionMatch != null) {
-                final height = resolutionMatch.group(1)!.split('x')[1];
-                final q = '${height}p';
-                if (!videoQualities.contains(q)) {
-                  videoQualities.add(q);
-                }
-              } else {
-                final bandwidthMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(line);
-                if (bandwidthMatch != null) {
-                  final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
-                  String q = '360p';
-                  if (bw > 3000000)
-                    q = '1080p';
-                  else if (bw > 1500000)
-                    q = '720p';
-                  else if (bw > 800000)
-                    q = '480p';
-                  if (!videoQualities.contains(q)) {
-                    videoQualities.add(q);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (audioLanguages.isEmpty && source.languages != null && source.languages!.length > 1) {
-          audioLanguages = List<String>.from(source.languages!);
-        }
-
-        String? selectedLanguage;
-        if (audioLanguages.length > 1) {
-          if (mounted) {
-            selectedLanguage = await showDialog<String>(
-              context: context,
-              barrierDismissible: false,
-              builder: (context) {
-                return AlertDialog(
-                  backgroundColor: AppColors.surface,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  title: Text(
-                    'Select Audio Language',
-                    style: GoogleFonts.outfit(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  content: Container(
-                    width: double.maxFinite,
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: audioLanguages.length,
-                      itemBuilder: (context, index) {
-                        final lang = audioLanguages[index];
-                        return ListTile(
-                          title: Text(
-                            lang,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          leading: const Icon(
-                            Icons.audiotrack_rounded,
-                            color: Colors.tealAccent,
-                          ),
-                          onTap: () => Navigator.of(context).pop(lang),
-                        );
-                      },
-                    ),
-                  ),
-                );
-              },
-            );
-          }
-        }
-
-        String? selectedQuality;
-        if (videoQualities.isNotEmpty) {
-          videoQualities.sort((a, b) {
-            final valA = int.tryParse(a.replaceAll('p', '')) ?? 0;
-            final valB = int.tryParse(b.replaceAll('p', '')) ?? 0;
-            return valB.compareTo(valA);
+      final Map<String, String> headers = {};
+      if (source.headers != null) {
+        headers.addAll(source.headers!);
+      }
+      final uri = Uri.parse(source.url);
+      if (uri.queryParameters.containsKey('headers')) {
+        final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
+        if (jsonHeaders is Map) {
+          jsonHeaders.forEach((k, v) {
+            headers[k.toString()] = v.toString();
           });
-
-          if (mounted) {
-            selectedQuality = await showDialog<String>(
-              context: context,
-              barrierDismissible: false,
-              builder: (context) {
-                return AlertDialog(
-                  backgroundColor: AppColors.surface,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  title: Text(
-                    'Select Video Quality',
-                    style: GoogleFonts.outfit(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  content: Container(
-                    width: double.maxFinite,
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: videoQualities.length + 1,
-                      itemBuilder: (context, index) {
-                        if (index == 0) {
-                          return ListTile(
-                            title: const Text(
-                              'Auto / Best Quality',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                            leading: const Icon(
-                              Icons.settings_backup_restore_rounded,
-                              color: Colors.tealAccent,
-                            ),
-                            onTap: () => Navigator.of(context).pop('Auto'),
-                          );
-                        }
-                        final q = videoQualities[index - 1];
-                        return ListTile(
-                          title: Text(
-                            q,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          leading: const Icon(
-                            Icons.video_settings_rounded,
-                            color: Colors.tealAccent,
-                          ),
-                          onTap: () => Navigator.of(context).pop(q),
-                        );
-                      },
-                    ),
-                  ),
-                );
-              },
-            );
-          }
-        }
-
-        // Open player with selected language and quality
-        if (mounted) {
-          var finalUrl = source.url;
-          final Map<String, String> queryParams = {};
-          if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
-            queryParams['selected_audio'] = selectedLanguage;
-          }
-          if (selectedQuality != null &&
-              selectedQuality.isNotEmpty &&
-              selectedQuality != 'Auto') {
-            queryParams['selected_quality'] = selectedQuality;
-          }
-
-          if (queryParams.isNotEmpty) {
-            final sourceUri = Uri.parse(source.url);
-            finalUrl = sourceUri
-                .replace(
-                  queryParameters: {
-                    ...sourceUri.queryParameters,
-                    ...queryParams,
-                  },
-                )
-                .toString();
-          }
-
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => VideoPlayerScreen(
-                videoSource: finalUrl,
-                title: movieTitle,
-                subtitle: serverSubtitle,
-                movieId: 'special_search_${_selectedMovie['id']}',
-                resumeDirectly: false,
-                headers: headers.isNotEmpty ? headers : null,
-                sourceName: source.name,
-              ),
-            ),
-          );
-        }
-      } catch (e) {
-        // Fallback: If pre-flight check fails or times out, launch the stream directly
-        debugPrint(
-          'Scraper pre-flight check failed: $e. Launching stream directly.',
-        );
-        if (mounted) {
-          Navigator.of(context).pop(); // Dismiss loader if still open
-
-          final Map<String, String> headers = {};
-          if (source.headers != null) {
-            headers.addAll(source.headers!);
-          }
-          final uri = Uri.parse(source.url);
-          if (uri.queryParameters.containsKey('headers')) {
-            final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
-            if (jsonHeaders is Map) {
-              jsonHeaders.forEach((k, v) {
-                headers[k.toString()] = v.toString();
-              });
-            }
-          }
-
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => VideoPlayerScreen(
-                videoSource: source.url,
-                title: movieTitle,
-                subtitle: serverSubtitle,
-                movieId: 'special_search_${_selectedMovie['id']}',
-                resumeDirectly: false,
-                headers: headers.isNotEmpty ? headers : null,
-                sourceName: source.name,
-              ),
-            ),
-          );
         }
       }
+
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: serverSubtitle,
+            movieId: 'special_search_${_selectedMovie['id']}',
+            resumeDirectly: false,
+            headers: headers.isNotEmpty ? headers : null,
+            sourceName: source.name,
+          ),
+        ),
+      );
       return;
     }
 
@@ -2637,6 +2411,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cinemmStreams = filteredSources
         .where((s) => s.type == StreamSourceType.cinemm)
         .toList();
+    final movieboxStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.moviebox)
+        .toList();
     final stremioStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stremioAddon)
         .toList();
@@ -2738,6 +2515,25 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               ? null
               : () => setState(
                   () => _activeGroupType = StreamSourceType.cinemm,
+                ),
+        );
+      }
+
+      // MovieBox
+      if (_showMoviebox && (_resolvingStreams || movieboxStreams.isNotEmpty) && enabledKeys.contains('moviebox')) {
+        sourceWidgets['moviebox'] = _buildServerGroupCard(
+          title: '${pos('moviebox')}. MovieBox Server',
+          subtitle: _resolvingStreams && movieboxStreams.isEmpty
+              ? 'Searching MovieBox...'
+              : (movieboxStreams.isNotEmpty
+                    ? '${movieboxStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.movie_filter_rounded,
+          accentColor: Colors.tealAccent,
+          onTap: movieboxStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.moviebox,
                 ),
         );
       }
@@ -2919,6 +2715,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = cinemmStreams;
         accentColor = Colors.lightBlueAccent;
         iconData = Icons.local_movies_rounded;
+      } else if (_activeGroupType == StreamSourceType.moviebox) {
+        activeList = movieboxStreams;
+        accentColor = Colors.tealAccent;
+        iconData = Icons.movie_filter_rounded;
       } else if (_activeGroupType == StreamSourceType.stremioAddon) {
         activeList = stremioStreams;
         accentColor = Colors.pinkAccent;
@@ -3167,9 +2967,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              trailing: Icon(
-                Icons.play_arrow_rounded,
-                color: Colors.white.withValues(alpha: 0.4),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.file_download_rounded, size: 20),
+                    color: Colors.white70,
+                    tooltip: 'Download Stream',
+                    onPressed: () => _handleStreamDownload(source, movieTitle, posterPath),
+                  ),
+                  Icon(
+                    Icons.play_arrow_rounded,
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
+                ],
               ),
               onTap: () => _playStream(source, movieTitle, posterPath),
               onLongPress: () {
@@ -3185,6 +2996,59 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           );
         },
       );
+    }
+  }
+
+  Future<void> _handleStreamDownload(StreamSourceInfo source, String movieTitle, String? posterPath) async {
+    final movie = Movie(
+      id: 'special_search_${_selectedMovie?['id'] ?? DateTime.now().millisecondsSinceEpoch}',
+      title: movieTitle,
+      genre: '',
+      rating: 0.0,
+      posterUrl: posterPath ?? '',
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Starting download for ${source.name}...')),
+    );
+
+    try {
+      final url = source.url;
+      final lowerUrl = url.toLowerCase();
+      final lowerName = source.name.toLowerCase();
+
+      if (source.type == StreamSourceType.moviebox) {
+        final Map<String, String> headers = {};
+        if (source.headers != null) {
+          headers.addAll(source.headers!);
+        }
+        await DownloadManager.downloadMovie(movie, url, headers: headers.isNotEmpty ? headers : null);
+        return;
+      }
+
+      if (lowerName.contains('streamtape') || lowerUrl.contains('streamtape') || lowerUrl.contains('strcloud')) {
+        final resolved = await EmbedResolver.resolve(context, url);
+        if (resolved != null && resolved.isNotEmpty) {
+          await DownloadManager.downloadMovie(movie, resolved, headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://streamtape.com/',
+          });
+          return;
+        }
+      } else if (lowerName.contains('stalker') || lowerUrl.contains('mac=') || lowerUrl.startsWith('stalker://')) {
+        final params = StalkerResolver.parseStalkerUrl(url);
+        final res = await StalkerResolver.resolveStream(params.cmd, params.portalId, isLive: false);
+        await DownloadManager.downloadMovie(movie, res.url, headers: res.headers);
+        return;
+      }
+
+      await DownloadManager.downloadMovie(movie, url);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
     }
   }
 
@@ -3249,6 +3113,7 @@ enum StreamSourceType {
   hdhub4u,
   castle,
   cinemm,
+  moviebox,
   vidsrc,
   stremioAddon,
   nuveoAddon,

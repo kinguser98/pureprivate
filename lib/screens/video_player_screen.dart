@@ -56,6 +56,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _showInitialTrackSelector = false;
+  AudioTrack? _selectedAudioTrack;
+  VideoTrack? _selectedVideoTrack;
   bool _trackSelectorScheduled = false;
   bool _hasStartedPlaying = false;
   bool _hasError = false;
@@ -1001,6 +1003,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     final currentAudio = _player.state.track.audio;
     final currentVideo = _player.state.track.video;
     final hasMultiple = _hasMultipleTracks;
+    _selectedAudioTrack ??= currentAudio;
+    _selectedVideoTrack ??= currentVideo;
 
     return Positioned.fill(
       child: Container(
@@ -1023,7 +1027,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                     Text('Audio & Quality', style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     if (!hasMultiple)
-                      TextButton(onPressed: () => setState(() => _showInitialTrackSelector = false),
+                      TextButton(
+                          onPressed: () => setState(() {
+                            _showInitialTrackSelector = false;
+                            _selectedAudioTrack = null;
+                            _selectedVideoTrack = null;
+                          }),
                         child: const Text('Skip', style: TextStyle(color: Colors.white54))),
                   ]),
                   const SizedBox(height: 16),
@@ -1033,8 +1042,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     const SizedBox(height: 8),
                     ...audioTracks.map((t) => _buildTrackTile(
                       label: t.title ?? t.language ?? 'Track ${t.id}',
-                      isSelected: t.id == currentAudio.id,
-                      onTap: () => _player.setAudioTrack(t),
+                      isSelected: t.id == _selectedAudioTrack?.id,
+                      onTap: () => setState(() => _selectedAudioTrack = t),
                     )),
                     const SizedBox(height: 16),
                   ],
@@ -1044,8 +1053,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     const SizedBox(height: 8),
                     ...videoTracks.map((t) => _buildTrackTile(
                       label: t.h != null ? '${t.h}p' : (t.title ?? 'Track ${t.id}'),
-                      isSelected: t.id == currentVideo.id,
-                      onTap: () => _player.setVideoTrack(t),
+                      isSelected: t.id == _selectedVideoTrack?.id,
+                      onTap: () => setState(() => _selectedVideoTrack = t),
                     )),
                   ],
                   if (!hasMultiple) ...[
@@ -1061,7 +1070,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () => setState(() => _showInitialTrackSelector = false),
+                      onPressed: () {
+                            if (_selectedAudioTrack != null && _selectedAudioTrack != currentAudio) {
+                              _player.setAudioTrack(_selectedAudioTrack!);
+                            }
+                            if (_selectedVideoTrack != null && _selectedVideoTrack != currentVideo) {
+                              _player.setVideoTrack(_selectedVideoTrack!);
+                            }
+                            setState(() {
+                              _showInitialTrackSelector = false;
+                              _selectedAudioTrack = null;
+                              _selectedVideoTrack = null;
+                            });
+                          },
                       child: const Text('Start Playing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                     ),
                   ),
