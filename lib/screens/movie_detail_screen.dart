@@ -38,6 +38,7 @@ import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -287,6 +288,30 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       debugPrint('CineMM resolution failed: $e');
     } finally {
       if (mounted) setState(() => _resolvingCinemm = false);
+    }
+  }
+
+  Future<void> _resolveLiveMoviebox(String title) async {
+    if (mounted) setState(() => _resolvingMoviebox = true);
+    try {
+      debugPrint('MovieBox: Resolving streams for $title...');
+      final streams = await MovieboxResolver.resolveStreams(
+        title: title,
+        year: movie.year?.toString(),
+        isSeries: false,
+      );
+      final resolved = streams
+          .map((s) => StreamSource(name: s.name, url: s.url, headers: s.headers))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _liveMovieboxSources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('MovieBox resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingMoviebox = false);
     }
   }
 

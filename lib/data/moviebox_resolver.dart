@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:private_cinema_ios/widgets/special_search_dialog.dart';
+import '../widgets/special_search_dialog.dart';
 
 class MovieboxResolver {
   static const String _apiBase = 'https://api3.aoneroom.com';
@@ -206,24 +206,36 @@ class MovieboxResolver {
         if (item is! Map) continue;
         final itemTitle = item['title']?.toString() ?? '';
 
-        if (!_sharesSignificantWord(title, itemTitle)) {
-          debugPrint('  Skip (no shared words): "$itemTitle"');
-          continue;
-        }
-
         final nt = _norm(itemTitle);
         final nsFuzzy = normSearch.replaceAll(RegExp(r'\s+'), '');
         final ntFuzzy = nt.replaceAll(RegExp(r'\s+'), '');
 
+        // --- Strict title scoring ---
         var score = 0;
         if (nt == normSearch) {
-          score += 50;
+          score += 100; // exact match
         } else if (ntFuzzy == nsFuzzy) {
-          score += 45;
+          score += 90; // exact without spaces
+        } else if (nt.startsWith(normSearch) || normSearch.startsWith(nt)) {
+          score += 70; // one starts with the other
         } else if (nt.contains(normSearch) || normSearch.contains(nt)) {
-          score += 20;
-        } else if (ntFuzzy.contains(nsFuzzy) || nsFuzzy.contains(ntFuzzy)) {
-          score += 15;
+          score += 50; // one fully contained in other
+        }
+
+        // Word overlap check — need ≥ 50% of search words present in result
+        if (score == 0) {
+          final overlapRatio = _wordOverlapRatio(title, itemTitle);
+          if (overlapRatio < 0.5) {
+            debugPrint('  Skip (word overlap too low ${(overlapRatio*100).toInt()}%): "$itemTitle"');
+            continue;
+          }
+          score += (overlapRatio * 40).toInt();
+        }
+
+        // If still below 30, skip entirely
+        if (score < 30) {
+          debugPrint('  Skip (low score $score): "$itemTitle"');
+          continue;
         }
 
         final rawYear = item['year']?.toString() ?? '';
@@ -247,7 +259,8 @@ class MovieboxResolver {
         }
 
         debugPrint('  Subject: "$itemTitle" (score: $score, yr: $yr, mismatch: $yearMismatch)');
-        if (score >= 15 && !yearMismatch) {
+        // Require minimum score of 45 to accept — eliminates false matches
+        if (score >= 45 && !yearMismatch) {
           matchedSubjects.add(Map<String, dynamic>.from(item));
         }
       }
@@ -390,6 +403,27 @@ class MovieboxResolver {
     }
 
     return words1.intersection(words2).isNotEmpty;
+  }
+
+  /// Returns ratio of search title words that appear in the result title (0.0 – 1.0)
+  static double _wordOverlapRatio(String searchTitle, String resultTitle) {
+    final stopWords = {
+      'the', 'a', 'of', 'and', 'in', 'to', 'for', 'with', 'on', 'at', 'by', 'an',
+      'movie', 'show', 'film', 'series', 's', 'd', 't'
+    };
+
+    Set<String> getWords(String text) {
+      final n = _norm(text);
+      return n.split(' ').map((w) => w.trim()).where((w) => w.length > 1 && !stopWords.contains(w)).toSet();
+    }
+
+    final searchWords = getWords(searchTitle);
+    final resultWords = getWords(resultTitle);
+
+    if (searchWords.isEmpty) return 0.0;
+
+    final matched = searchWords.intersection(resultWords).length;
+    return matched / searchWords.length;
   }
 
   static String _fmt(String url) {
