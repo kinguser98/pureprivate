@@ -8,7 +8,7 @@ import 'package:private_cinema_mobile/data/dio_client.dart';
 import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {
-  static const String apiUrl = 'https://ott.redapp.space/api.php';
+  static const String apiUrl = 'https://ott.goprivate.fun/api.php';
   static Map<String, String> _langMap = {};
 
   static String _capitalize(String name) {
@@ -446,4 +446,96 @@ class ApiService {
     }
     return [];
   }
+
+  /// Fetches Stalker VOD categories from the backend database.
+  static Future<List<Map<String, dynamic>>> fetchStalkerVodCategories() async {
+    try {
+      final uri = Uri.parse('$apiUrl?action=get_stalker_vod_categories');
+      final response = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final jsonString = utf8.decode(response.bodyBytes);
+        final rawList = json.decode(jsonString);
+        if (rawList is List) {
+          return rawList.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('Fetch Stalker VOD categories failed: $e');
+    }
+    return [
+      {'category_id': 'all', 'name': 'All Stalker VOD'},
+    ];
+  }
+
+  /// Fetches Stalker VOD catalog with full metadata (posters, description, ratings).
+  static Future<List<Movie>> fetchStalkerVodCatalog({
+    String? categoryId,
+    String? search,
+    int page = 1,
+    int limit = 100,
+  }) async {
+    try {
+      final queryParams = <String, String>{
+        'action': 'get_stalker_vod_movies',
+        'page': page.toString(),
+        'limit': limit.toString(),
+      };
+      if (categoryId != null && categoryId != 'all' && categoryId != 'home') {
+        queryParams['category'] = categoryId;
+      }
+      if (search != null && search.isNotEmpty) {
+        queryParams['search'] = search;
+      }
+      final uri = Uri.parse(apiUrl).replace(queryParameters: queryParams);
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final jsonString = utf8.decode(response.bodyBytes);
+        final data = json.decode(jsonString);
+        List<dynamic> rawList = [];
+        if (data is List) {
+          rawList = data;
+        } else if (data is Map && data['movies'] is List) {
+          rawList = data['movies'];
+        }
+        return parseMovies(rawList);
+      }
+    } catch (e) {
+      debugPrint('Fetch Stalker VOD catalog failed: $e');
+    }
+    return [];
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchStalkerVodHome() async {
+    try {
+      final uri = Uri.parse('$apiUrl?action=get_stalker_vod_home');
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode == 200) {
+        final jsonString = utf8.decode(response.bodyBytes);
+        final data = json.decode(jsonString);
+        if (data is List) {
+          final List<Map<String, dynamic>> result = [];
+          for (final item in data) {
+            if (item is Map) {
+              final catId = item['category_id']?.toString() ?? '';
+              final name = item['name']?.toString() ?? catId;
+              final rawMovies = item['movies'] as List<dynamic>? ?? [];
+              final movies = parseMovies(rawMovies);
+              if (catId.isNotEmpty && movies.isNotEmpty) {
+                result.add({
+                  'category_id': catId,
+                  'name': name,
+                  'movies': movies,
+                });
+              }
+            }
+          }
+          return result;
+        }
+      }
+    } catch (e) {
+      debugPrint('Fetch Stalker VOD Home failed: $e');
+    }
+    return [];
+  }
 }
+

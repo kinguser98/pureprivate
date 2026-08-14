@@ -1343,6 +1343,13 @@ class StalkerResolver {
                           'name': m['name']?.toString() ?? m['title']?.toString() ?? '',
                           'logo': m['logo']?.toString() ?? m['logo_url']?.toString() ?? '',
                           'cmd': m['cmd']?.toString() ?? m['path']?.toString() ?? '',
+                          // Extract rich metadata from get_ordered_list if available
+                          'description': m['description']?.toString() ?? m['descr']?.toString() ?? m['plot']?.toString() ?? '',
+                          'year': m['year']?.toString() ?? m['year_release']?.toString() ?? m['release_year']?.toString() ?? '',
+                          'director': m['director']?.toString() ?? m['directors']?.toString() ?? '',
+                          'actors': m['actors']?.toString() ?? m['cast']?.toString() ?? m['actor']?.toString() ?? '',
+                          'rating': m['rating_imdb']?.toString() ?? m['rating_kinopoisk']?.toString() ?? m['rating']?.toString() ?? '',
+                          'poster': m['screenshot_uri']?.toString() ?? m['cover']?.toString() ?? m['poster']?.toString() ?? m['poster_uri']?.toString() ?? m['pic']?.toString() ?? m['image']?.toString() ?? '',
                         });
                       }
                     }
@@ -1373,21 +1380,123 @@ class StalkerResolver {
             
             final List<List<Map<String, dynamic>>> batchResults = await Future.wait(batchFutures);
             
-            int newInBatch = 0;
+            // Collect movies that need metadata enrichment via get_vod_info
+            final List<Map<String, dynamic>> needsEnrichment = [];
+            
             for (final pageMovies in batchResults) {
               for (final m in pageMovies) {
                 final id = m['id']!;
                 if (seenIds.contains(id)) continue;
                 seenIds.add(id);
                 seenIdsThisCategory.add(id);
-                newInBatch++;
-                categoryPayload.add({
-                  'id': id,
-                  'name': m['name'],
-                  'logo_url': resolveStalkerLogo(m['logo'] ?? '', portalUrl),
-                  'cmd': m['cmd'],
-                  'category_name': catTitle,
-                });
+                
+                final desc = (m['description'] ?? '').toString().trim();
+                final year = (m['year'] ?? '').toString().trim();
+                final director = (m['director'] ?? '').toString().trim();
+                final actors = (m['actors'] ?? '').toString().trim();
+                final poster = (m['poster'] ?? '').toString().trim();
+                
+                // If any key metadata field is missing, enrich via get_vod_info
+                if (desc.isEmpty || year.isEmpty || director.isEmpty || actors.isEmpty || poster.isEmpty) {
+                  needsEnrichment.add(m);
+                } else {
+                  categoryPayload.add({
+                    'id': id,
+                    'name': m['name'],
+                    'logo_url': resolveStalkerLogo(m['logo'] ?? '', portalUrl),
+                    'cmd': m['cmd'],
+                    'category_name': catTitle,
+                    'description': desc,
+                    'year': year,
+                    'director': director,
+                    'actors': actors,
+                    'rating': (m['rating'] ?? '').toString().trim(),
+                    'poster_url': resolveStalkerLogo(poster.isNotEmpty ? poster : (m['logo'] ?? ''), portalUrl),
+                  });
+                }
+              }
+            }
+            
+            // Enrich movies with missing metadata via get_vod_info (in small concurrent batches)
+            if (needsEnrichment.isNotEmpty) {
+              const int enrichBatchSize = 3;
+              for (int ei = 0; ei < needsEnrichment.length; ei += enrichBatchSize) {
+                final enrichBatch = needsEnrichment.sublist(ei, (ei + enrichBatchSize).clamp(0, needsEnrichment.length));
+                final enrichFutures = enrichBatch.map((m) async {
+                  final id = m['id']!;
+                  String desc = (m['description'] ?? '').toString().trim();
+                  String year = (m['year'] ?? '').toString().trim();
+                  String director = (m['director'] ?? '').toString().trim();
+                  String actors = (m['actors'] ?? '').toString().trim();
+                  String rating = (m['rating'] ?? '').toString().trim();
+                  String poster = (m['poster'] ?? '').toString().trim();
+                  
+                  try {
+                    // Try get_vod_info first, then get_single_item as fallback
+                    for (final vodAction in ['get_vod_info', 'get_single_item']) {
+                      final paramName = vodAction == 'get_vod_info' ? 'id' : 'vod_id';
+                      var infoUrl = '$portalUrl?type=vod&action=$vodAction&$paramName=$id';
+                      infoUrl = _appendDeviceParams(infoUrl, deviceId);
+                      final infoResp = await getWithRetry(infoUrl);
+                      final infoData = json.decode(infoResp.body);
+                      
+                      Map<String, dynamic>? info;
+                      if (infoData is Map) {
+                        final js = infoData['js'];
+                        final result = infoData['result'];
+                        final data = infoData['data'];
+                        if (js is Map) {
+                          info = Map<String, dynamic>.from(js);
+                        } else if (result is Map) {
+                          info = Map<String, dynamic>.from(result);
+                        } else if (data is Map) {
+                          info = Map<String, dynamic>.from(data);
+                        } else if (js is List && js.isNotEmpty && js.first is Map) {
+                          info = Map<String, dynamic>.from(js.first as Map);
+                        }
+                      }
+                      
+                      if (info != null && info.isNotEmpty) {
+                        if (desc.isEmpty) desc = (info['description'] ?? info['descr'] ?? info['plot'] ?? info['short_description'] ?? info['o_name'] ?? '').toString().trim();
+                        if (year.isEmpty || year == '0') year = (info['year'] ?? info['year_release'] ?? info['release_year'] ?? '').toString().trim();
+                        if (director.isEmpty) director = (info['director'] ?? info['directors'] ?? '').toString().trim();
+                        if (actors.isEmpty) actors = (info['actors'] ?? info['cast'] ?? info['actor'] ?? '').toString().trim();
+                        if (rating.isEmpty) rating = (info['rating_imdb'] ?? info['rating_kinopoisk'] ?? info['rating'] ?? '').toString().trim();
+                        if (poster.isEmpty) poster = (info['screenshot_uri'] ?? info['cover'] ?? info['poster'] ?? info['poster_uri'] ?? info['pic'] ?? info['image'] ?? '').toString().trim();
+                        
+                        // If we got meaningful data, stop trying alternatives
+                        if (desc.isNotEmpty || year.isNotEmpty) break;
+                      }
+                    }
+                  } catch (e) {
+                    debugPrint('StalkerSync: get_vod_info failed for VOD $id: $e');
+                  }
+                  
+                  final logoResolved = resolveStalkerLogo(m['logo'] ?? '', portalUrl);
+                  final posterResolved = poster.isNotEmpty ? resolveStalkerLogo(poster, portalUrl) : logoResolved;
+                  
+                  return {
+                    'id': id,
+                    'name': m['name'],
+                    'logo_url': logoResolved,
+                    'cmd': m['cmd'],
+                    'category_name': catTitle,
+                    'description': desc,
+                    'year': year,
+                    'director': director,
+                    'actors': actors,
+                    'rating': rating,
+                    'poster_url': posterResolved,
+                  };
+                }).toList();
+                
+                final enriched = await Future.wait(enrichFutures);
+                categoryPayload.addAll(enriched);
+                
+                // Small delay between enrichment batches
+                if (ei + enrichBatchSize < needsEnrichment.length) {
+                  await Future.delayed(const Duration(milliseconds: 100));
+                }
               }
             }
             

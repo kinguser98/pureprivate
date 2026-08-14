@@ -12,6 +12,7 @@ import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 
 import 'package:private_cinema_mobile/screens/telegram_login_screen.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
 import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
@@ -49,6 +50,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadStravoUrl();
     _loadNetmirrorDomains();
     _loadSeedrToken();
+    _loadExternalPlayerSetting();
+  }
+
+  bool _useExternalPlayer = false;
+  Set<String> _enabledExternalSources = {};
+  String _defaultExternalPlayer = 'vlc';
+
+  Future<void> _loadExternalPlayerSetting() async {
+    final enabled = await ExternalPlayerService.isGlobalEnabled();
+    final sources = await ExternalPlayerService.getEnabledSources();
+    final defaultPlayer = await ExternalPlayerService.getDefaultPlayer();
+    if (mounted) {
+      setState(() {
+        _useExternalPlayer = enabled;
+        _enabledExternalSources = sources;
+        _defaultExternalPlayer = defaultPlayer;
+      });
+    }
+  }
+
+  Future<void> _toggleExternalPlayer(bool value) async {
+    await ExternalPlayerService.setGlobalEnabled(value);
+    if (mounted) {
+      setState(() => _useExternalPlayer = value);
+    }
+  }
+
+  Future<void> _changeDefaultExternalPlayer(String player) async {
+    await ExternalPlayerService.setDefaultPlayer(player);
+    if (mounted) {
+      setState(() => _defaultExternalPlayer = player);
+    }
+  }
+
+  Future<void> _toggleExternalSource(String sourceId, bool value) async {
+    await ExternalPlayerService.setSourceEnabled(sourceId, value);
+    final sources = await ExternalPlayerService.getEnabledSources();
+    if (mounted) {
+      setState(() => _enabledExternalSources = sources);
+    }
   }
 
   @override
@@ -840,7 +881,148 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  // 2.5. Expansion Addon Settings
+
+                  // External Player Settings Section
+                  _buildSectionHeader('External Player Integration'),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Default External Player',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Select your preferred external player app (VLC, MX Player, etc.).',
+                          style: TextStyle(color: Colors.white60, fontSize: 12),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: ExternalPlayerService.playerTypes.map((pt) {
+                            final id = pt['id']!;
+                            final name = pt['name']!;
+                            final isSelected = id == _defaultExternalPlayer;
+                            return GestureDetector(
+                              onTap: () => _changeDefaultExternalPlayer(id),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: isSelected ? AppColors.accentBright : Colors.white10,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isSelected ? Colors.white : Colors.white12,
+                                    width: isSelected ? 1.5 : 1,
+                                  ),
+                                ),
+                                child: Text(
+                                  name,
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontSize: 12,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 16),
+                        const Divider(color: Colors.white10),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Play ALL Videos in External Player',
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'Force all video sources to open in your default external player.',
+                                    style: TextStyle(
+                                      color: Colors.white60,
+                                      fontSize: 12,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Switch(
+                              value: _useExternalPlayer,
+                              onChanged: _toggleExternalPlayer,
+                              activeColor: AppColors.accentBright,
+                            ),
+                          ],
+                        ),
+                        if (!_useExternalPlayer) ...[
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Or Select Specific Sources to Play Externally:',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white70,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          ...ExternalPlayerService.sourceTypes.map((src) {
+                            final id = src['id']!;
+                            final name = src['name']!;
+                            final desc = src['desc']!;
+                            final isEnabled = _enabledExternalSources.contains(id);
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+                                        Text(desc, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  Switch(
+                                    value: isEnabled,
+                                    onChanged: (val) => _toggleExternalSource(id, val),
+                                    activeColor: AppColors.accentBright,
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ],
+                      ],
+                    ),
+                  ),
                   Theme(
                     data: Theme.of(context).copyWith(
                       dividerColor: Colors.transparent,

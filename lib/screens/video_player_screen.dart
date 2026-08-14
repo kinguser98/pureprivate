@@ -15,6 +15,7 @@ import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -425,6 +426,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _open() async {
     try {
+      final shouldExternal = await ExternalPlayerService.shouldPlayInExternalPlayer(
+        url: widget.videoSource,
+        sourceName: widget.sourceName ?? widget.subtitle,
+      );
+      if (shouldExternal) {
+        if (mounted) {
+          final displayName = await ExternalPlayerService.getPlayerDisplayName();
+          ExternalPlayerService.showLaunchDialog(context, displayName);
+        }
+        final launched = await ExternalPlayerService.launch(
+          url: widget.videoSource,
+          title: widget.title,
+          headers: widget.headers,
+        );
+        if (launched && mounted) {
+          Navigator.of(context).pop();
+          return;
+        }
+      }
+
       int seekToMs = 0;
       if (widget.movieId != null) {
         final savedMs = await PlaybackTracker.getSavedPosition(widget.movieId!);
@@ -739,6 +760,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
   }
 
+  void _keepControlsVisible() {
+    _hideControlsTimer?.cancel();
+    if (!_showControls) {
+      setState(() => _showControls = true);
+    }
+    _armHideControls();
+  }
+
   void _revealControls() {
     if (_showControls) {
       setState(() => _showControls = false);
@@ -751,7 +780,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   void _togglePlay() {
     _player.playOrPause();
-    _revealControls();
+    _keepControlsVisible();
   }
 
   Future<void> _seekRelative(int seconds) async {
@@ -776,7 +805,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     _showHud('seek', seconds);
-    _revealControls();
+    _keepControlsVisible();
   }
 
   void _showHud(String type, [int? value]) {
@@ -824,7 +853,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _videoOffset = Offset.zero;
         }
       });
-      _revealControls();
+      _keepControlsVisible();
     } else if (details.pointerCount == 1 && _isDraggingHUD && _dragStartPoint != null) {
       // Single finger drag: Swipe up/down for Volume/Brightness
       final deltaY = details.localFocalPoint.dy - _dragStartPoint!.dy;
@@ -848,7 +877,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _player.setVolume(_volume);
         });
       }
-      _revealControls();
+      _armHideControls();
     }
   }
 
@@ -858,6 +887,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _dragStartBrightness = null;
     _dragStartPoint = null;
     
+    _armHideControls();
+
     // Start timer to hide brightness/volume overlay after drag ends
     _hudTimer?.cancel();
     _hudTimer = Timer(const Duration(milliseconds: 1000), () {
@@ -1003,6 +1034,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     final currentAudio = _player.state.track.audio;
     final currentVideo = _player.state.track.video;
     final hasMultiple = _hasMultipleTracks;
+
     _selectedAudioTrack ??= currentAudio;
     _selectedVideoTrack ??= currentVideo;
 
@@ -1028,11 +1060,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     Text('Audio & Quality', style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     if (!hasMultiple)
                       TextButton(
-                          onPressed: () => setState(() {
-                            _showInitialTrackSelector = false;
-                            _selectedAudioTrack = null;
-                            _selectedVideoTrack = null;
-                          }),
+                        onPressed: () => setState(() {
+                          _showInitialTrackSelector = false;
+                          _selectedAudioTrack = null;
+                          _selectedVideoTrack = null;
+                        }),
                         child: const Text('Skip', style: TextStyle(color: Colors.white54))),
                   ]),
                   const SizedBox(height: 16),
@@ -1071,18 +1103,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: () {
-                            if (_selectedAudioTrack != null && _selectedAudioTrack != currentAudio) {
-                              _player.setAudioTrack(_selectedAudioTrack!);
-                            }
-                            if (_selectedVideoTrack != null && _selectedVideoTrack != currentVideo) {
-                              _player.setVideoTrack(_selectedVideoTrack!);
-                            }
-                            setState(() {
-                              _showInitialTrackSelector = false;
-                              _selectedAudioTrack = null;
-                              _selectedVideoTrack = null;
-                            });
-                          },
+                        if (_selectedAudioTrack != null && _selectedAudioTrack != currentAudio) {
+                          _player.setAudioTrack(_selectedAudioTrack!);
+                        }
+                        if (_selectedVideoTrack != null && _selectedVideoTrack != currentVideo) {
+                          _player.setVideoTrack(_selectedVideoTrack!);
+                        }
+                        setState(() {
+                          _showInitialTrackSelector = false;
+                          _selectedAudioTrack = null;
+                          _selectedVideoTrack = null;
+                        });
+                      },
                       child: const Text('Start Playing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                     ),
                   ),

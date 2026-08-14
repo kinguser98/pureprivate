@@ -17,6 +17,7 @@ import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/youtube_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
+import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
@@ -36,9 +37,9 @@ import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
-import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   const MovieDetailScreen({super.key, required this.movie});
@@ -315,49 +316,65 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  String _cleanSearchTitle(String rawTitle) {
+    var cleaned = rawTitle.replaceAll(
+      RegExp(r'\s*[\(\[]?\b(19\d\d|20\d\d)\b[\)\]]?'),
+      '',
+    );
+    cleaned = cleaned.replaceAll(
+      RegExp(
+        r'\s*[\(\[]?\b(Hindi|Malayalam|Tamil|Telugu|Kannada|English|4K|1080p|720p|Dubbed|Dub|Multi|TAM|MAL|HIN|ENG)\b[\)\]]?',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    cleaned = cleaned.replaceAll(RegExp(r'[\(\)\[\]]'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return cleaned.isNotEmpty ? cleaned : rawTitle;
+  }
+
   Future<void> _resolveLiveStalker(String title) async {
     if (mounted) setState(() => _resolvingStalker = true);
     try {
+      final searchTitle = _cleanSearchTitle(title);
       final url =
-          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
+          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(searchTitle)}';
+      
+      http.Response? response;
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try {
+          response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 25));
+          if (response.statusCode == 200) break;
+        } catch (e) {
+          debugPrint('Stalker VOD search attempt ${attempt + 1} failed: $e');
+          if (attempt == 0) await Future.delayed(const Duration(milliseconds: 800));
+        }
+      }
+
+      if (response != null && response.statusCode == 200) {
         final responseBody = utf8.decode(response.bodyBytes);
-        final data = json.decode(responseBody);
-        var movies = data['movies'] as List<dynamic>? ?? [];
-        var totalItems = data['total_items'] ?? 0;
-
-        debugPrint('StalkerResolver: API returned ${movies.length} movies (total: $totalItems) for "$title"');
-
-        if ((movies.isEmpty || totalItems == 0) && title.isNotEmpty) {
-          try {
-            final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title.substring(0, title.length > 3 ? title.length ~/ 2 : title.length))}';
-            final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 8));
-            if (allRes.statusCode == 200) {
-              final allData = json.decode(utf8.decode(allRes.bodyBytes));
-              final allMovies = allData['movies'] as List<dynamic>? ?? [];
-              if (allMovies.isNotEmpty) {
-                debugPrint('StalkerResolver: Partial-title search returned ${allMovies.length} movies');
-                movies = allMovies;
-                totalItems = allData['total_items'] ?? 0;
-              }
-            }
-          } catch (_) {}
+        final dynamic data = json.decode(responseBody);
+        List<dynamic> movies = [];
+        if (data is List) {
+          movies = data;
+        } else if (data is Map) {
+          movies = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
         }
 
-        if (movies.isEmpty) {
-          // Last resort: fetch first page of any category
+        if (movies.isEmpty && title.isNotEmpty) {
           try {
-            const fallbackUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&category=General&page=1';
-            final fallRes = await http.get(Uri.parse(fallbackUrl)).timeout(const Duration(seconds: 8));
-            if (fallRes.statusCode == 200) {
-              final fallData = json.decode(utf8.decode(fallRes.bodyBytes));
-              final fallMovies = fallData['movies'] as List<dynamic>? ?? [];
-              if (fallMovies.isNotEmpty) {
-                debugPrint('StalkerResolver: Fallback (no search) returned ${fallMovies.length} movies');
-                movies = fallMovies;
+            final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
+            final firstWords = rawTitleClean.split(' ').take(2).join(' ');
+            if (firstWords.isNotEmpty && firstWords != searchTitle) {
+              final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(firstWords)}';
+              final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 20));
+              if (allRes.statusCode == 200) {
+                final dynamic allData = json.decode(utf8.decode(allRes.bodyBytes));
+                if (allData is List && allData.isNotEmpty) {
+                  movies = allData;
+                } else if (allData is Map && (allData['movies'] as List<dynamic>? ?? []).isNotEmpty) {
+                  movies = allData['movies'] as List<dynamic>;
+                }
               }
             }
           } catch (_) {}
@@ -367,13 +384,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
         for (final item in movies) {
           final rawPortalId = item['portal_id'];
-          final portalId = rawPortalId != null 
+          var portalId = rawPortalId != null 
               ? (int.tryParse(rawPortalId.toString()) ?? 1) 
               : 1;
-          final cmd = item['cmd']?.toString() ?? '';
-          final name = item['name']?.toString() ?? 'Stalker VOD';
+          var cmd = item['cmd']?.toString() ?? '';
+          if (cmd.isEmpty && item['stream_url'] != null) {
+            final streamUrl = item['stream_url'].toString();
+            if (streamUrl.startsWith('stalker://')) {
+              final params = StalkerResolver.parseStalkerUrl(streamUrl);
+              cmd = params.cmd;
+              if (params.portalId > 0) portalId = params.portalId;
+            }
+          }
+          final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
           final rawPortalName = item['portal_name']?.toString() ?? '';
-          final portalName = rawPortalName.isNotEmpty ? rawPortalName : (rawPortalId != null ? 'Portal $portalId' : 'Stalker');
+          final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
           if (cmd.isNotEmpty) {
             final isDup = sources.any(
@@ -2174,6 +2199,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
 
+      if (await ExternalPlayerService.shouldPlayInExternalPlayer(url: playUrl, sourceName: sourceName ?? 'Stalker VOD')) {
+        final player = await ExternalPlayerService.getDefaultPlayer();
+        final displayName = await ExternalPlayerService.getPlayerDisplayName(player);
+        if (mounted) ExternalPlayerService.showLaunchDialog(context, displayName);
+        await ExternalPlayerService.launch(
+          url: playUrl,
+          title: movie.title,
+          headers: finalHeaders.isEmpty ? null : finalHeaders,
+          overridePlayerPackage: player,
+        );
+        return;
+      }
+
       if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -3590,6 +3628,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           );
         }
 
+        // MovieBox Server
+        if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+          downloadSourceWidgets['moviebox'] = _buildSourceTile(
+            icon: Icons.movie_filter_rounded,
+            title: '${pos('moviebox')}. MovieBox Server',
+            subtitle: _resolvingMoviebox
+                ? 'Searching MovieBox...'
+                : '${_liveMovieboxSources.length} links available',
+            disabled: _resolvingMoviebox,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveMovieboxSources.length == 1) {
+                _downloadMovieboxStream(_liveMovieboxSources.first);
+              } else {
+                _showDownloadSubSelector('MOVIEBOX DOWNLOADS', _liveMovieboxSources, isMoviebox: true);
+              }
+            },
+          );
+        }
+
         // 6. Stalker VOD Server
         if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
           downloadSourceWidgets['stalker'] = _buildSourceTile(
@@ -4138,6 +4196,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             _downloadCastleStream(source);
                           } else if (isTorrentSeedr) {
                             _downloadTorrentViaSeedr(source);
+                          } else if (isMoviebox) {
+                            _downloadMovieboxStream(source);
                           } else {
                             _downloadSourceUrl(source.url, sourceName: source.name);
                           }

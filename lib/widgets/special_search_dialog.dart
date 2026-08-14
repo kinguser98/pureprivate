@@ -515,26 +515,63 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  String _cleanSearchTitle(String rawTitle) {
+    var cleaned = rawTitle.replaceAll(
+      RegExp(r'\s*[\(\[]?\b(19\d\d|20\d\d)\b[\)\]]?'),
+      '',
+    );
+    cleaned = cleaned.replaceAll(
+      RegExp(
+        r'\s*[\(\[]?\b(Hindi|Malayalam|Tamil|Telugu|Kannada|English|4K|1080p|720p|Dubbed|Dub|Multi|TAM|MAL|HIN|ENG)\b[\)\]]?',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    cleaned = cleaned.replaceAll(RegExp(r'[\(\)\[\]]'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return cleaned.isNotEmpty ? cleaned : rawTitle;
+  }
+
   Future<void> _resolveStalkerVodDatabase(String title) async {
     try {
+      final searchTitle = _cleanSearchTitle(title);
       final url =
-          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes));
-        var movies = data['movies'] as List<dynamic>? ?? [];
+          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(searchTitle)}';
+      
+      http.Response? response;
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try {
+          response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 25));
+          if (response.statusCode == 200) break;
+        } catch (e) {
+          debugPrint('Stalker VOD search attempt ${attempt + 1} failed: $e');
+          if (attempt == 0) await Future.delayed(const Duration(milliseconds: 800));
+        }
+      }
+
+      if (response != null && response.statusCode == 200) {
+        final dynamic data = json.decode(utf8.decode(response.bodyBytes));
+        List<dynamic> movies = [];
+        if (data is List) {
+          movies = data;
+        } else if (data is Map) {
+          movies = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
+        }
 
         if (movies.isEmpty && title.isNotEmpty) {
           try {
-            const fallbackUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&category=General&page=1';
-            final fallRes = await http.get(Uri.parse(fallbackUrl)).timeout(const Duration(seconds: 8));
-            if (fallRes.statusCode == 200) {
-              final fallData = json.decode(utf8.decode(fallRes.bodyBytes));
-              final fallMovies = fallData['movies'] as List<dynamic>? ?? [];
-              if (fallMovies.isNotEmpty) {
-                movies = fallMovies;
+            final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
+            final firstWords = rawTitleClean.split(' ').take(2).join(' ');
+            if (firstWords.isNotEmpty && firstWords != searchTitle) {
+              final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(firstWords)}';
+              final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 20));
+              if (allRes.statusCode == 200) {
+                final dynamic allData = json.decode(utf8.decode(allRes.bodyBytes));
+                if (allData is List && allData.isNotEmpty) {
+                  movies = allData;
+                } else if (allData is Map && (allData['movies'] as List<dynamic>? ?? []).isNotEmpty) {
+                  movies = allData['movies'] as List<dynamic>;
+                }
               }
             }
           } catch (_) {}
@@ -544,13 +581,21 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
         for (final item in movies) {
           final rawPortalId = item['portal_id'];
-          final portalId = rawPortalId != null 
+          var portalId = rawPortalId != null 
               ? (int.tryParse(rawPortalId.toString()) ?? 1) 
               : 1;
-          final cmd = item['cmd']?.toString() ?? '';
-          final name = item['name']?.toString() ?? 'Stalker VOD';
+          var cmd = item['cmd']?.toString() ?? '';
+          if (cmd.isEmpty && item['stream_url'] != null) {
+            final streamUrl = item['stream_url'].toString();
+            if (streamUrl.startsWith('stalker://')) {
+              final params = StalkerResolver.parseStalkerUrl(streamUrl);
+              cmd = params.cmd;
+              if (params.portalId > 0) portalId = params.portalId;
+            }
+          }
+          final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
           final rawPortalName = item['portal_name']?.toString() ?? '';
-          final portalName = rawPortalName.isNotEmpty ? rawPortalName : (rawPortalId != null ? 'Portal $portalId' : 'Stalker');
+          final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
           if (cmd.isNotEmpty) {
             final isDup =

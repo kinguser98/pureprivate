@@ -95,7 +95,15 @@ class ExternalPlayerService {
     )) {
       return true;
     }
-    if (enabledSources.contains('stalker') && (lowerName.contains('stalker') || lowerUrl.contains('mac=') || lowerUrl.contains('/server/load.php') || lowerUrl.startsWith('stalker://'))) {
+    if (enabledSources.contains('stalker') && (
+        lowerName.contains('stalker') ||
+        lowerName.contains('vod') ||
+        lowerUrl.contains('mac=') ||
+        lowerUrl.contains('/server/load.php') ||
+        lowerUrl.startsWith('stalker://') ||
+        lowerUrl.contains('stalker') ||
+        lowerUrl.contains('/vod/')
+    )) {
       return true;
     }
     if (enabledSources.contains('torrentio') && (lowerName.contains('torrentio') || lowerName.contains('debrid') || lowerName.contains('seedr') || lowerUrl.contains('seedr'))) {
@@ -133,4 +141,52 @@ class ExternalPlayerService {
       return false;
     }
   }
+
+  static void showLaunchDialog(BuildContext context, [String? playerDisplayName]) {
+    final name = playerDisplayName ?? 'External Player';
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        Future.delayed(const Duration(milliseconds: 3500), () {
+          if (context.mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        });
+        return AlertDialog(
+          backgroundColor: const Color(0xFF16161A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: Colors.white12),
+          ),
+          content: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(color: Color(0xFFFF2D55), strokeWidth: 3),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Opening in $name soon...',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Please wait while the stream is handed over.',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
+
