@@ -8,7 +8,7 @@ import 'package:private_cinema_mobile/data/dio_client.dart';
 import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {
-  static const String apiUrl = 'https://ott.goprivate.fun/api.php';
+  static const String apiUrl = 'https://ot.goprivate.fun/api.php';
   static Map<String, String> _langMap = {};
 
   static String _capitalize(String name) {
