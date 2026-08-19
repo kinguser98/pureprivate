@@ -213,7 +213,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // 3. Check our backend server directly for a hosted logo
     if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
-      final serverLogoUrl = 'http://ot.goprivate.fun/uploads/logos/$rawId.png';
+      final serverLogoUrl = 'https://ot.goprivate.fun/uploads/logos/$rawId.png';
       try {
         final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
         if (res.statusCode == 200) {
