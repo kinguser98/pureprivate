@@ -66,8 +66,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   dynamic _selectedEpisodeData;
 
   // Source visibility flags
-  bool _showVidlink = true;
-  bool _showNetmirror = true;
+
   bool _showStravo = true;
   bool _showStalker = true;
   bool _showCinemm = true;
@@ -477,36 +476,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
 
 
-  Future<void> _resolveVidLink(String activeId, {int? season, int? episode}) async {
-    try {
-      String url = 'https://movie-scraper-beige.vercel.app/api?id=$activeId';
-      if (season != null && episode != null) {
-        url += '&s=$season&e=$episode';
-      }
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final rawUrl = data['url'] as String?;
-        if (rawUrl != null && rawUrl.isNotEmpty) {
-          if (mounted) {
-            setState(() {
-              _resolvedSources.add(
-                StreamSourceInfo(
-                  name: 'VidLink (Native Proxy)',
-                  url: rawUrl,
-                  type: StreamSourceType.vidlink,
-                ),
-              );
-            });
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('VidLink stream resolution failed: $e');
-    }
-  }
+
 
   String _cleanSearchTitle(String rawTitle) {
     var cleaned = rawTitle.replaceAll(
@@ -618,19 +588,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  Future<void> _resolveNetmirror(String title) async {
-    try {
-      debugPrint('NetMirror Scraper: Resolving streams for $title...');
-      final streams = await NetmirrorResolver.resolveStreams(title);
-      if (mounted && streams.isNotEmpty) {
-        setState(() {
-          _resolvedSources.addAll(streams);
-        });
-      }
-    } catch (e) {
-      debugPrint('NetMirror resolution failed: $e');
-    }
-  }
+
 
   Future<void> _resolveCinemm(String title, String year) async {
     try {
@@ -2419,18 +2377,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final stravoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stravo)
         .toList();
-    final vidlinkStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.vidlink)
-        .toList();
+
     final torrentStreams = filteredSources
         .where((s) => s.type == StreamSourceType.torrent)
         .toList();
     final stalkerStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stalker)
         .toList();
-    final netmirrorStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.netmirror)
-        .toList();
+
     final dvdplayStreams = filteredSources
         .where((s) => s.type == StreamSourceType.dvdplay)
         .toList();
