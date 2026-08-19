@@ -84,7 +84,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['vidlink', 'netmirror', 'cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram'];
+      final allSources = ['cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram'];
       final List<String> enabledSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
@@ -1290,13 +1290,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Stravo Addon URL',
                 controller: _stravoUrlCtrl,
                 hint: 'https://stravo-clfk.onrender.com/default',
-              ),
-              const SizedBox(height: 16),
-              _buildInputRow(
-                icon: Icons.dns,
-                label: 'NetMirror Domains (comma-separated)',
-                controller: _netmirrorDomainsCtrl,
-                hint: 'domain1.com,domain2.com',
               ),
               const SizedBox(height: 16),
               _buildInputRow(

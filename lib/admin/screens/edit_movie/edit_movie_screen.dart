@@ -125,23 +125,24 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         if (movie.streamSources != null && movie.streamSources!.isNotEmpty) {
           try {
             final raw = movie.streamSources!.replaceAll("'", '"');
-            final List<dynamic> parsed = raw is String ? [] : [];
             if (raw.startsWith('[')) {
               final decoded = json.decode(raw);
               if (decoded is List) {
                 for (final s in decoded) {
-                  _addStreamSource(
-                    name: s['name']?.toString() ?? 'mp4/mkv',
-                    url: s['url']?.toString() ?? '',
-                  );
-                  // Skip the first auto-added row
-                  if (_streamSources.length == 1 && _streamSources[0].urlCtrl.text.isEmpty && _streamSources[0].nameCtrl.text == 'mp4/mkv') {
-                    _streamSources.removeAt(0);
+                  final url = s['url']?.toString() ?? '';
+                  if (url.isNotEmpty) {
+                    _addStreamSource(
+                      name: s['name']?.toString() ?? 'Streamtape',
+                      url: url,
+                    );
                   }
                 }
               }
             }
           } catch (_) {}
+        }
+        if (_streamSources.isEmpty && movie.streamUrl.isNotEmpty) {
+          _addStreamSource(name: 'Streamtape', url: movie.streamUrl);
         }
         if (_streamSources.isEmpty) _addStreamSource();
       }
@@ -233,7 +234,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         'director': _directorCtrl.text, 'director_photo': _directorPhotoCtrl.text, 'genre': _genreCtrl.text,
         'collection': '', 'ott_id': _ottId?.toString() ?? '',
         'custom_created_at': _ingestionDate?.toIso8601String().substring(0, 16) ?? '',
-        if (streamSourcesJson.isNotEmpty) 'stream_sources_json': '[$streamSourcesJson]',
+        'stream_sources_json': streamSourcesJson.isNotEmpty ? '[$streamSourcesJson]' : '[]',
         'stream_url': _streamSources.where((s) => s.urlCtrl.text.trim().isNotEmpty).firstOrNull?.urlCtrl.text ?? '',
       };
       final result = await _adminApi.updateMovie(int.parse(widget.movieId), data);

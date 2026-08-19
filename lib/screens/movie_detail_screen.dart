@@ -213,7 +213,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // 3. Check our backend server directly for a hosted logo
     if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
-      final serverLogoUrl = 'https://ott.redapp.space/uploads/logos/$rawId.png';
+      final serverLogoUrl = 'http://ot.goprivate.fun/uploads/logos/$rawId.png';
       try {
         final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
         if (res.statusCode == 200) {
@@ -4505,7 +4505,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           match.group(7) != null &&
           match.group(7)!.length == 11) {
         embedUrl =
-            'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=https://ott.redapp.space';
+            'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=http://ot.goprivate.fun';
       }
 
       if (mounted) {
