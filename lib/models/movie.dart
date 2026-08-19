@@ -58,6 +58,7 @@ class Movie {
     this.ottName,
     this.ottLogo,
     this.ottId,
+    this.logoUrl,
   });
 
   final String id;
@@ -90,6 +91,7 @@ class Movie {
   final String? ottName;
   final String? ottLogo;
   final int? ottId;
+  final String? logoUrl;
 
   String get displayBackdrop => backdropUrl ?? posterUrl;
 }

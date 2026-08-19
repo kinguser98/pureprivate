@@ -51,6 +51,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadNetmirrorDomains();
     _loadSeedrToken();
     _loadExternalPlayerSetting();
+    _loadClearLogosSetting();
+  }
+
+  bool _showClearLogos = true;
+
+  Future<void> _loadClearLogosSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _showClearLogos = prefs.getBool('show_clear_logos') ?? true;
+      });
+    }
+  }
+
+  Future<void> _toggleClearLogosSetting(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('show_clear_logos', value);
+    if (mounted) {
+      setState(() => _showClearLogos = value);
+    }
   }
 
   bool _useExternalPlayer = false;
@@ -822,6 +842,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             );
                           }).toList(),
+                        ),
+                        const Divider(color: Colors.white10, height: 24),
+                        SwitchListTile.adaptive(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            'Show Movie ClearLogos',
+                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text(
+                            'Display transparent title logos on details page & poster',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                          value: _showClearLogos,
+                          activeColor: const Color(0xFF8B5CF6),
+                          onChanged: (val) => _toggleClearLogosSetting(val),
                         ),
                       ],
                     ),

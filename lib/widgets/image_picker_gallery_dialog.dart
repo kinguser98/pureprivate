@@ -8,6 +8,7 @@ class ImagePickerGalleryDialog extends StatefulWidget {
   final String? imdbId;
   final String movieTitle;
   final bool isPoster;
+  final bool isLogo;
 
   const ImagePickerGalleryDialog({
     super.key,
@@ -15,6 +16,7 @@ class ImagePickerGalleryDialog extends StatefulWidget {
     this.imdbId,
     required this.movieTitle,
     required this.isPoster,
+    this.isLogo = false,
   });
 
   @override
@@ -40,7 +42,7 @@ class _ImagePickerGalleryDialogState extends State<ImagePickerGalleryDialog> wit
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
-    _manualSearchCtrl.text = widget.movieTitle;
+    _manualSearchCtrl.text = widget.isLogo ? '${widget.movieTitle} clear logo png' : widget.movieTitle;
     _fetchAllSources();
   }
 
@@ -63,7 +65,9 @@ class _ImagePickerGalleryDialogState extends State<ImagePickerGalleryDialog> wit
       final fanartRes = await TmdbService.getFanartImages(widget.tmdbId, imdbId: widget.imdbId, isPoster: widget.isPoster);
       if (mounted) {
         setState(() {
-          _tmdbImages = widget.isPoster ? tmdbRes.posters : tmdbRes.backdrops;
+          _tmdbImages = widget.isLogo 
+              ? tmdbRes.logos 
+              : (widget.isPoster ? tmdbRes.posters : tmdbRes.backdrops);
           _fanartImages = fanartRes;
           _loadingTmdb = false;
           _loadingFanart = false;

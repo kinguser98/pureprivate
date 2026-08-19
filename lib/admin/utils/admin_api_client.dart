@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 
@@ -271,6 +272,42 @@ class AdminApiClient {
     } catch (e) {
       return {'success': false, 'message': 'Failed to delete provider: $e'};
     }
+  }
+
+  Future<String?> uploadLogoFile(List<int> bytes, String filename) async {
+    try {
+      final formData = FormData.fromMap({
+        'action': 'upload_logo',
+        'logo_file': MultipartFile.fromBytes(bytes, filename: filename),
+      });
+      final response = await _dio.post('/api.php?action=upload_logo', data: formData);
+      if (response.data != null && response.data is Map && response.data['url'] != null) {
+        return response.data['url'].toString();
+      }
+    } catch (e) {
+      debugPrint('Logo upload error: $e');
+    }
+    return null;
+  }
+
+  Future<String?> uploadLogoFromUrl(String remoteUrl) async {
+    if (remoteUrl.isEmpty || remoteUrl.contains('ott.redapp.space')) {
+      return remoteUrl;
+    }
+    try {
+      final res = await Dio().get<List<int>>(remoteUrl, options: Options(responseType: ResponseType.bytes)).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200 && res.data != null && res.data!.isNotEmpty) {
+        final ext = remoteUrl.contains('.png') ? 'png' : (remoteUrl.contains('.webp') ? 'webp' : 'jpg');
+        final fileName = 'logo_${DateTime.now().millisecondsSinceEpoch}.$ext';
+        final uploaded = await uploadLogoFile(res.data!, fileName);
+        if (uploaded != null && uploaded.isNotEmpty) {
+          return uploaded;
+        }
+      }
+    } catch (e) {
+      debugPrint('Upload logo from URL error: $e');
+    }
+    return remoteUrl;
   }
 
 

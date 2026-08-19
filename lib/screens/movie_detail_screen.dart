@@ -134,6 +134,211 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _loadWatchProgress();
     _loadTorrentioStreams();
     _resolveAllLiveSources();
+    _loadClearLogo();
+  }
+
+  String? _clearLogoUrl;
+  bool _showClearLogos = true;
+  Timer? _logoFadeTimer;
+  bool _showLogoInCrossFade = true;
+
+  @override
+  void dispose() {
+    _logoFadeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLogoFadeTimer() {
+    _logoFadeTimer?.cancel();
+    _logoFadeTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && _clearLogoUrl != null && _clearLogoUrl!.isNotEmpty) {
+        setState(() => _showLogoInCrossFade = !_showLogoInCrossFade);
+      }
+    });
+  }
+
+  static final Map<String, String> _logoMemoryCache = {};
+
+  Future<void> _loadClearLogo() async {
+    final prefs = await SharedPreferences.getInstance();
+    _showClearLogos = prefs.getBool('show_clear_logos') ?? true;
+    if (!_showClearLogos) return;
+
+    // 0. Check direct database/model property (set via admin panel)
+    if (movie.logoUrl != null && movie.logoUrl!.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _clearLogoUrl = movie.logoUrl;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    final cacheKey = 'logo_cache_${movie.tmdbId ?? movie.id}_${movie.title.hashCode}';
+
+    // 1. Check memory cache (0ms latency, zero API calls)
+    if (_logoMemoryCache.containsKey(cacheKey)) {
+      final cachedUrl = _logoMemoryCache[cacheKey]!;
+      if (cachedUrl.isNotEmpty && mounted) {
+        setState(() {
+          _clearLogoUrl = cachedUrl;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    // 2. Check SharedPreferences disk cache (instant load across app restarts)
+    final diskCached = prefs.getString(cacheKey);
+    if (diskCached != null) {
+      _logoMemoryCache[cacheKey] = diskCached;
+      if (diskCached.isNotEmpty && mounted) {
+        setState(() {
+          _clearLogoUrl = diskCached;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    final rawId = movie.tmdbId?.toString() ?? movie.id;
+    final title = movie.title;
+    final isTvHint = movie.genre.toLowerCase().contains('tv') || movie.genre.toLowerCase().contains('series');
+
+    String? logo;
+
+    // 3. Check our backend server directly for a hosted logo
+    if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
+      final serverLogoUrl = 'https://ott.redapp.space/uploads/logos/$rawId.png';
+      try {
+        final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
+        if (res.statusCode == 200) {
+          logo = serverLogoUrl;
+        }
+      } catch (_) {}
+    }
+
+    // 4. Try directly via TMDB API if rawId is a valid numeric TMDB ID
+    if (logo == null && rawId.isNotEmpty && rawId != '0' && rawId != 'null' && int.tryParse(rawId) != null) {
+      final firstType = isTvHint ? 'tv' : 'movie';
+      final secondType = isTvHint ? 'movie' : 'tv';
+
+      logo = await _fetchLogoForType(firstType, rawId);
+      logo ??= await _fetchLogoForType(secondType, rawId);
+    }
+
+    // 5. Fallback to TMDB Title Search (for Stalker VODs, IMDb IDs, or unlinked items)
+    logo ??= await _searchTmdbForLogo(title);
+
+    if (logo != null && logo.isNotEmpty) {
+      _logoMemoryCache[cacheKey] = logo;
+      prefs.setString(cacheKey, logo);
+      if (mounted) {
+        setState(() {
+          _clearLogoUrl = logo;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+    }
+  }
+
+  static String _cleanStalkerTitle(String rawTitle) {
+    String t = rawTitle;
+    t = t.replaceAll(RegExp(r'\[.*?\]'), '');
+    t = t.replaceAll(RegExp(r'\(\d{4}\)'), '');
+    t = t.replaceAll(RegExp(r'\b(MAL|MALAYALAM|TAM|TAMIL|HIN|HINDI|TEL|TELUGU|KAN|KANNADA|ENG|ENGLISH|MAR|MARATHI|BEN|BENGALI|PUN|PUNJABI|GUJ|GUJARATI|ORI|ORIYA)\b', caseSensitive: false), '');
+    t = t.replaceAll(RegExp(r'\b(4K|8K|2160P|1080P|720P|480P|360P|FHD|UHD|HD|SD|HDR|HDR10|HEVC|H264|H265|X264|X265|WEB-?DL|WEBRIP|BLURAY|DV|PROPER|REPACK|HQ|REMUX|ESUB|MSUB|SUB|DUB|DUBBED|DUAL|MULTI|AAC|DTS|DD5\.1|5\.1|AUDIO)\b', caseSensitive: false), '');
+    t = t.replaceAll(RegExp(r'[\-\|\:_]+'), ' ');
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return t;
+  }
+
+  static Future<String?> _searchTmdbForLogo(String rawTitle) async {
+    try {
+      final yearMatch = RegExp(r'\((\d{4})\)').firstMatch(rawTitle);
+      final year = yearMatch?.group(1);
+      final cleanTitle = _cleanStalkerTitle(rawTitle);
+      if (cleanTitle.isEmpty) return null;
+
+      final encodedTitle = Uri.encodeComponent(cleanTitle);
+      final yearParam = (year != null && year.isNotEmpty) ? '&year=$year' : '';
+      var searchUrl = Uri.parse('https://api.themoviedb.org/3/search/movie?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=$encodedTitle$yearParam');
+      var res = await http.get(searchUrl).timeout(const Duration(seconds: 5));
+
+      List? results;
+      String mediaType = 'movie';
+
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        results = data['results'] as List?;
+      }
+
+      if (results == null || results.isEmpty) {
+        searchUrl = Uri.parse('https://api.themoviedb.org/3/search/multi?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=$encodedTitle');
+        res = await http.get(searchUrl).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) {
+          final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+          results = data['results'] as List?;
+          if (results != null && results.isNotEmpty) {
+            mediaType = results.first['media_type']?.toString() ?? 'movie';
+          }
+        }
+      }
+
+      if (results != null && results.isNotEmpty) {
+        final foundId = results.first['id']?.toString();
+        if (foundId != null && foundId.isNotEmpty) {
+          return await _fetchLogoForType(mediaType, foundId);
+        }
+      }
+    } catch (e) {
+      debugPrint('TMDB Title search for logo error: $e');
+    }
+    return null;
+  }
+
+  static Future<String?> _fetchLogoForType(String type, String tmdbId) async {
+    try {
+      final url = Uri.parse('https://api.themoviedb.org/3/$type/$tmdbId/images?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
+      final res = await http.get(url).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final logos = data['logos'] as List?;
+        if (logos != null && logos.isNotEmpty) {
+          Map<String, dynamic>? chosenLogo;
+          // 1. Prefer English logo
+          for (final l in logos) {
+            if (l is Map && l['iso_639_1'] == 'en') {
+              chosenLogo = Map<String, dynamic>.from(l);
+              break;
+            }
+          }
+          // 2. Fallback to any available logo (regional / null)
+          if (chosenLogo == null) {
+            for (final l in logos) {
+              if (l is Map && l['file_path'] != null) {
+                chosenLogo = Map<String, dynamic>.from(l);
+                break;
+              }
+            }
+          }
+          if (chosenLogo != null) {
+            final filePath = chosenLogo['file_path']?.toString();
+            if (filePath != null && filePath.isNotEmpty) {
+              return 'https://image.tmdb.org/t/p/w500$filePath';
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Logo fetch error for $type $tmdbId: $e');
+    }
+    return null;
   }
 
   @override
@@ -336,89 +541,98 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   Future<void> _resolveLiveStalker(String title) async {
     if (mounted) setState(() => _resolvingStalker = true);
     try {
-      final searchTitle = _cleanSearchTitle(title);
-      final url =
-          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(searchTitle)}';
-      
-      http.Response? response;
-      for (int attempt = 0; attempt < 2; attempt++) {
+      final List<StreamSource> sources = [];
+
+      // Step 1: Pre-populate from existing movie.sources / movie.streamSources if available
+      try {
+        final existingSources = movie.streamSources;
+        for (final s in existingSources) {
+          if (s.url.startsWith('stalker://')) {
+            final isDup = sources.any((existing) => existing.url == s.url);
+            if (!isDup) {
+              sources.add(s);
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Step 2: Multi-tier queries against server backend Stalker database
+      final searchQueries = <String>[];
+      final cleanTitle = _cleanSearchTitle(title);
+      if (cleanTitle.isNotEmpty) searchQueries.add(cleanTitle);
+
+      // Fallback A: Strip trailing numbers, Roman numerals, or years (e.g. "Gatta Kusthi 2" -> "Gatta Kusthi")
+      final strippedNum = cleanTitle.replaceAll(RegExp(r'\s+(\d+|[IVXLCDM]+)$', caseSensitive: false), '').trim();
+      if (strippedNum.isNotEmpty && !searchQueries.contains(strippedNum)) {
+        searchQueries.add(strippedNum);
+      }
+
+      // Fallback B: First 2 words of clean title
+      final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
+      final firstWords = rawTitleClean.split(RegExp(r'\s+')).take(2).join(' ').trim();
+      if (firstWords.isNotEmpty && !searchQueries.contains(firstWords)) {
+        searchQueries.add(firstWords);
+      }
+
+      List<dynamic> movies = [];
+      for (final query in searchQueries) {
+        final url = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(query)}';
         try {
-          response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 25));
-          if (response.statusCode == 200) break;
+          final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+          if (res.statusCode == 200) {
+            final dynamic data = json.decode(utf8.decode(res.bodyBytes));
+            List<dynamic> fetched = [];
+            if (data is List) {
+              fetched = data;
+            } else if (data is Map) {
+              fetched = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
+            }
+            if (fetched.isNotEmpty) {
+              movies = fetched;
+              break; // Found matching Stalker movies!
+            }
+          }
         } catch (e) {
-          debugPrint('Stalker VOD search attempt ${attempt + 1} failed: $e');
-          if (attempt == 0) await Future.delayed(const Duration(milliseconds: 800));
+          debugPrint('Stalker VOD query "$query" failed: $e');
         }
       }
 
-      if (response != null && response.statusCode == 200) {
-        final responseBody = utf8.decode(response.bodyBytes);
-        final dynamic data = json.decode(responseBody);
-        List<dynamic> movies = [];
-        if (data is List) {
-          movies = data;
-        } else if (data is Map) {
-          movies = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
-        }
-
-        if (movies.isEmpty && title.isNotEmpty) {
-          try {
-            final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
-            final firstWords = rawTitleClean.split(' ').take(2).join(' ');
-            if (firstWords.isNotEmpty && firstWords != searchTitle) {
-              final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(firstWords)}';
-              final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 20));
-              if (allRes.statusCode == 200) {
-                final dynamic allData = json.decode(utf8.decode(allRes.bodyBytes));
-                if (allData is List && allData.isNotEmpty) {
-                  movies = allData;
-                } else if (allData is Map && (allData['movies'] as List<dynamic>? ?? []).isNotEmpty) {
-                  movies = allData['movies'] as List<dynamic>;
-                }
-              }
-            }
-          } catch (_) {}
-        }
-
-        final List<StreamSource> sources = [];
-
-        for (final item in movies) {
-          final rawPortalId = item['portal_id'];
-          var portalId = rawPortalId != null 
-              ? (int.tryParse(rawPortalId.toString()) ?? 1) 
-              : 1;
-          var cmd = item['cmd']?.toString() ?? '';
-          if (cmd.isEmpty && item['stream_url'] != null) {
-            final streamUrl = item['stream_url'].toString();
-            if (streamUrl.startsWith('stalker://')) {
-              final params = StalkerResolver.parseStalkerUrl(streamUrl);
-              cmd = params.cmd;
-              if (params.portalId > 0) portalId = params.portalId;
-            }
+      for (final item in movies) {
+        final rawPortalId = item['portal_id'];
+        var portalId = rawPortalId != null 
+            ? (int.tryParse(rawPortalId.toString()) ?? 1) 
+            : 1;
+        var cmd = item['cmd']?.toString() ?? '';
+        if (cmd.isEmpty && item['stream_url'] != null) {
+          final streamUrl = item['stream_url'].toString();
+          if (streamUrl.startsWith('stalker://')) {
+            final params = StalkerResolver.parseStalkerUrl(streamUrl);
+            cmd = params.cmd;
+            if (params.portalId > 0) portalId = params.portalId;
           }
-          final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
-          final rawPortalName = item['portal_name']?.toString() ?? '';
-          final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
+        }
+        final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
+        final rawPortalName = item['portal_name']?.toString() ?? '';
+        final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
-          if (cmd.isNotEmpty) {
-            final isDup = sources.any(
-              (s) => s.url == 'stalker://$portalId$cmd',
+        if (cmd.isNotEmpty) {
+          final targetUrl = 'stalker://$portalId$cmd';
+          final isDup = sources.any((s) => s.url == targetUrl);
+          if (!isDup) {
+            sources.add(
+              StreamSource(
+                name: '$portalName - $name',
+                url: targetUrl,
+              ),
             );
-            if (!isDup) {
-              sources.add(
-                StreamSource(
-                  name: '$portalName - $name',
-                  url: 'stalker://$portalId$cmd',
-                ),
-              );
-            }
           }
         }
-        if (mounted) {
-          setState(() {
-            _liveStalkerSources = sources;
-          });
-        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _liveStalkerSources = sources;
+        });
       }
     } catch (e) {
       debugPrint('Stalker VOD database search failed: $e');
@@ -1434,6 +1648,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           resumeDirectly: resumeDirectly,
           headers: headers,
           sourceName: sourceName,
+          logoUrl: _clearLogoUrl ?? movie.logoUrl,
         ),
       ),
     );
@@ -2223,6 +2438,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               resumeDirectly: resumeDirectly,
               headers: finalHeaders.isEmpty ? null : finalHeaders,
               sourceName: sourceName,
+              logoUrl: _clearLogoUrl ?? movie.logoUrl,
             ),
           ),
         );
@@ -2900,6 +3116,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             movieId: movie.id,
             resumeDirectly: resumeDirectly,
             headers: headers.isNotEmpty ? headers : null,
+            logoUrl: _clearLogoUrl ?? movie.logoUrl,
           ),
         ),
       );
@@ -4611,16 +4828,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const SizedBox(height: 35),
-                                  // Movie Title
-                                  Text(
-                                    movie.title,
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      height: 1.2,
+                                  // Movie Title (Replaced with ClearLogo image with smooth 4s cross-fade animation if available)
+                                  if (_showClearLogos && _clearLogoUrl != null && _clearLogoUrl!.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 6.0),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: AnimatedCrossFade(
+                                          duration: const Duration(milliseconds: 700),
+                                          crossFadeState: _showLogoInCrossFade
+                                              ? CrossFadeState.showFirst
+                                              : CrossFadeState.showSecond,
+                                          firstChild: Image.network(
+                                            _clearLogoUrl!,
+                                            height: 65,
+                                            fit: BoxFit.contain,
+                                            alignment: Alignment.centerLeft,
+                                            errorBuilder: (_, __, ___) => Text(
+                                              movie.title,
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.white,
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.bold,
+                                                height: 1.2,
+                                              ),
+                                            ),
+                                          ),
+                                          secondChild: Text(
+                                            movie.title,
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white,
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.bold,
+                                              height: 1.2,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Text(
+                                      movie.title,
+                                      style: GoogleFonts.outfit(
+                                        color: Colors.white,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.bold,
+                                        height: 1.2,
+                                      ),
                                     ),
-                                  ),
                                   const SizedBox(height: 8),
 
                                   // Combined Meta tags (Year • Runtime • Genre • Content Rating)

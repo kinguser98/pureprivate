@@ -243,6 +243,7 @@ class ApiService {
         ottName: json['ott_name']?.toString(),
         ottLogo: json['ott_logo']?.toString(),
         ottId: json['ott_id'] != null ? int.tryParse(json['ott_id'].toString()) : null,
+        logoUrl: json['logo_url']?.toString() ?? json['logoUrl']?.toString(),
       );
     }).toList();
   }

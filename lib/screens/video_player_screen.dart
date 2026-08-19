@@ -29,6 +29,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.headers,
     this.isLive = false,
     this.sourceName,
+    this.logoUrl,
   });
 
   final String videoSource;
@@ -40,6 +41,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final Map<String, String>? headers;
   final bool isLive;
   final String? sourceName;
+  final String? logoUrl;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -93,6 +95,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _controlsLocked = false;
 
   Timer? _hideControlsTimer;
+  Timer? _playerLogoTimer;
+  bool _showPlayerLogoCrossFade = true;
+
+  void _startPlayerLogoTimer() {
+    if (_playerLogoTimer != null && _playerLogoTimer!.isActive) return;
+    if (widget.logoUrl == null || widget.logoUrl!.isEmpty) return;
+    _playerLogoTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.logoUrl != null && widget.logoUrl!.isNotEmpty) {
+        setState(() => _showPlayerLogoCrossFade = !_showPlayerLogoCrossFade);
+      }
+    });
+  }
   double _subtitleFontSize = 32.0; // Increased by 2x
   bool _isFavorite = false;
   double _playbackSpeed = 1.0;
@@ -252,6 +266,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
     _startProxyStatsTimer();
+    _startPlayerLogoTimer();
   }
 
   Timer? _proxyStatsTimer;
@@ -773,17 +788,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       setState(() => _showControls = false);
       _hideControlsTimer?.cancel();
     } else {
+      _startPlayerLogoTimer();
       setState(() => _showControls = true);
       _armHideControls();
     }
   }
 
   void _togglePlay() {
+    _startPlayerLogoTimer();
     _player.playOrPause();
     _keepControlsVisible();
   }
 
   Future<void> _seekRelative(int seconds) async {
+    _startPlayerLogoTimer();
     final target = _position + Duration(seconds: seconds);
     final clamped = target < Duration.zero
         ? Duration.zero
@@ -2273,6 +2291,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   ],
                 ),
               ),
+
+              // STREMIO CLEAR LOGO ANIMATED OVERLAY (2s visible -> 2s hidden -> 2s visible)
+              if (widget.logoUrl != null && widget.logoUrl!.isNotEmpty && (_showControls || _buffering || !_playing || _isSeeking))
+                AnimatedOpacity(
+                  opacity: _showPlayerLogoCrossFade ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 500),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    alignment: Alignment.center,
+                    child: Image.network(
+                      widget.logoUrl!,
+                      height: 80,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
 
               const Spacer(),
 

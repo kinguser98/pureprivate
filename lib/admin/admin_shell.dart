@@ -21,6 +21,7 @@ import 'package:private_cinema_mobile/admin/screens/backups/backups_screen.dart'
 import 'package:private_cinema_mobile/admin/screens/account_settings/account_settings_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/ott_providers/ott_providers_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/link_checker/link_checker_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/1tamilmv_converter/1tamilmv_converter_screen.dart';
 import 'package:private_cinema_mobile/admin/widgets/navigation/app_drawer.dart';
 
 class AdminShell extends StatelessWidget {
@@ -88,6 +89,7 @@ final _adminRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/account-settings', builder: (context, state) => const AccountSettingsScreen()),
           GoRoute(path: '/ott-providers', builder: (context, state) => const OttProvidersScreen()),
           GoRoute(path: '/link-checker', builder: (context, state) => const LinkCheckerScreen()),
+          GoRoute(path: '/1tamilmv-converter', builder: (context, state) => const OneTamilmvConverterScreen()),
         ],
       ),
     ],
