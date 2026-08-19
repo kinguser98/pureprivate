@@ -141,8 +141,8 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
             }
           } catch (_) {}
         }
-        if (_streamSources.isEmpty && movie.streamUrl.isNotEmpty) {
-          _addStreamSource(name: 'Streamtape', url: movie.streamUrl);
+        if (_streamSources.isEmpty && movie.streamUrl != null && movie.streamUrl!.isNotEmpty) {
+          _addStreamSource(name: 'Streamtape', url: movie.streamUrl!);
         }
         if (_streamSources.isEmpty) _addStreamSource();
       }
