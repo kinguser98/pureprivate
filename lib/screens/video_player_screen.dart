@@ -15,6 +15,7 @@ import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -28,6 +29,7 @@ class VideoPlayerScreen extends StatefulWidget {
     this.headers,
     this.isLive = false,
     this.sourceName,
+    this.logoUrl,
   });
 
   final String videoSource;
@@ -39,6 +41,7 @@ class VideoPlayerScreen extends StatefulWidget {
   final Map<String, String>? headers;
   final bool isLive;
   final String? sourceName;
+  final String? logoUrl;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -56,6 +59,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _showInitialTrackSelector = false;
+  AudioTrack? _selectedAudioTrack;
+  VideoTrack? _selectedVideoTrack;
   bool _trackSelectorScheduled = false;
   bool _hasStartedPlaying = false;
   bool _hasError = false;
@@ -90,6 +95,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _controlsLocked = false;
 
   Timer? _hideControlsTimer;
+  Timer? _playerLogoTimer;
+  bool _showPlayerLogoCrossFade = true;
+
+  void _startPlayerLogoTimer() {
+    if (_playerLogoTimer != null && _playerLogoTimer!.isActive) return;
+    if (widget.logoUrl == null || widget.logoUrl!.isEmpty) return;
+    _playerLogoTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.logoUrl != null && widget.logoUrl!.isNotEmpty) {
+        setState(() => _showPlayerLogoCrossFade = !_showPlayerLogoCrossFade);
+      }
+    });
+  }
   double _subtitleFontSize = 32.0; // Increased by 2x
   bool _isFavorite = false;
   double _playbackSpeed = 1.0;
@@ -249,6 +266,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
     _startProxyStatsTimer();
+    _startPlayerLogoTimer();
   }
 
   Timer? _proxyStatsTimer;
@@ -423,6 +441,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _open() async {
     try {
+      final shouldExternal = await ExternalPlayerService.shouldPlayInExternalPlayer(
+        url: widget.videoSource,
+        sourceName: widget.sourceName ?? widget.subtitle,
+      );
+      if (shouldExternal) {
+        if (mounted) {
+          final displayName = await ExternalPlayerService.getPlayerDisplayName();
+          ExternalPlayerService.showLaunchDialog(context, displayName);
+        }
+        final launched = await ExternalPlayerService.launch(
+          url: widget.videoSource,
+          title: widget.title,
+          headers: widget.headers,
+        );
+        if (launched && mounted) {
+          Navigator.of(context).pop();
+          return;
+        }
+      }
+
       int seekToMs = 0;
       if (widget.movieId != null) {
         final savedMs = await PlaybackTracker.getSavedPosition(widget.movieId!);
@@ -505,7 +543,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             headerList.add('$key: $value');
           });
           if (headerList.isNotEmpty) {
-            await nativePlayer.setProperty('http-header-fields', headerList.join('\r\n'));
+            await nativePlayer.setProperty('http-header-fields', headerList.join(','));
           }
         }
         // Hardware decoding configuration
@@ -548,6 +586,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         } else if (Platform.isIOS) {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
+        
+        // Disable HTTP persistent connections to avoid avformat_open_input()
+        // "Cannot reuse HTTP connection for different host" failures with HLS CDN segments
+        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
       }
 
       var resolvedSource = widget.videoSource;
@@ -567,8 +609,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final hasStalkerCookie = playHeaders.entries.any(
             (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
           );
-          if (lowerSubtitle.contains('castle') ||
+          if (lowerSubtitle.contains('stalker') ||
+              lowerSubtitle.contains('castle') ||
               lowerSubtitle.contains('telegram') ||
+              lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerUrl.contains('hlowb.com') ||
@@ -576,7 +620,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
-              lowerUrl.contains('/f/')) {
+              lowerUrl.contains('/f/') ||
+              hasStalkerCookie) {
             shouldProxy = false;
           }
           if (shouldProxy) {
@@ -730,22 +775,33 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     });
   }
 
+  void _keepControlsVisible() {
+    _hideControlsTimer?.cancel();
+    if (!_showControls) {
+      setState(() => _showControls = true);
+    }
+    _armHideControls();
+  }
+
   void _revealControls() {
     if (_showControls) {
       setState(() => _showControls = false);
       _hideControlsTimer?.cancel();
     } else {
+      _startPlayerLogoTimer();
       setState(() => _showControls = true);
       _armHideControls();
     }
   }
 
   void _togglePlay() {
+    _startPlayerLogoTimer();
     _player.playOrPause();
-    _revealControls();
+    _keepControlsVisible();
   }
 
   Future<void> _seekRelative(int seconds) async {
+    _startPlayerLogoTimer();
     final target = _position + Duration(seconds: seconds);
     final clamped = target < Duration.zero
         ? Duration.zero
@@ -767,7 +823,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     _showHud('seek', seconds);
-    _revealControls();
+    _keepControlsVisible();
   }
 
   void _showHud(String type, [int? value]) {
@@ -815,7 +871,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _videoOffset = Offset.zero;
         }
       });
-      _revealControls();
+      _keepControlsVisible();
     } else if (details.pointerCount == 1 && _isDraggingHUD && _dragStartPoint != null) {
       // Single finger drag: Swipe up/down for Volume/Brightness
       final deltaY = details.localFocalPoint.dy - _dragStartPoint!.dy;
@@ -839,7 +895,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _player.setVolume(_volume);
         });
       }
-      _revealControls();
+      _armHideControls();
     }
   }
 
@@ -849,6 +905,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _dragStartBrightness = null;
     _dragStartPoint = null;
     
+    _armHideControls();
+
     // Start timer to hide brightness/volume overlay after drag ends
     _hudTimer?.cancel();
     _hudTimer = Timer(const Duration(milliseconds: 1000), () {
@@ -995,6 +1053,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     final currentVideo = _player.state.track.video;
     final hasMultiple = _hasMultipleTracks;
 
+    _selectedAudioTrack ??= currentAudio;
+    _selectedVideoTrack ??= currentVideo;
+
     return Positioned.fill(
       child: Container(
         color: Colors.black87,
@@ -1016,7 +1077,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                     Text('Audio & Quality', style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     if (!hasMultiple)
-                      TextButton(onPressed: () => setState(() => _showInitialTrackSelector = false),
+                      TextButton(
+                        onPressed: () => setState(() {
+                          _showInitialTrackSelector = false;
+                          _selectedAudioTrack = null;
+                          _selectedVideoTrack = null;
+                        }),
                         child: const Text('Skip', style: TextStyle(color: Colors.white54))),
                   ]),
                   const SizedBox(height: 16),
@@ -1026,8 +1092,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     const SizedBox(height: 8),
                     ...audioTracks.map((t) => _buildTrackTile(
                       label: t.title ?? t.language ?? 'Track ${t.id}',
-                      isSelected: t.id == currentAudio.id,
-                      onTap: () => _player.setAudioTrack(t),
+                      isSelected: t.id == _selectedAudioTrack?.id,
+                      onTap: () => setState(() => _selectedAudioTrack = t),
                     )),
                     const SizedBox(height: 16),
                   ],
@@ -1037,8 +1103,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     const SizedBox(height: 8),
                     ...videoTracks.map((t) => _buildTrackTile(
                       label: t.h != null ? '${t.h}p' : (t.title ?? 'Track ${t.id}'),
-                      isSelected: t.id == currentVideo.id,
-                      onTap: () => _player.setVideoTrack(t),
+                      isSelected: t.id == _selectedVideoTrack?.id,
+                      onTap: () => setState(() => _selectedVideoTrack = t),
                     )),
                   ],
                   if (!hasMultiple) ...[
@@ -1054,7 +1120,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () => setState(() => _showInitialTrackSelector = false),
+                      onPressed: () {
+                        if (_selectedAudioTrack != null && _selectedAudioTrack != currentAudio) {
+                          _player.setAudioTrack(_selectedAudioTrack!);
+                        }
+                        if (_selectedVideoTrack != null && _selectedVideoTrack != currentVideo) {
+                          _player.setVideoTrack(_selectedVideoTrack!);
+                        }
+                        setState(() {
+                          _showInitialTrackSelector = false;
+                          _selectedAudioTrack = null;
+                          _selectedVideoTrack = null;
+                        });
+                      },
                       child: const Text('Start Playing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                     ),
                   ),
@@ -2213,6 +2291,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   ],
                 ),
               ),
+
+              // STREMIO CLEAR LOGO ANIMATED OVERLAY (2s visible -> 2s hidden -> 2s visible)
+              if (widget.logoUrl != null && widget.logoUrl!.isNotEmpty && (_showControls || _buffering || !_playing || _isSeeking))
+                AnimatedOpacity(
+                  opacity: _showPlayerLogoCrossFade ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 500),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    alignment: Alignment.center,
+                    child: Image.network(
+                      widget.logoUrl!,
+                      height: 80,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
 
               const Spacer(),
 

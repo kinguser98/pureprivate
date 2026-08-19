@@ -6,6 +6,7 @@ import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/screens/favorites_screen.dart';
 import 'package:private_cinema_mobile/screens/settings_screen.dart';
 import 'package:private_cinema_mobile/screens/live_tv_screen.dart';
+import 'package:private_cinema_mobile/screens/stalker_vod_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 
 class NavigationHolder extends StatefulWidget {
@@ -64,6 +65,68 @@ class _NavigationHolderState extends State<NavigationHolder> {
                 ),
               ),
               
+              // Floating Stalker VOD Button (Bottom Right above bottom nav bar)
+              Positioned(
+                right: 24,
+                bottom: (MediaQuery.of(context).padding.bottom > 0
+                        ? MediaQuery.of(context).padding.bottom + 8
+                        : 24) + 76,
+                child: GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const StalkerVodScreen(),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.accentBright,
+                          const Color(0xFF8B5CF6),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.accentBright.withValues(alpha: 0.45),
+                          blurRadius: 14,
+                          spreadRadius: 1,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.movie_filter_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'VOD',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
               // Floating Frosted Glass Bottom Navigation Bar
               Positioned(
                 left: 24,

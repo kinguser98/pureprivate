@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -42,6 +44,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
   final _trailerCtrl = TextEditingController();
   final _posterCtrl = TextEditingController();
   final _backdropCtrl = TextEditingController();
+  final _logoCtrl = TextEditingController();
 
   int? _languageId;
   int? _ottId;
@@ -50,6 +53,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
 
   String? _posterPreviewUrl;
   String? _backdropPreviewUrl;
+  String? _logoPreviewUrl;
 
   final List<_StreamSource> _streamSources = [];
   int _sourceIdCounter = 0;
@@ -88,6 +92,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
     _trailerCtrl.dispose();
     _posterCtrl.dispose();
     _backdropCtrl.dispose();
+    _logoCtrl.dispose();
     for (final s in _streamSources) { s.nameCtrl.dispose(); s.urlCtrl.dispose(); }
     super.dispose();
   }
@@ -113,8 +118,10 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         _quality = movie.qualityTag ?? '1080p';
         _posterCtrl.text = movie.posterUrl;
         _backdropCtrl.text = movie.backdropUrl ?? '';
+        _logoCtrl.text = movie.logoUrl ?? '';
         _posterPreviewUrl = movie.posterUrl.isNotEmpty ? movie.posterUrl : null;
         _backdropPreviewUrl = movie.backdropUrl?.isNotEmpty == true ? movie.backdropUrl : null;
+        _logoPreviewUrl = movie.logoUrl?.isNotEmpty == true ? movie.logoUrl : null;
         _languageId = movie.languageId > 0 ? movie.languageId : null;
         _ottId = movie.ottId > 0 ? movie.ottId : null;
         if (movie.createdAt != null && movie.createdAt!.isNotEmpty) {
@@ -189,8 +196,14 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         _directorPhotoCtrl.text = details.directorPhoto ?? '';
         _posterCtrl.text = details.posterPath ?? '';
         _backdropCtrl.text = details.backdropPath ?? '';
+        String logoUrl = details.logoPath ?? '';
+        if (logoUrl.startsWith('/')) {
+          logoUrl = 'https://image.tmdb.org/t/p/w500$logoUrl';
+        }
+        _logoCtrl.text = logoUrl;
         _posterPreviewUrl = details.posterPath;
         _backdropPreviewUrl = details.backdropPath;
+        _logoPreviewUrl = logoUrl;
         if (details.trailerKey != null) _trailerCtrl.text = 'https://www.youtube.com/watch?v=${details.trailerKey}';
       });
     } else if (mounted) setState(() { _isSearchingTMDB = false; _tmdbSuggestions = []; });
@@ -228,7 +241,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
       final data = <String, dynamic>{
         'title': _titleCtrl.text, 'description': _overviewCtrl.text, 'language_id': _languageId?.toString() ?? '',
         'release_date': _releaseCtrl.text, 'runtime': _runtimeCtrl.text, 'trailer_url': _trailerCtrl.text,
-        'quality_tag': _quality, 'poster_url': _posterCtrl.text, 'backdrop_url': _backdropCtrl.text,
+        'quality_tag': _quality, 'poster_url': _posterCtrl.text, 'backdrop_url': _backdropCtrl.text, 'logo_url': _logoCtrl.text,
         'tmdb_id': _tmdbCtrl.text, 'imdb_id': _imdbCtrl.text, 'cast': _castCtrl.text, 'cast_photos': _castPhotosCtrl.text,
         'director': _directorCtrl.text, 'director_photo': _directorPhotoCtrl.text, 'genre': _genreCtrl.text,
         'collection': '', 'ott_id': _ottId?.toString() ?? '',
@@ -359,18 +372,22 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
               ),
             ]),
             const SizedBox(height: 16),
-            _sectionHeader('Images'),
+            _sectionHeader('Images & Clear Logo'),
             const SizedBox(height: 8),
             Row(children: [
               Expanded(child: _imageField('Poster URL', _posterCtrl, true)),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Expanded(child: _imageField('Backdrop URL', _backdropCtrl, false)),
+              const SizedBox(width: 8),
+              Expanded(child: _logoField('Clear Logo URL', _logoCtrl)),
             ]),
             const SizedBox(height: 12),
             Row(children: [
-              Expanded(child: _imagePreview(_posterPreviewUrl, 180, 270)),
-              const SizedBox(width: 12),
-              Expanded(child: _imagePreview(_backdropPreviewUrl, 180, 101)),
+              Expanded(child: _imagePreview(_posterPreviewUrl, 150, 220)),
+              const SizedBox(width: 8),
+              Expanded(child: _imagePreview(_backdropPreviewUrl, 150, 90)),
+              const SizedBox(width: 8),
+              Expanded(child: _imagePreview(_logoPreviewUrl, 150, 150)),
             ]),
             const SizedBox(height: 16),
             // Stream status
@@ -703,6 +720,98 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
                 });
               }
             },
+          ),
+          border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12), isDense: true,
+        ),
+      ),
+    );
+  }
+
+  Widget _logoField(String label, TextEditingController ctrl) {
+    final tmdbId = int.tryParse(_tmdbCtrl.text.trim()) ?? 0;
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1F2E).withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: TextField(
+        controller: ctrl, style: const TextStyle(color: Colors.white, fontSize: 13),
+        onChanged: (v) { setState(() { _logoPreviewUrl = v.isNotEmpty ? v : null; }); },
+        decoration: InputDecoration(
+          labelText: label, labelStyle: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
+          prefixIcon: Icon(Icons.stars, size: 16, color: Colors.white.withOpacity(0.4)),
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.upload_file_rounded, size: 18, color: Color(0xFF10B981)),
+                tooltip: 'Upload from Gallery',
+                onPressed: () async {
+                  try {
+                    final result = await FilePicker.platform.pickFiles(type: FileType.image);
+                    if (result != null && result.files.isNotEmpty) {
+                      final file = result.files.first;
+                      List<int>? bytes = file.bytes;
+                      if (bytes == null && file.path != null) {
+                        bytes = await File(file.path!).readAsBytes();
+                      }
+                      if (bytes != null && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Uploading logo to server...')),
+                        );
+                        final uploaded = await _adminApi.uploadLogoFile(bytes, file.name);
+                        final ext = file.name.split('.').last.toLowerCase();
+                        final mime = (ext == 'jpg' || ext == 'jpeg') ? 'jpeg' : (ext == 'webp' ? 'webp' : 'png');
+                        final base64Url = 'data:image/$mime;base64,${base64Encode(bytes)}';
+                        final finalUrl = (uploaded != null && uploaded.isNotEmpty) ? uploaded : base64Url;
+                        ctrl.text = finalUrl;
+                        if (mounted) setState(() => _logoPreviewUrl = finalUrl);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Logo uploaded!'), backgroundColor: Color(0xFF10B981)),
+                        );
+                      }
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+                  }
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.photo_library_rounded, size: 18, color: Color(0xFF8B5CF6)),
+                tooltip: 'Search & Pick Clear Logo',
+                onPressed: () async {
+                  final movieTitle = _titleCtrl.text.trim();
+                  if (movieTitle.isEmpty && tmdbId <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please enter a movie title or TMDB ID first to search logos.')),
+                    );
+                    return;
+                  }
+                  final selectedUrl = await showDialog<String>(
+                    context: context,
+                    builder: (_) => ImagePickerGalleryDialog(
+                      tmdbId: tmdbId,
+                      imdbId: _imdbCtrl.text.trim(),
+                      movieTitle: movieTitle,
+                      isPoster: false,
+                      isLogo: true,
+                    ),
+                  );
+                  if (selectedUrl != null && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Saving logo to server...')),
+                    );
+                    final rehostedUrl = await _adminApi.uploadLogoFromUrl(selectedUrl);
+                    final finalUrl = rehostedUrl ?? selectedUrl;
+                    ctrl.text = finalUrl;
+                    setState(() {
+                      _logoPreviewUrl = finalUrl;
+                    });
+                  }
+                },
+              ),
+            ],
           ),
           border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12), isDense: true,
         ),

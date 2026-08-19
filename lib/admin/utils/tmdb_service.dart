@@ -18,6 +18,7 @@ class TmdbDetails {
   final String overview;
   final String? posterPath;
   final String? backdropPath;
+  final String? logoPath;
   final String? releaseDate;
   final int? runtime;
   final String? imdbId;
@@ -28,7 +29,7 @@ class TmdbDetails {
   final String? trailerKey;
   TmdbDetails({
     required this.id, required this.title, this.overview = '', this.posterPath, this.backdropPath,
-    this.releaseDate, this.runtime, this.imdbId, this.genres = const [],
+    this.logoPath, this.releaseDate, this.runtime, this.imdbId, this.genres = const [],
     this.cast = const [], this.director, this.directorPhoto, this.trailerKey,
   });
 }
@@ -79,7 +80,8 @@ class TmdbPersonFilmography {
 class TmdbMovieImages {
   final List<String> posters;
   final List<String> backdrops;
-  TmdbMovieImages({required this.posters, required this.backdrops});
+  final List<String> logos;
+  TmdbMovieImages({required this.posters, required this.backdrops, this.logos = const []});
 }
 
 class TmdbService {
@@ -106,11 +108,11 @@ class TmdbService {
   static Future<TmdbMovieImages> getMovieImages(int tmdbId, {String? imdbId}) async {
     final List<String> posters = [];
     final List<String> backdrops = [];
+    final List<String> logos = [];
 
     try {
       final res = await _dio.get('$_baseUrl/movie/$tmdbId/images', queryParameters: {
         'api_key': apiKey,
-        'include_image_language': 'en,null,hi,ta,te,ml',
       });
       final data = res.data;
       if (data != null) {
@@ -124,6 +126,12 @@ class TmdbService {
         for (final b in bList) {
           if (b['file_path'] != null) {
             backdrops.add('$_backdropBase${b['file_path']}');
+          }
+        }
+        final lList = data['logos'] as List? ?? [];
+        for (final l in lList) {
+          if (l['file_path'] != null) {
+            logos.add('$_posterBase${l['file_path']}');
           }
         }
       }
@@ -150,10 +158,16 @@ class TmdbService {
             backdrops.add(fb['url'].toString());
           }
         }
+        final fLogos = (data['hdmovielogo'] as List? ?? []) + (data['movielogo'] as List? ?? []);
+        for (final fl in fLogos) {
+          if (fl['url'] != null && !logos.contains(fl['url'])) {
+            logos.add(fl['url'].toString());
+          }
+        }
       }
     } catch (_) {}
 
-    return TmdbMovieImages(posters: posters, backdrops: backdrops);
+    return TmdbMovieImages(posters: posters, backdrops: backdrops, logos: logos);
   }
 
   static Future<List<TmdbMovie>> search(String query) async {
@@ -176,7 +190,7 @@ class TmdbService {
 
   static Future<TmdbDetails?> getDetails(int id) async {
     try {
-      final res = await _dio.get('$_baseUrl/movie/$id', queryParameters: {'api_key': apiKey, 'append_to_response': 'credits,videos'});
+      final res = await _dio.get('$_baseUrl/movie/$id', queryParameters: {'api_key': apiKey, 'append_to_response': 'credits,videos,images'});
       final data = res.data;
       if (data == null || data['success'] == false) return null;
 
@@ -197,10 +211,28 @@ class TmdbService {
         for (final v in videos['results']) { if (v['site'] == 'YouTube' && v['type'] == 'Trailer') { trailerKey = v['key']; break; } }
       }
 
+      String? logoPath;
+      final images = data['images'] as Map? ?? {};
+      final logos = images['logos'] as List? ?? [];
+      if (logos.isNotEmpty) {
+        Map<String, dynamic>? chosenLogo;
+        for (final l in logos) {
+          if (l['iso_639_1'] == 'en') {
+            chosenLogo = Map<String, dynamic>.from(l);
+            break;
+          }
+        }
+        chosenLogo ??= Map<String, dynamic>.from(logos.first);
+        if (chosenLogo['file_path'] != null) {
+          logoPath = '$_posterBase${chosenLogo['file_path']}';
+        }
+      }
+
       return TmdbDetails(
         id: data['id'] ?? id, title: data['title'] ?? '', overview: data['overview'] ?? '',
         posterPath: data['poster_path'] != null ? '$_posterBase${data['poster_path']}' : null,
         backdropPath: data['backdrop_path'] != null ? '$_backdropBase${data['backdrop_path']}' : null,
+        logoPath: logoPath,
         releaseDate: data['release_date'], runtime: data['runtime'], imdbId: data['imdb_id'],
         genres: (data['genres'] as List? ?? []).map<String>((g) => g['name'] as String).toList(),
         cast: castList, director: directorObj?['name'],

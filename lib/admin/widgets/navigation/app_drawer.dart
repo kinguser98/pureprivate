@@ -58,6 +58,7 @@ class AppDrawer extends ConsumerWidget {
                   _navItem(context, ref, Icons.settings_input_component, 'IPTV Settings', '/iptv-settings', false),
                   _divider(),
                   _sectionHeader('Tools'),
+                  _navItem(context, ref, Icons.flash_on_rounded, '1TamilMV Converter', '/1tamilmv-converter', currentRoute == '/1tamilmv-converter'),
                   _navItem(context, ref, Icons.find_replace, 'Bulk Updater', '/bulk-updater', false),
                   _navItem(context, ref, Icons.link, 'Link Checker', '/link-checker', false),
                   _navItem(context, ref, Icons.storage, 'Streamtape', '/streamtape', false),

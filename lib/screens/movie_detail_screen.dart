@@ -17,6 +17,7 @@ import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/youtube_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
+import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
@@ -36,6 +37,7 @@ import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
+import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 
@@ -72,6 +74,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveVidlinkSources = [];
   List<StreamSource> _liveNetmirrorSources = [];
   List<StreamSource> _liveCinemmSources = [];
+  List<StreamSource> _liveMovieboxSources = [];
   List<StreamSource> _liveStalkerSources = [];
   List<StreamSource> _liveStravoSources = [];
   List<StreamSource> _liveStremioSources = [];
@@ -82,6 +85,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
+  bool _resolvingMoviebox = false;
   bool _resolvingStalker = false;
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
@@ -93,6 +97,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showCinemm = true;
+  bool _showMoviebox = true;
   bool _showStalker = true;
   bool _showStravo = true;
   bool _showTorrent = true;
@@ -129,6 +134,211 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _loadWatchProgress();
     _loadTorrentioStreams();
     _resolveAllLiveSources();
+    _loadClearLogo();
+  }
+
+  String? _clearLogoUrl;
+  bool _showClearLogos = true;
+  Timer? _logoFadeTimer;
+  bool _showLogoInCrossFade = true;
+
+  @override
+  void dispose() {
+    _logoFadeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLogoFadeTimer() {
+    _logoFadeTimer?.cancel();
+    _logoFadeTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && _clearLogoUrl != null && _clearLogoUrl!.isNotEmpty) {
+        setState(() => _showLogoInCrossFade = !_showLogoInCrossFade);
+      }
+    });
+  }
+
+  static final Map<String, String> _logoMemoryCache = {};
+
+  Future<void> _loadClearLogo() async {
+    final prefs = await SharedPreferences.getInstance();
+    _showClearLogos = prefs.getBool('show_clear_logos') ?? true;
+    if (!_showClearLogos) return;
+
+    // 0. Check direct database/model property (set via admin panel)
+    if (movie.logoUrl != null && movie.logoUrl!.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _clearLogoUrl = movie.logoUrl;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    final cacheKey = 'logo_cache_${movie.tmdbId ?? movie.id}_${movie.title.hashCode}';
+
+    // 1. Check memory cache (0ms latency, zero API calls)
+    if (_logoMemoryCache.containsKey(cacheKey)) {
+      final cachedUrl = _logoMemoryCache[cacheKey]!;
+      if (cachedUrl.isNotEmpty && mounted) {
+        setState(() {
+          _clearLogoUrl = cachedUrl;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    // 2. Check SharedPreferences disk cache (instant load across app restarts)
+    final diskCached = prefs.getString(cacheKey);
+    if (diskCached != null) {
+      _logoMemoryCache[cacheKey] = diskCached;
+      if (diskCached.isNotEmpty && mounted) {
+        setState(() {
+          _clearLogoUrl = diskCached;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+      return;
+    }
+
+    final rawId = movie.tmdbId?.toString() ?? movie.id;
+    final title = movie.title;
+    final isTvHint = movie.genre.toLowerCase().contains('tv') || movie.genre.toLowerCase().contains('series');
+
+    String? logo;
+
+    // 3. Check our backend server directly for a hosted logo
+    if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
+      final serverLogoUrl = 'https://ott.redapp.space/uploads/logos/$rawId.png';
+      try {
+        final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
+        if (res.statusCode == 200) {
+          logo = serverLogoUrl;
+        }
+      } catch (_) {}
+    }
+
+    // 4. Try directly via TMDB API if rawId is a valid numeric TMDB ID
+    if (logo == null && rawId.isNotEmpty && rawId != '0' && rawId != 'null' && int.tryParse(rawId) != null) {
+      final firstType = isTvHint ? 'tv' : 'movie';
+      final secondType = isTvHint ? 'movie' : 'tv';
+
+      logo = await _fetchLogoForType(firstType, rawId);
+      logo ??= await _fetchLogoForType(secondType, rawId);
+    }
+
+    // 5. Fallback to TMDB Title Search (for Stalker VODs, IMDb IDs, or unlinked items)
+    logo ??= await _searchTmdbForLogo(title);
+
+    if (logo != null && logo.isNotEmpty) {
+      _logoMemoryCache[cacheKey] = logo;
+      prefs.setString(cacheKey, logo);
+      if (mounted) {
+        setState(() {
+          _clearLogoUrl = logo;
+          _showLogoInCrossFade = true;
+        });
+        _startLogoFadeTimer();
+      }
+    }
+  }
+
+  static String _cleanStalkerTitle(String rawTitle) {
+    String t = rawTitle;
+    t = t.replaceAll(RegExp(r'\[.*?\]'), '');
+    t = t.replaceAll(RegExp(r'\(\d{4}\)'), '');
+    t = t.replaceAll(RegExp(r'\b(MAL|MALAYALAM|TAM|TAMIL|HIN|HINDI|TEL|TELUGU|KAN|KANNADA|ENG|ENGLISH|MAR|MARATHI|BEN|BENGALI|PUN|PUNJABI|GUJ|GUJARATI|ORI|ORIYA)\b', caseSensitive: false), '');
+    t = t.replaceAll(RegExp(r'\b(4K|8K|2160P|1080P|720P|480P|360P|FHD|UHD|HD|SD|HDR|HDR10|HEVC|H264|H265|X264|X265|WEB-?DL|WEBRIP|BLURAY|DV|PROPER|REPACK|HQ|REMUX|ESUB|MSUB|SUB|DUB|DUBBED|DUAL|MULTI|AAC|DTS|DD5\.1|5\.1|AUDIO)\b', caseSensitive: false), '');
+    t = t.replaceAll(RegExp(r'[\-\|\:_]+'), ' ');
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return t;
+  }
+
+  static Future<String?> _searchTmdbForLogo(String rawTitle) async {
+    try {
+      final yearMatch = RegExp(r'\((\d{4})\)').firstMatch(rawTitle);
+      final year = yearMatch?.group(1);
+      final cleanTitle = _cleanStalkerTitle(rawTitle);
+      if (cleanTitle.isEmpty) return null;
+
+      final encodedTitle = Uri.encodeComponent(cleanTitle);
+      final yearParam = (year != null && year.isNotEmpty) ? '&year=$year' : '';
+      var searchUrl = Uri.parse('https://api.themoviedb.org/3/search/movie?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=$encodedTitle$yearParam');
+      var res = await http.get(searchUrl).timeout(const Duration(seconds: 5));
+
+      List? results;
+      String mediaType = 'movie';
+
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        results = data['results'] as List?;
+      }
+
+      if (results == null || results.isEmpty) {
+        searchUrl = Uri.parse('https://api.themoviedb.org/3/search/multi?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=$encodedTitle');
+        res = await http.get(searchUrl).timeout(const Duration(seconds: 5));
+        if (res.statusCode == 200) {
+          final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+          results = data['results'] as List?;
+          if (results != null && results.isNotEmpty) {
+            mediaType = results.first['media_type']?.toString() ?? 'movie';
+          }
+        }
+      }
+
+      if (results != null && results.isNotEmpty) {
+        final foundId = results.first['id']?.toString();
+        if (foundId != null && foundId.isNotEmpty) {
+          return await _fetchLogoForType(mediaType, foundId);
+        }
+      }
+    } catch (e) {
+      debugPrint('TMDB Title search for logo error: $e');
+    }
+    return null;
+  }
+
+  static Future<String?> _fetchLogoForType(String type, String tmdbId) async {
+    try {
+      final url = Uri.parse('https://api.themoviedb.org/3/$type/$tmdbId/images?api_key=8baba8ab6b8bbe247645bcae7df63d0d');
+      final res = await http.get(url).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final logos = data['logos'] as List?;
+        if (logos != null && logos.isNotEmpty) {
+          Map<String, dynamic>? chosenLogo;
+          // 1. Prefer English logo
+          for (final l in logos) {
+            if (l is Map && l['iso_639_1'] == 'en') {
+              chosenLogo = Map<String, dynamic>.from(l);
+              break;
+            }
+          }
+          // 2. Fallback to any available logo (regional / null)
+          if (chosenLogo == null) {
+            for (final l in logos) {
+              if (l is Map && l['file_path'] != null) {
+                chosenLogo = Map<String, dynamic>.from(l);
+                break;
+              }
+            }
+          }
+          if (chosenLogo != null) {
+            final filePath = chosenLogo['file_path']?.toString();
+            if (filePath != null && filePath.isNotEmpty) {
+              return 'https://image.tmdb.org/t/p/w500$filePath';
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Logo fetch error for $type $tmdbId: $e');
+    }
+    return null;
   }
 
   @override
@@ -157,6 +367,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showMoviebox = cloud.containsKey('source_show_moviebox') ? cloud['source_show_moviebox'] == 'true' : (prefs.getBool('source_show_moviebox') ?? true);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
         _blockedAddonGroups = blockedRaw
@@ -169,7 +380,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
-      setState(() => _sourceOrder = order);
+      final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
+      setState(() => _sourceOrder = mergedOrder);
     }
   }
 
@@ -192,6 +405,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (_showNetmirror) _resolveLiveNetmirror(movie.title);
     if (_showCinemm) _resolveLiveCinemm(movie.title);
+    if (_showMoviebox) _resolveLiveMoviebox(movie.title);
     if (_showStalker) _resolveLiveStalker(movie.title);
 
     final imdbId = movie.imdbId;
@@ -283,85 +497,142 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _resolveLiveMoviebox(String title) async {
+    if (mounted) setState(() => _resolvingMoviebox = true);
+    try {
+      debugPrint('MovieBox: Resolving streams for $title...');
+      final streams = await MovieboxResolver.resolveStreams(
+        title: title,
+        year: movie.year?.toString(),
+        isSeries: false,
+      );
+      final resolved = streams
+          .map((s) => StreamSource(name: s.name, url: s.url, headers: s.headers))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _liveMovieboxSources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('MovieBox resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingMoviebox = false);
+    }
+  }
+
+  String _cleanSearchTitle(String rawTitle) {
+    var cleaned = rawTitle.replaceAll(
+      RegExp(r'\s*[\(\[]?\b(19\d\d|20\d\d)\b[\)\]]?'),
+      '',
+    );
+    cleaned = cleaned.replaceAll(
+      RegExp(
+        r'\s*[\(\[]?\b(Hindi|Malayalam|Tamil|Telugu|Kannada|English|4K|1080p|720p|Dubbed|Dub|Multi|TAM|MAL|HIN|ENG)\b[\)\]]?',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    cleaned = cleaned.replaceAll(RegExp(r'[\(\)\[\]]'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return cleaned.isNotEmpty ? cleaned : rawTitle;
+  }
+
   Future<void> _resolveLiveStalker(String title) async {
     if (mounted) setState(() => _resolvingStalker = true);
     try {
-      final url =
-          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title)}';
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final responseBody = utf8.decode(response.bodyBytes);
-        final data = json.decode(responseBody);
-        var movies = data['movies'] as List<dynamic>? ?? [];
-        var totalItems = data['total_items'] ?? 0;
+      final List<StreamSource> sources = [];
 
-        debugPrint('StalkerResolver: API returned ${movies.length} movies (total: $totalItems) for "$title"');
-
-        if ((movies.isEmpty || totalItems == 0) && title.isNotEmpty) {
-          try {
-            final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(title.substring(0, title.length > 3 ? title.length ~/ 2 : title.length))}';
-            final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 8));
-            if (allRes.statusCode == 200) {
-              final allData = json.decode(utf8.decode(allRes.bodyBytes));
-              final allMovies = allData['movies'] as List<dynamic>? ?? [];
-              if (allMovies.isNotEmpty) {
-                debugPrint('StalkerResolver: Partial-title search returned ${allMovies.length} movies');
-                movies = allMovies;
-                totalItems = allData['total_items'] ?? 0;
-              }
-            }
-          } catch (_) {}
-        }
-
-        if (movies.isEmpty) {
-          // Last resort: fetch first page of any category
-          try {
-            const fallbackUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&category=General&page=1';
-            final fallRes = await http.get(Uri.parse(fallbackUrl)).timeout(const Duration(seconds: 8));
-            if (fallRes.statusCode == 200) {
-              final fallData = json.decode(utf8.decode(fallRes.bodyBytes));
-              final fallMovies = fallData['movies'] as List<dynamic>? ?? [];
-              if (fallMovies.isNotEmpty) {
-                debugPrint('StalkerResolver: Fallback (no search) returned ${fallMovies.length} movies');
-                movies = fallMovies;
-              }
-            }
-          } catch (_) {}
-        }
-
-        final List<StreamSource> sources = [];
-
-        for (final item in movies) {
-          final rawPortalId = item['portal_id'];
-          final portalId = rawPortalId != null 
-              ? (int.tryParse(rawPortalId.toString()) ?? 1) 
-              : 1;
-          final cmd = item['cmd']?.toString() ?? '';
-          final name = item['name']?.toString() ?? 'Stalker VOD';
-          final rawPortalName = item['portal_name']?.toString() ?? '';
-          final portalName = rawPortalName.isNotEmpty ? rawPortalName : (rawPortalId != null ? 'Portal $portalId' : 'Stalker');
-
-          if (cmd.isNotEmpty) {
-            final isDup = sources.any(
-              (s) => s.url == 'stalker://$portalId$cmd',
-            );
+      // Step 1: Pre-populate from existing movie.sources / movie.streamSources if available
+      try {
+        final existingSources = movie.streamSources;
+        for (final s in existingSources) {
+          if (s.url.startsWith('stalker://')) {
+            final isDup = sources.any((existing) => existing.url == s.url);
             if (!isDup) {
-              sources.add(
-                StreamSource(
-                  name: '$portalName - $name',
-                  url: 'stalker://$portalId$cmd',
-                ),
-              );
+              sources.add(s);
             }
           }
         }
-        if (mounted) {
-          setState(() {
-            _liveStalkerSources = sources;
-          });
+      } catch (_) {}
+
+      // Step 2: Multi-tier queries against server backend Stalker database
+      final searchQueries = <String>[];
+      final cleanTitle = _cleanSearchTitle(title);
+      if (cleanTitle.isNotEmpty) searchQueries.add(cleanTitle);
+
+      // Fallback A: Strip trailing numbers, Roman numerals, or years (e.g. "Gatta Kusthi 2" -> "Gatta Kusthi")
+      final strippedNum = cleanTitle.replaceAll(RegExp(r'\s+(\d+|[IVXLCDM]+)$', caseSensitive: false), '').trim();
+      if (strippedNum.isNotEmpty && !searchQueries.contains(strippedNum)) {
+        searchQueries.add(strippedNum);
+      }
+
+      // Fallback B: First 2 words of clean title
+      final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
+      final firstWords = rawTitleClean.split(RegExp(r'\s+')).take(2).join(' ').trim();
+      if (firstWords.isNotEmpty && !searchQueries.contains(firstWords)) {
+        searchQueries.add(firstWords);
+      }
+
+      List<dynamic> movies = [];
+      for (final query in searchQueries) {
+        final url = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(query)}';
+        try {
+          final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+          if (res.statusCode == 200) {
+            final dynamic data = json.decode(utf8.decode(res.bodyBytes));
+            List<dynamic> fetched = [];
+            if (data is List) {
+              fetched = data;
+            } else if (data is Map) {
+              fetched = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
+            }
+            if (fetched.isNotEmpty) {
+              movies = fetched;
+              break; // Found matching Stalker movies!
+            }
+          }
+        } catch (e) {
+          debugPrint('Stalker VOD query "$query" failed: $e');
         }
+      }
+
+      for (final item in movies) {
+        final rawPortalId = item['portal_id'];
+        var portalId = rawPortalId != null 
+            ? (int.tryParse(rawPortalId.toString()) ?? 1) 
+            : 1;
+        var cmd = item['cmd']?.toString() ?? '';
+        if (cmd.isEmpty && item['stream_url'] != null) {
+          final streamUrl = item['stream_url'].toString();
+          if (streamUrl.startsWith('stalker://')) {
+            final params = StalkerResolver.parseStalkerUrl(streamUrl);
+            cmd = params.cmd;
+            if (params.portalId > 0) portalId = params.portalId;
+          }
+        }
+        final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
+        final rawPortalName = item['portal_name']?.toString() ?? '';
+        final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
+
+        if (cmd.isNotEmpty) {
+          final targetUrl = 'stalker://$portalId$cmd';
+          final isDup = sources.any((s) => s.url == targetUrl);
+          if (!isDup) {
+            sources.add(
+              StreamSource(
+                name: '$portalName - $name',
+                url: targetUrl,
+              ),
+            );
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _liveStalkerSources = sources;
+        });
       }
     } catch (e) {
       debugPrint('Stalker VOD database search failed: $e');
@@ -1377,6 +1648,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           resumeDirectly: resumeDirectly,
           headers: headers,
           sourceName: sourceName,
+          logoUrl: _clearLogoUrl ?? movie.logoUrl,
         ),
       ),
     );
@@ -1681,37 +1953,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // Telegram Saved-Message file: resolve to a streamable URL first.
     if (TelegramSources.isTelegramUrl(source)) {
-      final localId = TelegramSources.extractLocalId(source);
-      final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
-      TelegramVideoItem? match;
-      for (final i in items) {
-        if (i.localId == localId) {
-          match = i;
-          break;
-        }
-      }
-      if (match == null) {
-        // Not in cache → try to refresh and re-search.
-        await TelegramService.instance.loadSavedMessages();
-        final items2 = await TelegramIndexDb.instance.all();
-        for (final i in items2) {
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return ResolvingProgressDialog(
+            title: movie.title,
+            subtitle: 'Connecting to Telegram Server...',
+          );
+        },
+      );
+
+      try {
+        final localId = TelegramSources.extractLocalId(source);
+        final items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+        TelegramVideoItem? match;
+        for (final i in items) {
           if (i.localId == localId) {
             match = i;
             break;
           }
         }
-      }
-      if (match == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
-            backgroundColor: const Color(0xFFEF4444),
-          ));
+        if (match == null) {
+          // Not in cache → try to refresh and re-search.
+          await TelegramService.instance.loadSavedMessages();
+          final items2 = await TelegramIndexDb.instance.all();
+          for (final i in items2) {
+            if (i.localId == localId) {
+              match = i;
+              break;
+            }
+          }
         }
-        return;
-      }
-      try {
+
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
+
+        if (match == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Telegram file not found locally. Open Settings → Telegram → Sync Telegram Server.'),
+              backgroundColor: Color(0xFFEF4444),
+            ));
+          }
+          return;
+        }
+
         final resolved = await TelegramService.instance.resolveStream(match);
         // Re-enter playback with the resolved URL.
         return _playWithResolution(
@@ -1723,6 +2012,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           headers: headers,
         );
       } catch (e) {
+        if (mounted) Navigator.of(context).pop(); // Dismiss progress dialog
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Telegram resolve failed: $e'),
@@ -2124,6 +2414,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
 
+      if (await ExternalPlayerService.shouldPlayInExternalPlayer(url: playUrl, sourceName: sourceName ?? 'Stalker VOD')) {
+        final player = await ExternalPlayerService.getDefaultPlayer();
+        final displayName = await ExternalPlayerService.getPlayerDisplayName(player);
+        if (mounted) ExternalPlayerService.showLaunchDialog(context, displayName);
+        await ExternalPlayerService.launch(
+          url: playUrl,
+          title: movie.title,
+          headers: finalHeaders.isEmpty ? null : finalHeaders,
+          overridePlayerPackage: player,
+        );
+        return;
+      }
+
       if (mounted) {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -2135,6 +2438,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               resumeDirectly: resumeDirectly,
               headers: finalHeaders.isEmpty ? null : finalHeaders,
               sourceName: sourceName,
+              logoUrl: _clearLogoUrl ?? movie.logoUrl,
             ),
           ),
         );
@@ -2251,6 +2555,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       context,
                       'CINEMM STREAMS',
                       _liveCinemmSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // MovieBox Server
+            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+              sourceWidgets['moviebox'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('moviebox')}. MovieBox Server',
+                subtitle: _resolvingMoviebox
+                    ? 'Searching MovieBox...'
+                    : '${_liveMovieboxSources.length} links available',
+                disabled: _resolvingMoviebox,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMovieboxSources.length == 1) {
+                    _playWithResolution(
+                      _liveMovieboxSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMovieboxSources.first.name,
+                      headers: _liveMovieboxSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVIEBOX STREAMS',
+                      _liveMovieboxSources,
                       resumeDirectly: resumeDirectly,
                     );
                   }
@@ -2761,20 +3095,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     StreamSource source, {
     bool resumeDirectly = false,
   }) async {
-    // Show loading
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => ResolvingProgressDialog(
-        title: movie.title,
-        subtitle: 'Pre-flight HLS NetMirror Checks...',
-      ),
-    );
-
     try {
       final uri = Uri.parse(source.url);
-
-      // Extract headers from URL query params
       final Map<String, String> headers = {};
       if (uri.queryParameters.containsKey('headers')) {
         final jsonHeaders = json.decode(uri.queryParameters['headers']!);
@@ -2785,244 +3107,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
 
-      // Fetch master playlist
-      final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 8);
-      final req = await client.getUrl(uri);
-      headers.forEach((k, v) {
-        req.headers.set(k, v);
-      });
-      final res = await req.close();
-
-      if (res.statusCode == 200) {
-        final body = await res.transform(utf8.decoder).join();
-        client.close();
-
-        // Parse audio tracks
-        final audioLines = body
-            .split('\n')
-            .where((line) => line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO'))
-            .toList();
-        final List<String> audioLanguages = [];
-        for (final line in audioLines) {
-          final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
-          if (nameMatch != null) {
-            final langName = nameMatch.group(1)!;
-            if (!audioLanguages.contains(langName)) {
-              audioLanguages.add(langName);
-            }
-          }
-        }
-
-        if (mounted) Navigator.of(context).pop(); // Dismiss loader
-
-        String? selectedLanguage;
-        if (audioLanguages.length > 1 && mounted) {
-          selectedLanguage = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) {
-              return AlertDialog(
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                title: Text(
-                  'Select Audio Language',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: audioLanguages.length,
-                    itemBuilder: (context, index) {
-                      final lang = audioLanguages[index];
-                      return ListTile(
-                        title: Text(
-                          lang,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        leading: const Icon(
-                          Icons.audiotrack_rounded,
-                          color: Colors.tealAccent,
-                        ),
-                        onTap: () => Navigator.of(context).pop(lang),
-                      );
-                    },
-                  ),
-                ),
-              );
-            },
-          );
-        }
-
-        // Parse video qualities
-        final List<String> videoQualities = [];
-        final lines = body.split('\n');
-        for (final line in lines) {
-          if (line.startsWith('#EXT-X-STREAM-INF')) {
-            final resolutionMatch = RegExp(
-              r'RESOLUTION=(\d+x\d+)',
-            ).firstMatch(line);
-            if (resolutionMatch != null) {
-              final height = resolutionMatch.group(1)!.split('x')[1];
-              final q = '${height}p';
-              if (!videoQualities.contains(q)) videoQualities.add(q);
-            } else {
-              final bandwidthMatch = RegExp(
-                r'BANDWIDTH=(\d+)',
-              ).firstMatch(line);
-              if (bandwidthMatch != null) {
-                final bw = int.tryParse(bandwidthMatch.group(1)!) ?? 0;
-                String q = '360p';
-                if (bw > 3000000)
-                  q = '1080p';
-                else if (bw > 1500000)
-                  q = '720p';
-                else if (bw > 800000)
-                  q = '480p';
-                if (!videoQualities.contains(q)) videoQualities.add(q);
-              }
-            }
-          }
-        }
-
-        String? selectedQuality;
-        if (videoQualities.isNotEmpty && mounted) {
-          videoQualities.sort((a, b) {
-            final valA = int.tryParse(a.replaceAll('p', '')) ?? 0;
-            final valB = int.tryParse(b.replaceAll('p', '')) ?? 0;
-            return valB.compareTo(valA);
-          });
-          selectedQuality = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) {
-              return AlertDialog(
-                backgroundColor: AppColors.surface,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                title: Text(
-                  'Select Video Quality',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: videoQualities.length + 1,
-                    itemBuilder: (context, index) {
-                      if (index == 0) {
-                        return ListTile(
-                          title: const Text(
-                            'Auto / Best Quality',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                          leading: const Icon(
-                            Icons.settings_backup_restore_rounded,
-                            color: Colors.tealAccent,
-                          ),
-                          onTap: () => Navigator.of(context).pop('Auto'),
-                        );
-                      }
-                      final q = videoQualities[index - 1];
-                      return ListTile(
-                        title: Text(
-                          q,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        leading: const Icon(
-                          Icons.video_settings_rounded,
-                          color: Colors.tealAccent,
-                        ),
-                        onTap: () => Navigator.of(context).pop(q),
-                      );
-                    },
-                  ),
-                ),
-              );
-            },
-          );
-        }
-
-        // Build final URL with selected audio and quality
-        if (mounted) {
-          var finalUrl = source.url;
-          final Map<String, String> queryParams = {};
-          if (selectedLanguage != null && selectedLanguage.isNotEmpty) {
-            queryParams['selected_audio'] = selectedLanguage;
-          }
-          if (selectedQuality != null &&
-              selectedQuality.isNotEmpty &&
-              selectedQuality != 'Auto') {
-            queryParams['selected_quality'] = selectedQuality;
-          }
-          if (queryParams.isNotEmpty) {
-            final sourceUri = Uri.parse(source.url);
-            finalUrl = sourceUri
-                .replace(
-                  queryParameters: {
-                    ...sourceUri.queryParameters,
-                    ...queryParams,
-                  },
-                )
-                .toString();
-          }
-
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => VideoPlayerScreen(
-                videoSource: finalUrl,
-                title: movie.title,
-                subtitle: 'NetMirror Server',
-                movieId: movie.id,
-                resumeDirectly: resumeDirectly,
-                headers: headers,
-              ),
-            ),
-          );
-        }
-      } else {
-        client.close();
-        throw Exception(
-          'HLS Master playlist returned status ${res.statusCode}',
-        );
-      }
-    } catch (e) {
-      debugPrint('NetMirror pre-flight failed: $e. Launching directly.');
-      if (mounted) {
-        Navigator.of(context).pop(); // Dismiss loader
-        final uri = Uri.parse(source.url);
-        final Map<String, String> headers = {};
-        if (uri.queryParameters.containsKey('headers')) {
-          final jsonHeaders = json.decode(uri.queryParameters['headers']!);
-          if (jsonHeaders is Map) {
-            jsonHeaders.forEach((k, v) {
-              headers[k.toString()] = v.toString();
-            });
-          }
-        }
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => VideoPlayerScreen(
-              videoSource: source.url,
-              title: movie.title,
-              subtitle: 'NetMirror Server',
-              movieId: movie.id,
-              resumeDirectly: resumeDirectly,
-              headers: headers,
-            ),
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movie.title,
+            subtitle: 'NetMirror Server',
+            movieId: movie.id,
+            resumeDirectly: resumeDirectly,
+            headers: headers.isNotEmpty ? headers : null,
+            logoUrl: _clearLogoUrl ?? movie.logoUrl,
           ),
-        );
-      }
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Playback failed: $e'), backgroundColor: Colors.redAccent),
+      );
     }
   }
 
@@ -3744,6 +3845,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           );
         }
 
+        // MovieBox Server
+        if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+          downloadSourceWidgets['moviebox'] = _buildSourceTile(
+            icon: Icons.movie_filter_rounded,
+            title: '${pos('moviebox')}. MovieBox Server',
+            subtitle: _resolvingMoviebox
+                ? 'Searching MovieBox...'
+                : '${_liveMovieboxSources.length} links available',
+            disabled: _resolvingMoviebox,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveMovieboxSources.length == 1) {
+                _downloadMovieboxStream(_liveMovieboxSources.first);
+              } else {
+                _showDownloadSubSelector('MOVIEBOX DOWNLOADS', _liveMovieboxSources, isMoviebox: true);
+              }
+            },
+          );
+        }
+
         // 6. Stalker VOD Server
         if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
           downloadSourceWidgets['stalker'] = _buildSourceTile(
@@ -4019,6 +4140,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  Future<void> _downloadMovieboxStream(StreamSource source) async {
+    try {
+      final url = source.url;
+      if (url.isNotEmpty) {
+        await _promptAndStartDownload(url, headers: source.headers);
+      } else {
+        throw Exception('Failed to resolve MovieBox direct URL.');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
   Future<void> _downloadStreamtapeSource(StreamSource source) async {
     showDialog<void>(
       context: context,
@@ -4229,7 +4365,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false, bool isTelegram = false, bool isCastle = false, bool isTorrentSeedr = false}) {
+  void _showDownloadSubSelector(String title, List<StreamSource> sources, {bool isStreamtape = false, bool isStalker = false, bool isStravo = false, bool isCinemm = false, bool isTelegram = false, bool isCastle = false, bool isTorrentSeedr = false, bool isMoviebox = false}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -4277,6 +4413,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             _downloadCastleStream(source);
                           } else if (isTorrentSeedr) {
                             _downloadTorrentViaSeedr(source);
+                          } else if (isMoviebox) {
+                            _downloadMovieboxStream(source);
                           } else {
                             _downloadSourceUrl(source.url, sourceName: source.name);
                           }
@@ -4690,16 +4828,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const SizedBox(height: 35),
-                                  // Movie Title
-                                  Text(
-                                    movie.title,
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      height: 1.2,
+                                  // Movie Title (Replaced with ClearLogo image with smooth 4s cross-fade animation if available)
+                                  if (_showClearLogos && _clearLogoUrl != null && _clearLogoUrl!.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 6.0),
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: AnimatedCrossFade(
+                                          duration: const Duration(milliseconds: 700),
+                                          crossFadeState: _showLogoInCrossFade
+                                              ? CrossFadeState.showFirst
+                                              : CrossFadeState.showSecond,
+                                          firstChild: Image.network(
+                                            _clearLogoUrl!,
+                                            height: 65,
+                                            fit: BoxFit.contain,
+                                            alignment: Alignment.centerLeft,
+                                            errorBuilder: (_, __, ___) => Text(
+                                              movie.title,
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.white,
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.bold,
+                                                height: 1.2,
+                                              ),
+                                            ),
+                                          ),
+                                          secondChild: Text(
+                                            movie.title,
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white,
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.bold,
+                                              height: 1.2,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Text(
+                                      movie.title,
+                                      style: GoogleFonts.outfit(
+                                        color: Colors.white,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.bold,
+                                        height: 1.2,
+                                      ),
                                     ),
-                                  ),
                                   const SizedBox(height: 8),
 
                                   // Combined Meta tags (Year • Runtime • Genre • Content Rating)

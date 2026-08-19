@@ -32,6 +32,7 @@ class Movie {
   @HiveField(24) final String? directorPhoto;
   @HiveField(25) final String? runtime;
   @HiveField(26) final int ottId;
+  @HiveField(27) final String? logoUrl;
 
   Movie({
     required this.id,
@@ -61,6 +62,7 @@ class Movie {
     this.directorPhoto,
     this.runtime,
     this.ottId = 0,
+    this.logoUrl,
   });
 
   factory Movie.fromJson(Map<String, dynamic> json) {
@@ -121,6 +123,7 @@ class Movie {
       directorPhoto: _parseString(json['director_photo']),
       runtime: _parseString(json['runtime']),
       ottId: _parseInt(json['ott_id']),
+      logoUrl: _parseString(json['logo_url']),
     );
   }
 
