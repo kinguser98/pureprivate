@@ -11,7 +11,6 @@ import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
-import 'package:private_cinema_mobile/data/playback_tracker.dart';
 
 class AppColors {
   static const primaryDark = Color(0xFF0F172A);
@@ -61,24 +60,19 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   List<StreamSource> stravoStreams = [];
   List<StreamSource> torrentioStreams = [];
   List<StreamSource> stremioAddonStreams = [];
-  List<StreamSource> nuveoAddonStreams = [];
   List<StreamSource> cinemmStreams = [];
   List<StreamSource> stalkerStreams = [];
 
   StreamSourceType? _activeGroupType;
-  final String _selectedStremioResolution = 'ALL';
 
   bool _showCinemm = true;
   bool _showStalker = true;
   bool _showStravo = true;
   bool _showTorrent = true;
   bool _showStremioAddon = true;
-  bool _showNuveoAddon = true;
 
   Map<String, String> _customStremioAddons = {};
-  Map<String, String> _customNuveoAddons = {};
   List<String> _sourceOrderList = [];
-  List<String> _blockedAddonGroups = [];
 
   @override
   void initState() {
@@ -106,14 +100,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['stremio_addons_enabled'] ?? 'true') == 'true';
-        _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
-        
-        final blockedRaw = cloud['blocked_addon_groups'] ?? '';
-        _blockedAddonGroups = blockedRaw
-            .split(RegExp(r'[,\n]'))
-            .map((s) => s.trim().toLowerCase())
-            .where((s) => s.isNotEmpty)
-            .toList();
       });
     }
 
@@ -213,7 +199,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     stravoStreams.clear();
     torrentioStreams.clear();
     stremioAddonStreams.clear();
-    nuveoAddonStreams.clear();
     cinemmStreams.clear();
     stalkerStreams.clear();
   }
@@ -256,7 +241,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         final episodes = data['episodes'] as List? ?? [];
         if (mounted) {
           setState(() {
-            _episodesInSeason = episodes.length > 0 ? episodes.length : 1;
+            _episodesInSeason = episodes.isNotEmpty ? episodes.length : 1;
             _selectedEpisode = 1;
           });
         }
