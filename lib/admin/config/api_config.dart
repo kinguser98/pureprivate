@@ -1,5 +1,5 @@
 class ApiConfig {
-  static const String baseUrl = 'https://ott.redapp.space';
+  static const String baseUrl = 'http://ot.goprivate.fun';
   
   // Authentication
   static const String login = '/login.php';

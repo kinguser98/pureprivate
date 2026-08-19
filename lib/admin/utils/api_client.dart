@@ -67,7 +67,7 @@ class ApiClient {
           message = 'Connection timed out. Server not responding.';
           break;
         case DioExceptionType.connectionError:
-          message = 'Cannot connect to ott.redapp.space';
+          message = 'Cannot connect to ot.goprivate.fun';
           break;
         case DioExceptionType.badCertificate:
           message = 'SSL certificate error';

@@ -379,11 +379,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     try {
       final List<Future<void>> tasks = [];
 
-      // 1. Resolve VidLink
-      if (_showVidlink) {
-        final activeId = (imdbId != null && imdbId.isNotEmpty) ? imdbId : tmdbId;
-        tasks.add(_resolveVidLink(activeId, season: season, episode: episode));
-      }
+
 
       if (imdbId != null && imdbId.isNotEmpty) {
         // 2. Resolve Stravo
@@ -416,10 +412,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         tasks.add(_resolveStalkerVodDatabase(queryTitle));
       }
 
-      // 5. Resolve NetMirror
-      if (_showNetmirror) {
-        tasks.add(_resolveNetmirror(queryTitle));
-      }
+
 
       // 6. Resolve CineMM - movies only
       if (_showCinemm && !_isSeriesSearch) {
@@ -2472,42 +2465,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
 
-      // VidLink
-      if (_showVidlink && (_resolvingStreams || vidlinkStreams.isNotEmpty) && enabledKeys.contains('vidlink')) {
-        sourceWidgets['vidlink'] = _buildServerGroupCard(
-          title: '${pos('vidlink')}. Vidlink Server',
-          subtitle: _resolvingStreams && vidlinkStreams.isEmpty
-              ? 'Resolving stream...'
-              : (vidlinkStreams.isNotEmpty
-                    ? '1 native link available'
-                    : 'Not available for this title'),
-          icon: Icons.play_arrow_rounded,
-          accentColor: AppColors.accentBright,
-          onTap: vidlinkStreams.isEmpty
-              ? null
-              : () =>
-                    _playStream(vidlinkStreams.first, movieTitle, posterPath),
-        );
-      }
 
-      // NetMirror
-      if (_showNetmirror && (_resolvingStreams || netmirrorStreams.isNotEmpty) && enabledKeys.contains('netmirror')) {
-        sourceWidgets['netmirror'] = _buildServerGroupCard(
-          title: '${pos('netmirror')}. NetMirror Server',
-          subtitle: _resolvingStreams && netmirrorStreams.isEmpty
-              ? 'Searching NetMirror...'
-              : (netmirrorStreams.isNotEmpty
-                    ? '${netmirrorStreams.length} links available'
-                    : 'Not available'),
-          icon: Icons.language_rounded,
-          accentColor: Colors.tealAccent,
-          onTap: netmirrorStreams.isEmpty
-              ? null
-              : () => setState(
-                  () => _activeGroupType = StreamSourceType.netmirror,
-                ),
-        );
-      }
 
       // Stravo
       if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {

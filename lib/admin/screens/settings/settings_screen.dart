@@ -19,7 +19,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _apiUrlController.text = 'https://ott.redapp.space';
+    _apiUrlController.text = 'http://ot.goprivate.fun';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(settingsProvider.notifier).fetchSettings();
     });
@@ -204,7 +204,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             enabled: _isEditing,
                             style: const TextStyle(color: Colors.white, fontSize: 13),
                             decoration: InputDecoration(
-                              hintText: 'https://ott.redapp.space',
+                              hintText: 'http://ot.goprivate.fun',
                               hintStyle: TextStyle(
                                 color: Colors.white.withOpacity(0.3),
                                 fontSize: 13,
@@ -219,7 +219,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Current: https://ott.redapp.space',
+                    'Current: http://ot.goprivate.fun',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.4),
                       fontSize: 11,

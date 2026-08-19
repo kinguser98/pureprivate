@@ -291,7 +291,7 @@ class AdminApiClient {
   }
 
   Future<String?> uploadLogoFromUrl(String remoteUrl) async {
-    if (remoteUrl.isEmpty || remoteUrl.contains('ott.redapp.space')) {
+    if (remoteUrl.isEmpty || remoteUrl.contains('ot.goprivate.fun')) {
       return remoteUrl;
     }
     try {

@@ -213,7 +213,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     // 3. Check our backend server directly for a hosted logo
     if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
-      final serverLogoUrl = 'https://ott.redapp.space/uploads/logos/$rawId.png';
+      final serverLogoUrl = 'http://ot.goprivate.fun/uploads/logos/$rawId.png';
       try {
         final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
         if (res.statusCode == 200) {
@@ -2506,32 +2506,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
-            // 3. NetMirror Server
-            if ((_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) && enabledKeys.contains('netmirror')) {
-              sourceWidgets['netmirror'] = _buildSourceTile(
-                icon: Icons.language_rounded,
-                title: '${pos('netmirror')}. NetMirror Server',
-                subtitle: _resolvingNetmirror
-                    ? 'Searching NetMirror...'
-                    : '${_liveNetmirrorSources.length} links available',
-                disabled: _resolvingNetmirror,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (_liveNetmirrorSources.length == 1) {
-                    _playNetmirrorStream(
-                      _liveNetmirrorSources.first,
-                      resumeDirectly: resumeDirectly,
-                    );
-                  } else {
-                    _showNetmirrorSubSelector(
-                      _liveNetmirrorSources,
-                      resumeDirectly: resumeDirectly,
-                    );
-                  }
-                },
-              );
-            }
-
             // 5. CineMM Server
             if ((_resolvingCinemm || _liveCinemmSources.isNotEmpty) && enabledKeys.contains('cinemm')) {
               sourceWidgets['cinemm'] = _buildSourceTile(
@@ -3804,26 +3778,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           );
         }
 
-        // 3. NetMirror Server
-        if ((_resolvingNetmirror || _liveNetmirrorSources.isNotEmpty) && enabledKeys.contains('netmirror')) {
-          downloadSourceWidgets['netmirror'] = _buildSourceTile(
-            icon: Icons.language_rounded,
-            title: '${pos('netmirror')}. NetMirror Server',
-            subtitle: _resolvingNetmirror 
-                ? 'Searching NetMirror...' 
-                : (_liveNetmirrorSources.isNotEmpty ? '${_liveNetmirrorSources.length} links available' : 'Not available'),
-            disabled: _liveNetmirrorSources.isEmpty,
-            onTap: () {
-              Navigator.of(context).pop();
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(
-                  content: Text('NetMirror uses HLS (.m3u8) format, which does not support downloading. Please choose another server.'),
-                  backgroundColor: Colors.orangeAccent,
-                ),
-              );
-            },
-          );
-        }
+
 
         // 5. CineMM Server
         if ((_resolvingCinemm || _liveCinemmSources.isNotEmpty) && enabledKeys.contains('cinemm')) {
@@ -4505,7 +4460,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           match.group(7) != null &&
           match.group(7)!.length == 11) {
         embedUrl =
-            'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=https://ott.redapp.space';
+            'https://www.youtube.com/embed/${match.group(7)}?vq=hd720&autoplay=1&origin=https://ot.goprivate.fun';
       }
 
       if (mounted) {
