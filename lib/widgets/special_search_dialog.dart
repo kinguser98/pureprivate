@@ -83,9 +83,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox'];
-        _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
-        _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
+        _sourceOrder = ['cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox'];
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
@@ -2648,10 +2646,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = stalkerStreams;
         accentColor = Colors.purpleAccent;
         iconData = Icons.movie_filter_rounded;
-      } else if (_activeGroupType == StreamSourceType.netmirror) {
-        activeList = netmirrorStreams;
-        accentColor = Colors.tealAccent;
-        iconData = Icons.language_rounded;
+
       } else if (_activeGroupType == StreamSourceType.dvdplay) {
         activeList = dvdplayStreams;
         accentColor = Colors.deepOrangeAccent;
