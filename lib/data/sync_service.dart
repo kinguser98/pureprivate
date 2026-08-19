@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 
 class SyncService {
-  static const String _apiSyncUrl = 'http://ot.goprivate.fun/api.php';
+  static const String _apiSyncUrl = 'https://ot.goprivate.fun/api.php';
 
   /// Generates a random 6-character uppercase sync code
   static String generateSyncCode() {

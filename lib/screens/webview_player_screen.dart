@@ -229,8 +229,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                         headers: {
                           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                           if (widget.embedUrl.contains('youtube') || widget.embedUrl.contains('youtu.be')) ...{
-                            'Referer': 'http://ot.goprivate.fun',
-                            'Origin': 'http://ot.goprivate.fun',
+                            'Referer': 'https://ot.goprivate.fun',
+                            'Origin': 'https://ot.goprivate.fun',
                           } else ...{
                             'Referer': widget.embedUrl.startsWith('http') 
                                 ? '${Uri.parse(widget.embedUrl).scheme}://${Uri.parse(widget.embedUrl).host}/'

@@ -1,5 +1,5 @@
 class ApiConfig {
-  static const String baseUrl = 'http://ot.goprivate.fun';
+  static const String baseUrl = 'https://ot.goprivate.fun';
   
   // Authentication
   static const String login = '/login.php';

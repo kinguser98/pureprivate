@@ -19,7 +19,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _apiUrlController.text = 'http://ot.goprivate.fun';
+    _apiUrlController.text = 'https://ot.goprivate.fun';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(settingsProvider.notifier).fetchSettings();
     });
