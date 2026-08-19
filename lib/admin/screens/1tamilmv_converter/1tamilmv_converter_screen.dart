@@ -740,7 +740,7 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
                       decoration: InputDecoration(
                         hintText: 'Search text on page...',
                         hintStyle: GoogleFonts.outfit(color: Colors.white38, fontSize: 13),
-                        dense: true,
+                        isDense: true,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         filled: true,
                         fillColor: Colors.black.withOpacity(0.4),
