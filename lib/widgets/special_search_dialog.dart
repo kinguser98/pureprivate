@@ -457,6 +457,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       // Resolve FilmU API Scraper
       tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
 
+      final movieYear = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
+
+      // Resolve Vegamovies Scraper
+      final origLang = _selectedMovie != null ? (_selectedMovie['original_language']?.toString() ?? _selectedMovie['language']?.toString()) : null;
+      tasks.add(_resolveVegamovies(title, movieYear, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
+
+      // Resolve Cinejoy Scraper
+      tasks.add(_resolveCinejoy(title, movieYear, tmdbId: tmdbId, isSeries: _isSeriesSearch, season: season, episode: episode));
+
       // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
       if (tmdbId != null && tmdbId.isNotEmpty) {
         final vidsrcUrl = _isSeriesSearch && season != null && episode != null
@@ -675,6 +684,52 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('MovieBox resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveVegamovies(String title, String year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showVegamovies) return;
+    try {
+      debugPrint('Vegamovies Scraper: Resolving streams for $title...');
+      final parsedYear = int.tryParse(year) ?? DateTime.now().year;
+      final streams = await VegamoviesResolver.resolveStreams(
+        title: title,
+        year: parsedYear,
+        originalLanguage: originalLanguage,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Vegamovies resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveCinejoy(String title, String year, {String? tmdbId, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showCinejoy) return;
+    try {
+      debugPrint('Cinejoy Scraper: Resolving streams for $title (TMDB: $tmdbId)...');
+      final parsedYear = int.tryParse(year) ?? DateTime.now().year;
+      final streams = await CinejoyResolver.resolveStreams(
+        title: title,
+        year: parsedYear,
+        tmdbId: tmdbId,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Cinejoy resolution failed: $e');
     }
   }
 
@@ -2470,6 +2525,21 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final filmuStreams = filteredSources
         .where((s) => s.type == StreamSourceType.filmu)
         .toList();
+    final vegamoviesStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.vegamovies)
+        .toList();
+    final cinejoyStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.cinejoy)
+        .toList();
+    final streamtapeStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.streamtape)
+        .toList();
+    final telegramStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.telegram)
+        .toList();
+    final directLinkStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.directLink)
+        .toList();
 
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
@@ -2674,6 +2744,101 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
+      // Vegamovies Card
+      if (_showVegamovies && (_resolvingStreams || vegamoviesStreams.isNotEmpty) && enabledKeys.contains('vegamovies')) {
+        sourceWidgets['vegamovies'] = _buildServerGroupCard(
+          title: '${pos('vegamovies')}. Vegamovies.se Server',
+          subtitle: _resolvingStreams && vegamoviesStreams.isEmpty
+              ? 'Searching Vegamovies...'
+              : (vegamoviesStreams.isNotEmpty
+                    ? '${vegamoviesStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.movie_creation_rounded,
+          accentColor: Colors.greenAccent,
+          onTap: vegamoviesStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.vegamovies;
+                  }),
+        );
+      }
+
+      // Cinejoy Card
+      if (_showCinejoy && (_resolvingStreams || cinejoyStreams.isNotEmpty) && enabledKeys.contains('cinejoy')) {
+        sourceWidgets['cinejoy'] = _buildServerGroupCard(
+          title: '${pos('cinejoy')}. Cinejoy.to Server',
+          subtitle: _resolvingStreams && cinejoyStreams.isEmpty
+              ? 'Searching Cinejoy...'
+              : (cinejoyStreams.isNotEmpty
+                    ? '${cinejoyStreams.length} servers available'
+                    : 'Not available'),
+          icon: Icons.play_circle_fill_rounded,
+          accentColor: Colors.deepPurpleAccent,
+          onTap: cinejoyStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.cinejoy;
+                  }),
+        );
+      }
+
+      // Streamtape Card
+      if (_showStreamtape && (_resolvingStreams || streamtapeStreams.isNotEmpty) && enabledKeys.contains('streamtape')) {
+        sourceWidgets['streamtape'] = _buildServerGroupCard(
+          title: '${pos('streamtape')}. Streamtape Server',
+          subtitle: _resolvingStreams && streamtapeStreams.isEmpty
+              ? 'Searching Streamtape...'
+              : (streamtapeStreams.isNotEmpty
+                    ? '${streamtapeStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.video_collection_rounded,
+          accentColor: Colors.orange,
+          onTap: streamtapeStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.streamtape;
+                  }),
+        );
+      }
+
+      // Telegram Card
+      if (_showTelegram && (_resolvingStreams || telegramStreams.isNotEmpty) && enabledKeys.contains('telegram')) {
+        sourceWidgets['telegram'] = _buildServerGroupCard(
+          title: '${pos('telegram')}. Telegram Server',
+          subtitle: _resolvingStreams && telegramStreams.isEmpty
+              ? 'Searching Telegram...'
+              : (telegramStreams.isNotEmpty
+                    ? '${telegramStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.send_rounded,
+          accentColor: Colors.lightBlue,
+          onTap: telegramStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.telegram;
+                  }),
+        );
+      }
+
+      // Direct Link Card
+      if (_showDirectLink && (_resolvingStreams || directLinkStreams.isNotEmpty) && enabledKeys.contains('directLink')) {
+        sourceWidgets['directLink'] = _buildServerGroupCard(
+          title: '${pos('directLink')}. Direct Links',
+          subtitle: _resolvingStreams && directLinkStreams.isEmpty
+              ? 'Searching Direct Links...'
+              : (directLinkStreams.isNotEmpty
+                    ? '${directLinkStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.link_rounded,
+          accentColor: Colors.teal,
+          onTap: directLinkStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.directLink;
+                  }),
+        );
+      }
+
 
 
       final List<Widget> groupCards = [];
@@ -2778,6 +2943,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = filmuStreams;
         accentColor = Colors.orangeAccent;
         iconData = Icons.hd_rounded;
+      } else if (_activeGroupType == StreamSourceType.vegamovies) {
+        activeList = vegamoviesStreams;
+        accentColor = Colors.greenAccent;
+        iconData = Icons.movie_creation_rounded;
+      } else if (_activeGroupType == StreamSourceType.cinejoy) {
+        activeList = cinejoyStreams;
+        accentColor = Colors.deepPurpleAccent;
+        iconData = Icons.play_circle_fill_rounded;
+      } else if (_activeGroupType == StreamSourceType.streamtape) {
+        activeList = streamtapeStreams;
+        accentColor = Colors.orange;
+        iconData = Icons.video_collection_rounded;
+      } else if (_activeGroupType == StreamSourceType.telegram) {
+        activeList = telegramStreams;
+        accentColor = Colors.lightBlue;
+        iconData = Icons.send_rounded;
+      } else if (_activeGroupType == StreamSourceType.directLink) {
+        activeList = directLinkStreams;
+        accentColor = Colors.teal;
+        iconData = Icons.link_rounded;
       } else {
         activeList = castleStreams;
         accentColor = Colors.amberAccent;
