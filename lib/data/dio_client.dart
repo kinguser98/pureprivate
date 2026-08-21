@@ -27,6 +27,7 @@ class DioClient {
         final client = HttpClient();
         client.connectionTimeout = const Duration(seconds: 10);
         client.maxConnectionsPerHost = 100;
+        client.badCertificateCallback = (cert, host, port) => true;
         return client;
       },
     );

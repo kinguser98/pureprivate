@@ -23,6 +23,8 @@ import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
+import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -75,6 +77,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showTorrent = true;
   bool _showStremioAddon = true;
   bool _showFilmu = true;
+  bool _showVegamovies = true;
+  bool _showCinejoy = true;
+  bool _showStreamtape = true;
+  bool _showTelegram = true;
+  bool _showDirectLink = true;
   String? _selectedStremioResolution;
   List<String> _blockedAddonGroups = [];
 
@@ -83,7 +90,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox'];
+        _sourceOrder = ['cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox','vegamovies','cinejoy','streamtape','telegram','directLink'];
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
@@ -91,6 +98,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true);
+        _showVegamovies = cloud.containsKey('source_show_vegamovies') ? cloud['source_show_vegamovies'] == 'true' : (prefs.getBool('source_show_vegamovies') ?? true);
+        _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
+        _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
+        _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showDirectLink = cloud.containsKey('source_show_direct_link') ? cloud['source_show_direct_link'] == 'true' : (prefs.getBool('source_show_direct_link') ?? true);
         _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
@@ -107,6 +119,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final List<String> mergedOrder = List<String>.from(order);
       if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
       if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
+      if (!mergedOrder.contains('vegamovies')) mergedOrder.add('vegamovies');
+      if (!mergedOrder.contains('cinejoy')) mergedOrder.add('cinejoy');
+      if (!mergedOrder.contains('streamtape')) mergedOrder.add('streamtape');
+      if (!mergedOrder.contains('telegram')) mergedOrder.add('telegram');
+      if (!mergedOrder.contains('directLink')) mergedOrder.add('directLink');
       setState(() => _sourceOrder = mergedOrder);
     }
   }
@@ -445,6 +462,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       // Resolve FilmU API Scraper
       tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
 
+      // Resolve Vegamovies Scraper
+      final origLang = _selectedMovie != null ? (_selectedMovie['original_language']?.toString() ?? _selectedMovie['language']?.toString()) : null;
+      tasks.add(_resolveVegamovies(title, year, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
+
+      // Resolve Cinejoy Scraper
+      tasks.add(_resolveCinejoy(title, year, tmdbId: tmdbId, isSeries: _isSeriesSearch, season: season, episode: episode));
+
       // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
       if (tmdbId != null && tmdbId.isNotEmpty) {
         final vidsrcUrl = _isSeriesSearch && season != null && episode != null
@@ -622,6 +646,52 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('MovieBox resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveVegamovies(String title, String year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showVegamovies) return;
+    try {
+      debugPrint('Vegamovies Scraper: Resolving streams for $title...');
+      final parsedYear = int.tryParse(year) ?? DateTime.now().year;
+      final streams = await VegamoviesResolver.resolveStreams(
+        title: title,
+        year: parsedYear,
+        originalLanguage: originalLanguage,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Vegamovies resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveCinejoy(String title, String year, {String? tmdbId, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showCinejoy) return;
+    try {
+      debugPrint('Cinejoy Scraper: Resolving streams for $title (TMDB: $tmdbId)...');
+      final parsedYear = int.tryParse(year) ?? DateTime.now().year;
+      final streams = await CinejoyResolver.resolveStreams(
+        title: title,
+        year: parsedYear,
+        tmdbId: tmdbId,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Cinejoy resolution failed: $e');
     }
   }
 
@@ -3070,6 +3140,11 @@ enum StreamSourceType {
   stremioAddon,
   nuveoAddon,
   filmu,
+  vegamovies,
+  cinejoy,
+  streamtape,
+  telegram,
+  directLink,
 }
 
 class StreamSourceInfo {

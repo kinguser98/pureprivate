@@ -17,6 +17,9 @@ class ExternalPlayerService {
     {'id': 'torrentio', 'name': 'Torrentio & Debrid', 'desc': 'Play RealDebrid/Seedr externally'},
     {'id': 'netmirror', 'name': 'NetMirror & Stravo', 'desc': 'Play NetMirror streams externally'},
     {'id': 'streamtape', 'name': 'Streamtape Streams', 'desc': 'Play Streamtape links externally'},
+    {'id': 'vegamovies', 'name': 'Vegamovies.se Streams', 'desc': 'Play Vegamovies links externally'},
+    {'id': 'cinejoy', 'name': 'Cinejoy.to Embed Streams', 'desc': 'Play Cinejoy links externally'},
+    {'id': 'direct_link', 'name': 'Direct Link Streams', 'desc': 'Play direct video URLs externally'},
     {'id': 'local', 'name': 'Local Storage Files', 'desc': 'Play local video files externally'},
   ];
 
