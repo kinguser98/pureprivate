@@ -446,7 +446,7 @@ class SyncService {
       } catch (_) {}
     }
     if (list.isEmpty) {
-      list = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','telegram'];
+      list = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','telegram','filmu','moviebox','vegamovies','cinejoy','streamtape','directLink'];
     }
     return list;
   }

@@ -23,6 +23,8 @@ import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
+import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
+import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -3163,6 +3165,11 @@ enum StreamSourceType {
   stremioAddon,
   nuveoAddon,
   filmu,
+  vegamovies,
+  cinejoy,
+  streamtape,
+  telegram,
+  directLink,
 }
 
 class StreamSourceInfo {
