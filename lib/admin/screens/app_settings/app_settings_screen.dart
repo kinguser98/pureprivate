@@ -40,6 +40,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
 
   final _torrentioUrlCtrl = TextEditingController();
   final _stravoUrlCtrl = TextEditingController();
+  final _vegamoviesUrlCtrl = TextEditingController();
+  final _cinejoyUrlCtrl = TextEditingController();
   final _netmirrorDomainsCtrl = TextEditingController();
   final _seedrTokenCtrl = TextEditingController();
   final _epgUrlsCtrl = TextEditingController();
@@ -64,6 +66,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _blockedGroupsCtrl.dispose();
     _torrentioUrlCtrl.dispose();
     _stravoUrlCtrl.dispose();
+    _vegamoviesUrlCtrl.dispose();
+    _cinejoyUrlCtrl.dispose();
     _netmirrorDomainsCtrl.dispose();
     _seedrTokenCtrl.dispose();
     _epgUrlsCtrl.dispose();
@@ -84,7 +88,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram'];
+      final allSources = ['cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'moviebox', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
       final List<String> enabledSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
@@ -172,6 +176,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       // 10. Parse Provider Addons, EPG & External API Keys
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
+      _vegamoviesUrlCtrl.text = settingsMap['domain_vegamovies'] ?? 'https://vegamovies.se';
+      _cinejoyUrlCtrl.text = settingsMap['domain_cinejoy'] ?? 'https://cinejoy.to';
       _netmirrorDomainsCtrl.text = settingsMap['netmirror_domains'] ?? '';
       _seedrTokenCtrl.text = settingsMap['seedr_token'] ?? '';
       _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
@@ -208,6 +214,12 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'torrent': return 'Torrent Server';
       case 'stremioAddon': return 'Stremio Addons';
       case 'telegram': return 'Telegram Server';
+      case 'filmu': return 'FilmU Premium Server';
+      case 'moviebox': return 'MovieBox Server';
+      case 'vegamovies': return 'Vegamovies.se Server';
+      case 'cinejoy': return 'Cinejoy.to Server';
+      case 'streamtape': return 'Streamtape Server';
+      case 'directLink': return 'Direct Links';
       default: return key;
     }
   }
@@ -323,6 +335,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'telegram_api_hash': _tgApiHashCtrl.text.trim(),
         'torrentio_addon_url': _torrentioUrlCtrl.text.trim(),
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
+        'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
+        'domain_cinejoy': _cinejoyUrlCtrl.text.trim(),
         'netmirror_domains': _netmirrorDomainsCtrl.text.trim(),
         'seedr_token': _seedrTokenCtrl.text.trim(),
         'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
@@ -1290,6 +1304,20 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Stravo Addon URL',
                 controller: _stravoUrlCtrl,
                 hint: 'https://stravo-clfk.onrender.com/default',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.movie_creation_rounded,
+                label: 'Vegamovies Domain',
+                controller: _vegamoviesUrlCtrl,
+                hint: 'https://vegamovies.se',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.play_circle_fill_rounded,
+                label: 'Cinejoy Domain',
+                controller: _cinejoyUrlCtrl,
+                hint: 'https://cinejoy.to',
               ),
               const SizedBox(height: 16),
               _buildInputRow(

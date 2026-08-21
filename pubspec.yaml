@@ -1,7 +1,7 @@
 name: private_cinema_mobile
 description: "GoXio - Mobile streaming app."
 publish_to: 'none'
-version: 1.0.0+5007
+version: 1.0.0+5008
 
 environment:
   sdk: ^3.12.1
