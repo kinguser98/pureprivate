@@ -111,7 +111,7 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
       final res = await http.get(
         Uri.parse(targetUrl),
         headers: {
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
       ).timeout(const Duration(seconds: 12));
@@ -817,7 +817,7 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
                     cacheEnabled: true,
                     thirdPartyCookiesEnabled: true,
                     mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                    userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
                     javaScriptCanOpenWindowsAutomatically: false,
                     supportMultipleWindows: false,
                     useShouldOverrideUrlLoading: true,

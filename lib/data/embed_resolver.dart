@@ -67,7 +67,12 @@ class EmbedResolver {
         lower.contains('pre_roll') ||
         lower.contains('preroll') ||
         lower.contains('loading.mp4') ||
-        lower.contains('placeholder')) {
+        lower.contains('placeholder') ||
+        lower.contains('trailer') ||
+        lower.contains('youtube') ||
+        lower.contains('youtu.be') ||
+        lower.contains('ytimg') ||
+        lower.contains('googlevideo')) {
       return false;
     }
     
@@ -228,49 +233,48 @@ class EmbedResolver {
                 var count = 0;
                 var interval = setInterval(function() {
                   count++;
-                  if (count > 40) {
+                  if (count > 30) {
                     clearInterval(interval);
                     return;
                   }
 
                   removeAdOverlays();
 
-                  // Click common play selectors
-                  var selectors = [
-                    '.vjs-big-play-button',
-                    '.jw-display-icon-container',
-                    '.play-button',
-                    '.play-icon',
-                    '#play-button',
-                    '#play',
-                    '.play',
-                    '.watch-btn',
-                    '.click-to-play',
-                    '[class*="play"]',
-                    '[id*="play"]',
-                    '.vjs-tech',
-                    'button',
-                    'svg'
-                  ];
-                  selectors.forEach(function(sel) {
+                  // Click dedicated play selectors during initial 3 seconds only
+                  if (count <= 4) {
+                    var selectors = [
+                      '.vjs-big-play-button',
+                      '.jw-display-icon-container',
+                      '.play-button',
+                      '.play-icon',
+                      '#play-button',
+                      '#play',
+                      '.watch-btn',
+                      '.click-to-play'
+                    ];
+                    selectors.forEach(function(sel) {
+                      try {
+                        var els = document.querySelectorAll(sel);
+                        els.forEach(function(el) {
+                          simulateClick(el);
+                        });
+                      } catch(e) {}
+                    });
+                  }
+
+                  // On Cinejoy specifically, if Server 1 is buffering, attempt Server 2 (Solara / VidSrc) after 3s
+                  if (window.location.href.indexOf('cinejoy.to') !== -1 && count === 6) {
                     try {
-                      var els = document.querySelectorAll(sel);
-                      els.forEach(function(el) {
-                        simulateClick(el);
+                      var serverElements = document.querySelectorAll('button, div, li, span');
+                      serverElements.forEach(function(el) {
+                        var txt = (el.textContent || '').trim().toLowerCase();
+                        if (txt === 'solara' || txt === 'server 2' || txt === 'athens' || txt === 'joy') {
+                          simulateClick(el);
+                        }
                       });
                     } catch(e) {}
-                  });
-
-                  // Click the center of the page
-                  try {
-                    var x = window.innerWidth / 2;
-                    var y = window.innerHeight / 2;
-                    var el = document.elementFromPoint(x, y);
-                    if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                      simulateClick(el);
-                    }
-                  } catch(e) {}
-                }, 400);
+                  }
+                }, 500);
               })();
             """,
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END,
@@ -347,7 +351,6 @@ class EmbedResolver {
 
               removeAdOverlays();
 
-              // Click common play selectors
               var selectors = [
                 '.vjs-big-play-button',
                 '.jw-display-icon-container',
@@ -355,14 +358,8 @@ class EmbedResolver {
                 '.play-icon',
                 '#play-button',
                 '#play',
-                '.play',
                 '.watch-btn',
-                '.click-to-play',
-                '[class*="play"]',
-                '[id*="play"]',
-                '.vjs-tech',
-                'button',
-                'svg'
+                '.click-to-play'
               ];
               selectors.forEach(function(sel) {
                 try {
@@ -372,16 +369,6 @@ class EmbedResolver {
                   });
                 } catch(e) {}
               });
-
-              // Click center
-              try {
-                var x = window.innerWidth / 2;
-                var y = window.innerHeight / 2;
-                var el = document.elementFromPoint(x, y);
-                if (el && el.tagName !== 'HTML' && el.tagName !== 'BODY') {
-                  simulateClick(el);
-                }
-              } catch(e) {}
             })();
           """);
         },

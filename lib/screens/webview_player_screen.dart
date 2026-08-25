@@ -497,6 +497,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                       }
 
                       function autoClickPlay() {
+                        if (window.location.href.indexOf('cinejoy') !== -1) {
+                          return; // CineJoy loads player natively; do not spam clicks
+                        }
                         if (isWebtorLoading()) {
                           return;
                         }
@@ -619,6 +622,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 // Allow original domain, trusted video partners, common video hosting, or internal schemas
                 if (host == originalHost || 
                     host.isEmpty || 
+                    host.contains('cinejoy') ||
                     host.contains('youtube') ||
                     host.contains('youtu.be') ||
                     host.contains('googlevideo') ||

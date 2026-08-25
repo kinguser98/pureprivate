@@ -68,8 +68,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   dynamic _selectedEpisodeData;
 
   // Source visibility flags
-  bool _showVidlink = true;
-  bool _showNetmirror = true;
+
   bool _showStravo = true;
   bool _showStalker = true;
   bool _showCinemm = true;
@@ -78,6 +77,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showTorrent = true;
   bool _showStremioAddon = true;
   bool _showFilmu = true;
+  bool _showVegamovies = true;
+  bool _showCinejoy = true;
+  bool _showStreamtape = true;
+  bool _showTelegram = true;
+  bool _showDirectLink = true;
   String? _selectedStremioResolution;
   List<String> _blockedAddonGroups = [];
 
@@ -86,9 +90,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['vidlink','netmirror','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox'];
-        _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
-        _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
+        _sourceOrder = ['cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox','vegamovies','cinejoy','streamtape','telegram','directLink'];
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
@@ -96,6 +98,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
         _showStremioAddon = cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true);
+        _showVegamovies = cloud.containsKey('source_show_vegamovies') ? cloud['source_show_vegamovies'] == 'true' : (prefs.getBool('source_show_vegamovies') ?? true);
+        _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
+        _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
+        _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showDirectLink = cloud.containsKey('source_show_direct_link') ? cloud['source_show_direct_link'] == 'true' : (prefs.getBool('source_show_direct_link') ?? true);
         _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
@@ -112,6 +119,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final List<String> mergedOrder = List<String>.from(order);
       if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
       if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
+      if (!mergedOrder.contains('vegamovies')) mergedOrder.add('vegamovies');
+      if (!mergedOrder.contains('cinejoy')) mergedOrder.add('cinejoy');
+      if (!mergedOrder.contains('streamtape')) mergedOrder.add('streamtape');
+      if (!mergedOrder.contains('telegram')) mergedOrder.add('telegram');
+      if (!mergedOrder.contains('directLink')) mergedOrder.add('directLink');
       setState(() => _sourceOrder = mergedOrder);
     }
   }
@@ -381,11 +393,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     try {
       final List<Future<void>> tasks = [];
 
-      // 1. Resolve VidLink
-      if (_showVidlink) {
-        final activeId = (imdbId != null && imdbId.isNotEmpty) ? imdbId : tmdbId;
-        tasks.add(_resolveVidLink(activeId, season: season, episode: episode));
-      }
+
 
       if (imdbId != null && imdbId.isNotEmpty) {
         // 2. Resolve Stravo
@@ -418,27 +426,21 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         tasks.add(_resolveStalkerVodDatabase(queryTitle));
       }
 
-      // 5. Resolve NetMirror
-      if (_showNetmirror) {
-        tasks.add(_resolveNetmirror(queryTitle));
-      }
+
+
+      final movieYear = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
 
       // 6. Resolve CineMM - movies only
       if (_showCinemm && !_isSeriesSearch) {
-        final year =
-            _selectedMovie?['release_date']?.toString().split('-').first ?? '';
-        tasks.add(_resolveCinemm(title, year));
+        tasks.add(_resolveCinemm(title, movieYear));
       }
 
       // Resolve MovieBox
       if (_showMoviebox) {
-        final year = _isSeriesSearch
-            ? ''
-            : (_selectedMovie?['release_date']?.toString().split('-').first ?? '');
         tasks.add(
           _resolveMoviebox(
             title,
-            year,
+            movieYear,
             isSeries: _isSeriesSearch,
             season: season,
             episode: episode,
@@ -456,8 +458,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       // Resolve FilmU API Scraper
       tasks.add(_resolveFilmuScraper(tmdbId, title, season: season, episode: episode));
-
-      final movieYear = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
 
       // Resolve Vegamovies Scraper
       final origLang = _selectedMovie != null ? (_selectedMovie['original_language']?.toString() ?? _selectedMovie['language']?.toString()) : null;
@@ -495,36 +495,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
 
 
-  Future<void> _resolveVidLink(String activeId, {int? season, int? episode}) async {
-    try {
-      String url = 'https://movie-scraper-beige.vercel.app/api?id=$activeId';
-      if (season != null && episode != null) {
-        url += '&s=$season&e=$episode';
-      }
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final rawUrl = data['url'] as String?;
-        if (rawUrl != null && rawUrl.isNotEmpty) {
-          if (mounted) {
-            setState(() {
-              _resolvedSources.add(
-                StreamSourceInfo(
-                  name: 'VidLink (Native Proxy)',
-                  url: rawUrl,
-                  type: StreamSourceType.vidlink,
-                ),
-              );
-            });
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('VidLink stream resolution failed: $e');
-    }
-  }
+
 
   String _cleanSearchTitle(String rawTitle) {
     var cleaned = rawTitle.replaceAll(
@@ -636,19 +607,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  Future<void> _resolveNetmirror(String title) async {
-    try {
-      debugPrint('NetMirror Scraper: Resolving streams for $title...');
-      final streams = await NetmirrorResolver.resolveStreams(title);
-      if (mounted && streams.isNotEmpty) {
-        setState(() {
-          _resolvedSources.addAll(streams);
-        });
-      }
-    } catch (e) {
-      debugPrint('NetMirror resolution failed: $e');
-    }
-  }
+
 
   Future<void> _resolveCinemm(String title, String year) async {
     try {
@@ -2483,18 +2442,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final stravoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stravo)
         .toList();
-    final vidlinkStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.vidlink)
-        .toList();
+
     final torrentStreams = filteredSources
         .where((s) => s.type == StreamSourceType.torrent)
         .toList();
     final stalkerStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stalker)
         .toList();
-    final netmirrorStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.netmirror)
-        .toList();
+
     final dvdplayStreams = filteredSources
         .where((s) => s.type == StreamSourceType.dvdplay)
         .toList();
@@ -2543,43 +2498,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
-
-      // VidLink
-      if (_showVidlink && (_resolvingStreams || vidlinkStreams.isNotEmpty) && enabledKeys.contains('vidlink')) {
-        sourceWidgets['vidlink'] = _buildServerGroupCard(
-          title: '${pos('vidlink')}. Vidlink Server',
-          subtitle: _resolvingStreams && vidlinkStreams.isEmpty
-              ? 'Resolving stream...'
-              : (vidlinkStreams.isNotEmpty
-                    ? '1 native link available'
-                    : 'Not available for this title'),
-          icon: Icons.play_arrow_rounded,
-          accentColor: AppColors.accentBright,
-          onTap: vidlinkStreams.isEmpty
-              ? null
-              : () =>
-                    _playStream(vidlinkStreams.first, movieTitle, posterPath),
-        );
-      }
-
-      // NetMirror
-      if (_showNetmirror && (_resolvingStreams || netmirrorStreams.isNotEmpty) && enabledKeys.contains('netmirror')) {
-        sourceWidgets['netmirror'] = _buildServerGroupCard(
-          title: '${pos('netmirror')}. NetMirror Server',
-          subtitle: _resolvingStreams && netmirrorStreams.isEmpty
-              ? 'Searching NetMirror...'
-              : (netmirrorStreams.isNotEmpty
-                    ? '${netmirrorStreams.length} links available'
-                    : 'Not available'),
-          icon: Icons.language_rounded,
-          accentColor: Colors.tealAccent,
-          onTap: netmirrorStreams.isEmpty
-              ? null
-              : () => setState(
-                  () => _activeGroupType = StreamSourceType.netmirror,
-                ),
-        );
-      }
 
       // Stravo
       if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
@@ -2903,10 +2821,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = stalkerStreams;
         accentColor = Colors.purpleAccent;
         iconData = Icons.movie_filter_rounded;
-      } else if (_activeGroupType == StreamSourceType.netmirror) {
-        activeList = netmirrorStreams;
-        accentColor = Colors.tealAccent;
-        iconData = Icons.language_rounded;
+
       } else if (_activeGroupType == StreamSourceType.dvdplay) {
         activeList = dvdplayStreams;
         accentColor = Colors.deepOrangeAccent;

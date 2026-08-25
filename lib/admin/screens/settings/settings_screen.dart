@@ -219,7 +219,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Current: http://ot.goprivate.fun',
+                    'Current: https://ot.goprivate.fun',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.4),
                       fontSize: 11,

@@ -397,6 +397,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       debugPrint('VideoPlayerScreen player error: $e');
       if (mounted) {
         final errorStr = e.toString().toLowerCase();
+
+        // Non-fatal audio decoding errors or minor stream glitches should NEVER crash or terminate video playback
+        if (errorStr.contains('audio') && (errorStr.contains('decode') || errorStr.contains('codec') || errorStr.contains('fail'))) {
+          debugPrint('VideoPlayerScreen: Non-fatal audio decode notice. Continuing video playback.');
+          return;
+        }
+
         if (!_hasAttemptedFallback && 
             _resolvedSourceUrl != null &&
             (errorStr.contains('codec') || 
@@ -406,7 +413,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
              errorStr.contains('format') ||
              errorStr.contains('load'))) {
           _hasAttemptedFallback = true;
-          debugPrint('VideoPlayerScreen: Codec error. Retrying with software decoding...');
+          debugPrint('VideoPlayerScreen: Video codec error. Retrying with software decoding...');
           if (_player.platform is NativePlayer) {
             final nativePlayer = _player.platform as NativePlayer;
             await nativePlayer.setProperty('hwdec', 'no');
@@ -581,9 +588,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
         
         await nativePlayer.setProperty('force-seekable', 'yes');
-        if (Platform.isAndroid) {
-          await nativePlayer.setProperty('ao', 'audiotrack,opensles,');
-        } else if (Platform.isIOS) {
+        if (Platform.isIOS) {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
         
@@ -674,10 +679,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: true);
       
       if (seekToMs > 0) {
-        _player.stream.duration.firstWhere((d) => d > Duration.zero).timeout(
-          const Duration(seconds: 8),
-          onTimeout: () => Duration.zero,
-        ).then((d) async {
+        _player.stream.duration
+            .firstWhere((d) => d > Duration.zero, orElse: () => Duration.zero)
+            .timeout(
+              const Duration(seconds: 8),
+              onTimeout: () => Duration.zero,
+            )
+            .catchError((_) => Duration.zero)
+            .then((d) async {
           if (d > Duration.zero && mounted) {
             await Future<void>.delayed(const Duration(milliseconds: 300));
             await _player.seek(Duration(milliseconds: seekToMs));
@@ -1034,9 +1043,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
           // 6. UI Overlays (Control Bar controls)
           if (_showControls) _buildControlsLayout(context),
-
-          // 7. Initial Track Selector (big popup at 00:00:01)
-          if (_showInitialTrackSelector) _buildInitialTrackSelector(),
         ],
       ),
     );
@@ -1046,104 +1052,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   List<VideoTrack> get _realVideoTracks => _player.state.tracks.video.where((t) => t.id != 'auto' && t.id != 'no').toList();
   bool get _hasMultipleTracks => _realAudioTracks.length > 1 || _realVideoTracks.length > 1;
 
-  Widget _buildInitialTrackSelector() {
-    final audioTracks = _realAudioTracks;
-    final videoTracks = _realVideoTracks;
-    final currentAudio = _player.state.track.audio;
-    final currentVideo = _player.state.track.video;
-    final hasMultiple = _hasMultipleTracks;
+  String _formatAudioTrackLabel(AudioTrack track, int index) {
+    final title = (track.title ?? '').toLowerCase();
+    final lang = (track.language ?? '').toLowerCase();
+    final id = track.id.toLowerCase();
+    final combined = '$title $lang $id';
 
-    _selectedAudioTrack ??= currentAudio;
-    _selectedVideoTrack ??= currentVideo;
+    if (combined.contains('hin') || combined.contains('hindi')) return 'Hindi';
+    if (combined.contains('mal') || combined.contains('malayalam')) return 'Malayalam';
+    if (combined.contains('tam') || combined.contains('tamil')) return 'Tamil';
+    if (combined.contains('tel') || combined.contains('telugu')) return 'Telugu';
+    if (combined.contains('kan') || combined.contains('kannada')) return 'Kannada';
+    if (combined.contains('eng') || combined.contains('english')) return 'English';
 
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black87,
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(32),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 500),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1D27),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white12),
-              ),
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Text('Audio & Quality', style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                    if (!hasMultiple)
-                      TextButton(
-                        onPressed: () => setState(() {
-                          _showInitialTrackSelector = false;
-                          _selectedAudioTrack = null;
-                          _selectedVideoTrack = null;
-                        }),
-                        child: const Text('Skip', style: TextStyle(color: Colors.white54))),
-                  ]),
-                  const SizedBox(height: 16),
-                  // Audio tracks
-                  if (audioTracks.length > 1) ...[
-                    Text('AUDIO TRACKS', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                    const SizedBox(height: 8),
-                    ...audioTracks.map((t) => _buildTrackTile(
-                      label: t.title ?? t.language ?? 'Track ${t.id}',
-                      isSelected: t.id == _selectedAudioTrack?.id,
-                      onTap: () => setState(() => _selectedAudioTrack = t),
-                    )),
-                    const SizedBox(height: 16),
-                  ],
-                  // Video quality
-                  if (videoTracks.length > 1) ...[
-                    Text('VIDEO QUALITY', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
-                    const SizedBox(height: 8),
-                    ...videoTracks.map((t) => _buildTrackTile(
-                      label: t.h != null ? '${t.h}p' : (t.title ?? 'Track ${t.id}'),
-                      isSelected: t.id == _selectedVideoTrack?.id,
-                      onTap: () => setState(() => _selectedVideoTrack = t),
-                    )),
-                  ],
-                  if (!hasMultiple) ...[
-                    const SizedBox(height: 8),
-                    const Text('Single audio/video track — no selection needed.', style: TextStyle(color: Colors.white38, fontSize: 13)),
-                  ],
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accentBright, foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () {
-                        if (_selectedAudioTrack != null && _selectedAudioTrack != currentAudio) {
-                          _player.setAudioTrack(_selectedAudioTrack!);
-                        }
-                        if (_selectedVideoTrack != null && _selectedVideoTrack != currentVideo) {
-                          _player.setVideoTrack(_selectedVideoTrack!);
-                        }
-                        setState(() {
-                          _showInitialTrackSelector = false;
-                          _selectedAudioTrack = null;
-                          _selectedVideoTrack = null;
-                        });
-                      },
-                      child: const Text('Start Playing', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    if (track.title != null && track.title!.isNotEmpty && !track.title!.toLowerCase().startsWith('track')) {
+      return track.title!;
+    }
+    if (track.language != null && track.language!.isNotEmpty) {
+      return track.language!.toUpperCase();
+    }
+
+    return 'Audio Track ${index + 1}';
   }
+
+
 
   Widget _buildTrackTile({required String label, required bool isSelected, required VoidCallback onTap}) {
     return Padding(

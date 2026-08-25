@@ -35,6 +35,17 @@ class TelegramVideoItem {
     return 'Telegram message $messageId';
   }
 
+  String get displayTitle {
+    final raw = (caption != null && caption!.trim().isNotEmpty)
+        ? caption!.trim()
+        : (fileName != null && fileName!.trim().isNotEmpty ? fileName! : title);
+    final singleLine = raw.replaceAll(RegExp(r'\s+'), ' ');
+    if (singleLine.length > 52) {
+      return '${singleLine.substring(0, 49)}...';
+    }
+    return singleLine;
+  }
+
   String get queryKey {
     final base = (caption != null && caption!.trim().isNotEmpty)
         ? caption!

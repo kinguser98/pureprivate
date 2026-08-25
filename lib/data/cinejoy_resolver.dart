@@ -27,40 +27,39 @@ class CinejoyResolver {
 
     debugPrint('CinejoyResolver: Resolving for "$title" (TMDB: $tmdbId) on $domain');
 
-    if (tmdbId != null && tmdbId.isNotEmpty) {
-      final embedPath = isSeries
-          ? '/embed/tv/$tmdbId/${season ?? 1}/${episode ?? 1}'
-          : '/embed/movie/$tmdbId';
-      final streamUrl = '$domain$embedPath';
+    if (tmdbId != null && tmdbId.isNotEmpty && tmdbId != 'null' && tmdbId != '0') {
+      final playerPath = isSeries
+          ? '/watch/tv/$tmdbId/${season ?? 1}/${episode ?? 1}'
+          : '/watch/movie/$tmdbId';
+      final streamUrl = '$domain$playerPath';
 
       sources.add(
         StreamSourceInfo(
-          name: '$title • Cinejoy HD • Embed Stream',
+          name: 'Cinejoy HD Server (1080p)',
           url: streamUrl,
           type: StreamSourceType.cinejoy,
           headers: {
             'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Referer': '$domain/',
           },
           quality: '1080p',
         ),
       );
-    }
 
-    if (tmdbId != null && tmdbId.isNotEmpty) {
+      // VidSrc auto-fallback player
       final vidsrcUrl = isSeries
           ? 'https://vidsrc.me/embed/tv?tmdb=$tmdbId&season=${season ?? 1}&episode=${episode ?? 1}'
           : 'https://vidsrc.me/embed/movie?tmdb=$tmdbId';
 
       sources.add(
         StreamSourceInfo(
-          name: '$title • Cinejoy VidSrc Mirror • 1080p',
+          name: 'Cinejoy VidSrc Mirror (1080p)',
           url: vidsrcUrl,
           type: StreamSourceType.cinejoy,
           headers: {
             'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Referer': '$domain/',
           },
           quality: '1080p',

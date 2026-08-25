@@ -245,6 +245,156 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     }
   }
 
+  Future<void> _saveFileIndex() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('send_to_tv_received_files', json.encode(_receivedFiles));
+  }
+
+  void _deleteFile(int index) {
+    final f = _receivedFiles[index];
+    try { File(f['path']).deleteSync(); } catch (_) {}
+    setState(() => _receivedFiles.removeAt(index));
+    _saveFileIndex();
+  }
+
+  Future<void> _handleUpload(HttpRequest request) async {
+    try {
+      final fileName = request.uri.queryParameters['name'] ?? 'file_${DateTime.now().millisecondsSinceEpoch}';
+      final dir = await getApplicationDocumentsDirectory();
+      final saveDir = Directory('${dir.path}/ReceivedFiles');
+      if (!await saveDir.exists()) await saveDir.create(recursive: true);
+
+      final savePath = '${saveDir.path}/$fileName';
+      final file = File(savePath);
+      final sink = file.openWrite();
+
+      int fileSize = 0;
+      await for (final chunk in request) {
+        sink.add(chunk);
+        fileSize += chunk.length;
+      }
+      await sink.flush();
+      await sink.close();
+
+      if (fileSize == 0) {
+        request.response.statusCode = 400;
+        request.response.write('Empty file');
+        await request.response.close();
+        return;
+      }
+
+      final ext = fileName.split('.').last.toLowerCase();
+      final videoExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v'];
+      final isVideo = videoExts.contains(ext);
+
+      final newItem = {
+        'name': fileName,
+        'path': savePath,
+        'size': fileSize,
+        'type': isVideo ? 'video' : 'file',
+        'ext': ext,
+        'time': DateTime.now().toIso8601String(),
+      };
+
+      if (mounted) {
+        setState(() {
+          _receivedFiles.insert(0, newItem);
+        });
+      }
+      await _saveFileIndex();
+
+      request.response.statusCode = 200;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(json.encode({'status': 'ok', 'path': savePath}));
+      await request.response.close();
+    } catch (e) {
+      debugPrint('Mobile Receiver upload error: $e');
+      request.response.statusCode = 500;
+      await request.response.close();
+    }
+  }
+
+  Future<void> _saveFileToDownloads(Map<String, dynamic> item) async {
+    final String? srcPath = item['path'];
+    final String fileName = item['name'] ?? 'received_file';
+
+    if (srcPath == null || !File(srcPath).existsSync()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('File not found on device storage.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      Directory? downloadsDir;
+      if (Platform.isAndroid) {
+        final pubDownload = Directory('/storage/emulated/0/Download');
+        if (await pubDownload.exists()) {
+          downloadsDir = pubDownload;
+        } else {
+          try {
+            await pubDownload.create(recursive: true);
+            downloadsDir = pubDownload;
+          } catch (_) {}
+        }
+      }
+
+      if (downloadsDir == null) {
+        final extDir = await getExternalStorageDirectory();
+        if (extDir != null) {
+          downloadsDir = Directory('${extDir.path}/Download');
+          if (!await downloadsDir.exists()) await downloadsDir.create(recursive: true);
+        } else {
+          final docDir = await getApplicationDocumentsDirectory();
+          downloadsDir = Directory('${docDir.path}/Download');
+          if (!await downloadsDir.exists()) await downloadsDir.create(recursive: true);
+        }
+      }
+
+      final targetPath = '${downloadsDir.path}/$fileName';
+      final srcFile = File(srcPath);
+      await srcFile.copy(targetPath);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.download_done_rounded, color: Colors.greenAccent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Saved to Downloads: $fileName',
+                    style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF1E293B),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving file to downloads: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving to downloads: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _startServer() async {
     try {
       final interfaces = await NetworkInterface.list();
@@ -261,7 +411,9 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       setState(() {});
 
       _server!.listen((HttpRequest request) async {
-        if (request.uri.path == '/ping') {
+        if (request.method == 'POST' && request.uri.path == '/upload') {
+          await _handleUpload(request);
+        } else if (request.uri.path == '/ping') {
           request.response.headers.contentType = ContentType.json;
           request.response.write(json.encode({'status': 'ok', 'device_name': 'Mobile Phone', 'port': _port}));
           await request.response.close();
@@ -584,10 +736,66 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (ctx, idx) {
                       final f = _receivedFiles[idx];
-                      return ListTile(
-                        leading: const Icon(Icons.insert_drive_file_rounded, color: Colors.white70),
-                        title: Text(f['name'] ?? '', style: GoogleFonts.outfit(color: Colors.white, fontSize: 13)),
-                        subtitle: Text('${((f['size'] ?? 0) ~/ 1048576)} MB', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+                      final isVideo = f['type'] == 'video';
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: isVideo ? AppColors.accentBright.withValues(alpha: 0.15) : Colors.white10,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                isVideo ? Icons.movie_rounded : Icons.insert_drive_file_rounded,
+                                color: isVideo ? AppColors.accentBright : Colors.white70,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    f['name'] ?? '',
+                                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${((f['size'] ?? 0) / 1048576).toStringAsFixed(1)} MB',
+                                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: const BorderSide(color: Colors.white24),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              onPressed: () => _saveFileToDownloads(f),
+                              icon: const Icon(Icons.download_rounded, size: 14),
+                              label: Text('SAVE', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+                              onPressed: () => _deleteFile(idx),
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),
