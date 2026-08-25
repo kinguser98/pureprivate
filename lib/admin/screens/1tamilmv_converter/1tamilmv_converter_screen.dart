@@ -452,7 +452,7 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
     });
 
     String? seedrDirectUrl;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 25; i++) {
       await Future.delayed(const Duration(seconds: 3));
       try {
         final rootRes = await http.get(
@@ -487,12 +487,22 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
             );
             if (dlRes.statusCode == 200) {
               final dlData = json.decode(dlRes.body);
-              seedrDirectUrl = dlData['url']?.toString();
-              if (seedrDirectUrl != null && seedrDirectUrl.isNotEmpty) {
-                setState(() {
-                  _step3Text = 'Seedr Download Completed ✓';
-                });
-                break;
+              final candidateUrl = dlData['url']?.toString();
+              if (candidateUrl != null && candidateUrl.isNotEmpty) {
+                // Verify link is live and responsive on Seedr edge node
+                try {
+                  final headRes = await http.head(Uri.parse(candidateUrl)).timeout(const Duration(seconds: 4));
+                  if (headRes.statusCode == 200 || headRes.statusCode == 206 || headRes.statusCode == 302) {
+                    seedrDirectUrl = candidateUrl;
+                    setState(() {
+                      _step3Text = 'Seedr Download Ready ✓';
+                    });
+                    break;
+                  }
+                } catch (_) {
+                  // If head request fails or node is warming, retry in next tick
+                }
+                seedrDirectUrl = candidateUrl; // Keep candidate as fallback
               }
             }
           }
@@ -517,14 +527,14 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
     try {
       final stAddRes = await http.get(
         Uri.parse('https://api.strcloud.club/remotedl/add?login=$_stLogin&key=$_stKey&url=${Uri.encodeComponent(seedrDirectUrl)}'),
-      );
+      ).timeout(const Duration(seconds: 10));
       final stAddJson = json.decode(stAddRes.body);
       remoteId = stAddJson['result']?['id']?.toString();
 
       if (remoteId == null) {
         setState(() {
           _isConverting = false;
-          _step4Text = 'Streamtape remote upload add failed';
+          _step4Text = 'Streamtape remote upload add failed: ${stAddJson['msg'] ?? 'Unknown'}';
         });
         return;
       }
@@ -550,7 +560,15 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
             final loaded = (task['bytes_loaded'] as num?)?.toDouble() ?? 0;
             final total = (task['bytes_total'] as num?)?.toDouble() ?? 1;
             final pct = (loaded / (total == 0 ? 1 : total)).clamp(0.0, 1.0);
-            final status = task['status']?.toString();
+            final status = (task['status']?.toString() ?? '').toLowerCase();
+
+            if (status == 'error' || status == 'failed' || status == 'canceled' || status == 'dead') {
+              setState(() {
+                _isConverting = false;
+                _step4Text = 'Streamtape transfer error: Source link unreachable or node error.';
+              });
+              return;
+            }
 
             String? linkId;
             if (task['url'] != null && task['url'].toString().contains('/v/')) {
