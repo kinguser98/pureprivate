@@ -25,6 +25,10 @@ import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
+import 'package:private_cinema_mobile/data/movy_resolver.dart';
+import 'package:private_cinema_mobile/data/mkvbase_resolver.dart';
+import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
+import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -76,6 +80,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showCastle = true;
   bool _showTorrent = true;
   bool _showStremioAddon = true;
+  bool _showMovy = true;
+  bool _showMoviesdrive = true;
+  bool _showHdhub4u = true;
+  bool _showMkvbase = true;
   bool _showFilmu = true;
   bool _showVegamovies = true;
   bool _showCinejoy = true;
@@ -90,7 +98,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _sourceOrder = ['movy','moviesdrive','hdhub4u','mkvbase','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
+        _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
+        _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
+        _showMkvbase = cloud.containsKey('source_show_mkvbase') ? cloud['source_show_mkvbase'] == 'true' : (prefs.getBool('source_show_mkvbase') ?? true);
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
@@ -117,6 +129,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
       final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('movy')) mergedOrder.add('movy');
+      if (!mergedOrder.contains('moviesdrive')) mergedOrder.add('moviesdrive');
+      if (!mergedOrder.contains('hdhub4u')) mergedOrder.add('hdhub4u');
+      if (!mergedOrder.contains('mkvbase')) mergedOrder.add('mkvbase');
       if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
       if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
       if (!mergedOrder.contains('vegamovies')) mergedOrder.add('vegamovies');
@@ -466,6 +482,29 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       // Resolve Cinejoy Scraper
       tasks.add(_resolveCinejoy(title, movieYear, tmdbId: tmdbId, isSeries: _isSeriesSearch, season: season, episode: episode));
 
+      // Resolve Movy.bz Multi-Source
+      if (_showMovy && tmdbId.isNotEmpty) {
+        tasks.add(_resolveMovy(tmdbId, title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
+      // Resolve MoviesDrive Multi-Audio
+      if (_showMoviesdrive && title.isNotEmpty) {
+        final yearVal = int.tryParse(movieYear) ?? 2024;
+        tasks.add(_resolveMoviesdrive(title, yearVal, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
+      // Resolve HDHub4u Multi-Audio
+      if (_showHdhub4u && title.isNotEmpty) {
+        final yearVal = int.tryParse(movieYear) ?? 2024;
+        tasks.add(_resolveHdhub4u(title, yearVal, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
+      // Resolve MKVBase / HubCloud Multi-Audio
+      if (_showMkvbase && title.isNotEmpty) {
+        final yearVal = int.tryParse(movieYear) ?? 2024;
+        tasks.add(_resolveMkvbase(title, yearVal, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
       // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
       if (tmdbId != null && tmdbId.isNotEmpty) {
         final vidsrcUrl = _isSeriesSearch && season != null && episode != null
@@ -689,6 +728,89 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('Cinejoy resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveMovy(String tmdbId, String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+    if (!_showMovy) return;
+    try {
+      debugPrint('Movy.bz Resolver: Resolving streams for $title (TMDB: $tmdbId)...');
+      final streams = isSeries && season != null && episode != null
+          ? await MovyResolver.resolveSeriesStreams(tmdbId: tmdbId, season: season, episode: episode, title: title)
+          : await MovyResolver.resolveMovieStreams(tmdbId: tmdbId, title: title, year: year);
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Movy.bz resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveMkvbase(String title, int year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showMkvbase) return;
+    try {
+      debugPrint('MKVBase Resolver: Resolving streams for $title ($year)...');
+      final streams = await MkvbaseResolver.resolveStreams(
+        title: title,
+        year: year,
+        originalLanguage: originalLanguage,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('MKVBase resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveMoviesdrive(String title, int year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showMoviesdrive) return;
+    try {
+      debugPrint('MoviesDrive Resolver: Resolving streams for $title ($year)...');
+      final streams = await MoviesdriveResolver.resolveStreams(
+        title: title,
+        year: year,
+        originalLanguage: originalLanguage,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('MoviesDrive resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveHdhub4u(String title, int year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showHdhub4u) return;
+    try {
+      debugPrint('HDHub4u Resolver: Resolving streams for $title ($year)...');
+      final streams = await Hdhub4uResolver.resolveStreams(
+        title: title,
+        year: year,
+        originalLanguage: originalLanguage,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('HDHub4u resolution failed: $e');
     }
   }
 
@@ -1308,6 +1430,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           source.url.contains('player') ||
           source.url.contains('vidlink.pro') ||
           source.url.contains('woof.video') ||
+          source.url.contains('movy.bz') ||
           source.url.contains('streamtape') ||
           source.url.contains('dood') ||
           source.url.contains('mixdrop') ||
@@ -1315,7 +1438,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           source.url.contains('/e/');
 
       if (isWebEmbed ||
-          source.type == StreamSourceType.vidsrc) {
+          source.type == StreamSourceType.vidsrc ||
+          source.type == StreamSourceType.movy) {
         try {
           final resolvedUrl = await EmbedResolver.resolve(context, source.url);
           if (mounted) {
@@ -1367,13 +1491,37 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   Future<void> _handleStreamPlay(String streamUrl, Map<String, String>? headers, String movieTitle, String? posterPath) async {
     final prefs = await SharedPreferences.getInstance();
 
+    String targetUrl = streamUrl;
+    Map<String, String>? targetHeaders = headers;
+    final lower = targetUrl.toLowerCase();
+    final bool isEmbed = (lower.contains('movieboxonline.net') ||
+            lower.contains('movy.bz') ||
+            lower.contains('cinejoy.to') ||
+            lower.contains('vegamovie')) &&
+        !lower.endsWith('.mp4') &&
+        !lower.contains('.m3u8');
+
+    if (isEmbed && mounted) {
+      final resolved = await EmbedResolver.resolve(context, targetUrl);
+      if (resolved == null || resolved.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to extract stream from web source')),
+          );
+        }
+        return;
+      }
+      targetUrl = resolved;
+      targetHeaders = EmbedResolver.getHeadersForUrl(resolved, fallbackHeaders: headers);
+    }
+
     final hlsResult = await runHlsPreflight(
       context: context,
-      url: streamUrl,
+      url: targetUrl,
       movieTitle: movieTitle,
-      headers: headers,
+      headers: targetHeaders,
     );
-    final finalUrl = hlsResult?.url ?? streamUrl;
+    final finalUrl = hlsResult?.url ?? targetUrl;
 
     final tvDeviceId = prefs.getString('paired_tv_device_id');
 
@@ -2439,6 +2587,18 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       orderPos[_sourceOrder[i]] = i + 1;
     }
     int pos(String key) => orderPos[key] ?? 99;
+    final movyStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.movy)
+        .toList();
+    final moviesdriveStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.moviesdrive)
+        .toList();
+    final hdhub4uStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.hdhub4u)
+        .toList();
+    final mkvbaseStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.mkvbase)
+        .toList();
     final stravoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stravo)
         .toList();
@@ -2458,9 +2618,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         .toList();
     final vidnestStreams = filteredSources
         .where((s) => s.type == StreamSourceType.vidnest)
-        .toList();
-    final hdhub4uStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.hdhub4u)
         .toList();
     final castleStreams = filteredSources
         .where((s) => s.type == StreamSourceType.castle)
@@ -2498,6 +2655,82 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
+
+      // Movy.bz
+      if (_showMovy && (_resolvingStreams || movyStreams.isNotEmpty) && enabledKeys.contains('movy')) {
+        sourceWidgets['movy'] = _buildServerGroupCard(
+          title: '${pos('movy')}. Movy.bz Multi-Source',
+          subtitle: _resolvingStreams && movyStreams.isEmpty
+              ? 'Searching Movy servers...'
+              : (movyStreams.isNotEmpty
+                    ? '${movyStreams.length} Multi-Quality & Audio streams'
+                    : 'Not available'),
+          icon: Icons.auto_awesome_motion_rounded,
+          accentColor: const Color(0xFFE50914),
+          onTap: movyStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.movy,
+                ),
+        );
+      }
+
+      // MoviesDrive (FSL & HubCloud)
+      if (_showMoviesdrive && (_resolvingStreams || moviesdriveStreams.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
+        sourceWidgets['moviesdrive'] = _buildServerGroupCard(
+          title: '${pos('moviesdrive')}. MoviesDrive FSL',
+          subtitle: _resolvingStreams && moviesdriveStreams.isEmpty
+              ? 'Searching South & Hindi Fast Servers...'
+              : (moviesdriveStreams.isNotEmpty
+                    ? '${moviesdriveStreams.length} Multi-Audio 4K/1080p streams'
+                    : 'Not available'),
+          icon: Icons.flash_on_rounded,
+          accentColor: const Color(0xFF10B981),
+          onTap: moviesdriveStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.moviesdrive,
+                ),
+        );
+      }
+
+      // HDHub4u API
+      if (_showHdhub4u && (_resolvingStreams || hdhub4uStreams.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
+        sourceWidgets['hdhub4u'] = _buildServerGroupCard(
+          title: '${pos('hdhub4u')}. HDHub4u 4K & Dolby',
+          subtitle: _resolvingStreams && hdhub4uStreams.isEmpty
+              ? 'Searching Pingora index...'
+              : (hdhub4uStreams.isNotEmpty
+                    ? '${hdhub4uStreams.length} 4K/1080p Dolby streams'
+                    : 'Not available'),
+          icon: Icons.hd_rounded,
+          accentColor: const Color(0xFF06B6D4),
+          onTap: hdhub4uStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.hdhub4u,
+                ),
+        );
+      }
+
+      // MKVBase / HubCloud
+      if (_showMkvbase && (_resolvingStreams || mkvbaseStreams.isNotEmpty) && enabledKeys.contains('mkvbase')) {
+        sourceWidgets['mkvbase'] = _buildServerGroupCard(
+          title: '${pos('mkvbase')}. MKVBase / HubCloud',
+          subtitle: _resolvingStreams && mkvbaseStreams.isEmpty
+              ? 'Searching Indian Multi-Audio...'
+              : (mkvbaseStreams.isNotEmpty
+                    ? '${mkvbaseStreams.length} Multi-Audio 1080p/4K streams'
+                    : 'Not available'),
+          icon: Icons.video_collection_rounded,
+          accentColor: const Color(0xFFF59E0B),
+          onTap: mkvbaseStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.mkvbase,
+                ),
+        );
+      }
 
       // Stravo
       if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
@@ -2809,7 +3042,23 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final Color accentColor;
       final IconData iconData;
 
-      if (_activeGroupType == StreamSourceType.stravo) {
+      if (_activeGroupType == StreamSourceType.movy) {
+        activeList = movyStreams;
+        accentColor = const Color(0xFFE50914);
+        iconData = Icons.auto_awesome_motion_rounded;
+      } else if (_activeGroupType == StreamSourceType.moviesdrive) {
+        activeList = moviesdriveStreams;
+        accentColor = const Color(0xFF10B981);
+        iconData = Icons.flash_on_rounded;
+      } else if (_activeGroupType == StreamSourceType.hdhub4u) {
+        activeList = hdhub4uStreams;
+        accentColor = const Color(0xFF06B6D4);
+        iconData = Icons.hd_rounded;
+      } else if (_activeGroupType == StreamSourceType.mkvbase) {
+        activeList = mkvbaseStreams;
+        accentColor = const Color(0xFFF59E0B);
+        iconData = Icons.video_collection_rounded;
+      } else if (_activeGroupType == StreamSourceType.stravo) {
         activeList = stravoStreams;
         accentColor = Colors.cyan;
         iconData = Icons.rocket_launch_rounded;
@@ -3249,6 +3498,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 }
 
 enum StreamSourceType {
+  movy,
+  moviesdrive,
+  hdhub4u,
+  mkvbase,
   vidlink,
   stravo,
   torrent,
@@ -3257,7 +3510,6 @@ enum StreamSourceType {
   dvdplay,
   mallumv,
   vidnest,
-  hdhub4u,
   castle,
   cinemm,
   moviebox,

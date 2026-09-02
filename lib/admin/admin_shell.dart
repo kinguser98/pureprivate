@@ -22,6 +22,9 @@ import 'package:private_cinema_mobile/admin/screens/account_settings/account_set
 import 'package:private_cinema_mobile/admin/screens/ott_providers/ott_providers_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/link_checker/link_checker_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/1tamilmv_converter/1tamilmv_converter_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/browser/browser_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/cloud_accounts/cloud_accounts_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/downloads/download_manager_screen.dart';
 import 'package:private_cinema_mobile/admin/widgets/navigation/app_drawer.dart';
 
 class AdminShell extends StatelessWidget {
@@ -29,8 +32,12 @@ class AdminShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const ProviderScope(
-      child: _AdminApp(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {},
+      child: const ProviderScope(
+        child: _AdminApp(),
+      ),
     );
   }
 }
@@ -90,6 +97,12 @@ final _adminRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/ott-providers', builder: (context, state) => const OttProvidersScreen()),
           GoRoute(path: '/link-checker', builder: (context, state) => const LinkCheckerScreen()),
           GoRoute(path: '/1tamilmv-converter', builder: (context, state) => const OneTamilmvConverterScreen()),
+          GoRoute(path: '/browser', builder: (context, state) {
+            final url = state.uri.queryParameters['url'];
+            return BrowserScreen(initialUrl: url);
+          }),
+          GoRoute(path: '/cloud-accounts', builder: (context, state) => const CloudAccountsScreen()),
+          GoRoute(path: '/downloads', builder: (context, state) => const DownloadManagerScreen()),
         ],
       ),
     ],
@@ -113,10 +126,14 @@ class MainShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      key: DrawerProvider.scaffoldKey,
-      drawer: AppDrawer(currentRoute: currentRoute),
-      body: child,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {},
+      child: Scaffold(
+        key: DrawerProvider.scaffoldKey,
+        drawer: AppDrawer(currentRoute: currentRoute),
+        body: child,
+      ),
     );
   }
 }

@@ -394,6 +394,10 @@ class AdminApiClient {
       final response = await _dio.get(
         ApiConfig.streamtapeManager,
         queryParameters: {'trigger_keepalive': '1', 'api': '1'},
+        options: Options(
+          receiveTimeout: const Duration(seconds: 90),
+          sendTimeout: const Duration(seconds: 30),
+        ),
       );
       if (response.data is Map) {
         return Map<String, dynamic>.from(response.data);

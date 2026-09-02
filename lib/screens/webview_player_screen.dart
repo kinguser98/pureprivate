@@ -497,6 +497,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                       }
 
                       function autoClickPlay() {
+                        if (window.location.href.indexOf('cinejoy') !== -1) {
+                          return; // CineJoy loads player natively; do not spam clicks
+                        }
                         if (isWebtorLoading()) {
                           return;
                         }
@@ -588,8 +591,15 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 });
               },
               onLoadResource: (controller, resource) {
-                final urlStr = resource.url?.toString() ?? '';
+                String urlStr = resource.url?.toString() ?? '';
                 if (!_isEmbedOnly && _isValidVideoResource(resource.url)) {
+                  // Convert Peakstorm variant streams (index-sXXXp) to master.m3u8
+                  // so the native player gets all quality options
+                  final isPeakstormVariant = RegExp(r'index-s\d+p-v\d+-a\d+\.m3u8').hasMatch(urlStr);
+                  if (isPeakstormVariant) {
+                    urlStr = urlStr.replaceAll(RegExp(r'index-s\d+p-v\d+-a\d+\.m3u8'), 'master.m3u8');
+                    debugPrint('WebViewPlayerScreen: Converted to master HLS: $urlStr');
+                  }
                   debugPrint('WebViewPlayerScreen Intercepted Stream URL: $urlStr');
                   if (mounted && Navigator.of(context).canPop()) {
                     Navigator.of(context).pop(urlStr);
@@ -619,6 +629,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 // Allow original domain, trusted video partners, common video hosting, or internal schemas
                 if (host == originalHost || 
                     host.isEmpty || 
+                    host.contains('cinejoy') ||
                     host.contains('youtube') ||
                     host.contains('youtu.be') ||
                     host.contains('googlevideo') ||
@@ -643,6 +654,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                     host.contains('warezcdn') ||
                     host.contains('embedsu') ||
                     host.contains('vipr.im') ||
+                    host.contains('movy.bz') ||
+                    host.contains('peakstorm') ||
+                    host.contains('cloudflare') ||
                     host.contains('stream') ||
                     url.startsWith('data:')) {
                   return NavigationActionPolicy.ALLOW;

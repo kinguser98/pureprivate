@@ -3,16 +3,33 @@ import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/data/sync_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class MovieboxResolver {
-  static const String _apiBase = 'https://api3.aoneroom.com';
+  static const String _apiBase = 'https://api4.aoneroom.com';
   static const String _keyB64Default =
       'NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==';
 
+  static Future<String> _getApiBase() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final custom = prefs.getString('domain_moviebox');
+      if (custom != null && custom.trim().isNotEmpty) {
+        return custom.trim().replaceAll(RegExp(r'/+$'), '');
+      }
+      final cloud = await SyncService.fetchAppSettings();
+      if (cloud.containsKey('domain_moviebox') && cloud['domain_moviebox']!.trim().isNotEmpty) {
+        return cloud['domain_moviebox']!.trim().replaceAll(RegExp(r'/+$'), '');
+      }
+    } catch (_) {}
+    return _apiBase;
+  }
+
   static const Map<String, List<String>> _brandModels = {
-    'Samsung': ['SM-S918B', 'SM-A528B'],
-    'Xiaomi': ['2201117TI', 'Redmi Note 11'],
+    'Samsung': ['SM-S918B', 'SM-A528B', 'SM-M336B'],
+    'Xiaomi': ['2201117TI', 'M2012K11AI'],
     'Google': ['Pixel 7', 'Pixel 8'],
   };
 
@@ -84,7 +101,7 @@ class MovieboxResolver {
       'version_name': '3.0.03.0529.03',
       'version_code': 50020042,
       'os': 'android',
-      'os_version': '16',
+      'os_version': '15',
       'device_id': _deviceId,
       'install_store': 'ps',
       'gaid': 'd7578036d13336cc',
@@ -110,9 +127,9 @@ class MovieboxResolver {
       req.headers.set('x-client-token', _xClientToken(ts));
       req.headers.set('x-tr-signature', sig);
       req.headers.set(HttpHeaders.userAgentHeader,
-          'com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; $_model; Build/BP22.250325.006; Cronet/133.0.6876.3)');
+          'com.community.mbox.in/50020042 (Linux; U; Android 15; en_IN; $_model; Build/AP3A.240905.015; Cronet/133.0.6876.3)');
       req.headers.set('x-client-info', clientInfo);
-      req.headers.set('x-client-status', '0');
+      req.headers.set('x-client-status', '1');
       if (token != null && token.isNotEmpty) {
         req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       }
@@ -147,8 +164,9 @@ class MovieboxResolver {
 
   static Future<String?> _getBearerToken() async {
     if (_bearerToken != null) return _bearerToken;
-    const rankUrl =
-        '$_apiBase/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1';
+    final base = await _getApiBase();
+    final rankUrl =
+        '$base/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1';
     final (_, headers) = await _request(method: 'GET', url: rankUrl);
 
     final xUser = headers['x-user'];
@@ -177,10 +195,11 @@ class MovieboxResolver {
         return [];
       }
 
+      final base = await _getApiBase();
       final searchBody = jsonEncode({'page': 1, 'perPage': 20, 'keyword': title});
       final (searchRes, _) = await _request(
         method: 'POST',
-        url: '$_apiBase/wefeed-mobile-bff/subject-api/search/v2',
+        url: '$base/wefeed-mobile-bff/subject-api/search/v2',
         body: searchBody,
         token: token,
       );
@@ -288,6 +307,31 @@ class MovieboxResolver {
     }
   }
 
+  static bool _isUpdateVideo(String url) {
+    if (url.isEmpty) return false;
+    final u = url.toLowerCase();
+    return u.contains('update') ||
+        u.contains('upgrade') ||
+        u.contains('notice') ||
+        u.contains('force_up') ||
+        u.contains('forceup') ||
+        u.contains('version_limit') ||
+        u.contains('ver_limit') ||
+        u.contains('low_version') ||
+        u.contains('lowversion') ||
+        u.contains('outdated') ||
+        u.contains('please_update') ||
+        u.contains('app_update') ||
+        u.contains('newversion') ||
+        u.contains('new_version') ||
+        u.contains('version_check') ||
+        u.contains('versiongate') ||
+        u.contains('ver_gate') ||
+        u.contains('needupgrade') ||
+        u.contains('need_upgrade') ||
+        u.contains('needupdate');
+  }
+
   static Future<List<StreamSourceInfo>> _streams(
     Map<String, dynamic> subject,
     String token,
@@ -300,60 +344,103 @@ class MovieboxResolver {
     final se = isSeries ? (season ?? 1) : 0;
     final ep = isSeries ? (episode ?? 1) : 0;
     final title = subject['title']?.toString() ?? 'MovieBox';
+    final base = await _getApiBase();
 
-    final (playRes, _) = await _request(
-      method: 'GET',
-      url: '$_apiBase/wefeed-mobile-bff/subject-api/play-info?subjectId=$sid&se=$se&ep=$ep',
-      token: token,
-    );
+    // 1. Fetch subject details to extract all multi-language dubs
+    final subjectIds = <Map<String, String>>[];
+    try {
+      final (detailRes, _) = await _request(
+        method: 'GET',
+        url: '$base/wefeed-mobile-bff/subject-api/get?subjectId=$sid',
+        token: token,
+      );
+      if (detailRes != null && detailRes['data'] is Map) {
+        final dubs = detailRes['data']['dubs'] as List? ?? [];
+        for (final dub in dubs) {
+          if (dub is Map) {
+            final dubSid = dub['subjectId']?.toString() ?? '';
+            final lang = dub['lanName']?.toString() ?? 'Dub';
+            if (dubSid.isNotEmpty && !lang.toLowerCase().contains('sub')) {
+              subjectIds.add({'id': dubSid, 'lang': lang});
+            }
+          }
+        }
+      }
+    } catch (_) {}
 
-    if (playRes == null || playRes['code'] != 0) {
-      debugPrint('MovieboxResolver: play-info failed for $sid code=${playRes?['code']}');
-      return [];
+    if (subjectIds.isEmpty) {
+      subjectIds.add({'id': sid, 'lang': 'Original'});
     }
 
-    final data = playRes['data'] as Map? ?? {};
     final sources = <StreamSourceInfo>[];
-
     Map<String, String> baseHeaders() => {
-      'Referer': _apiBase,
-      'User-Agent': 'com.community.mbox.in/50020042 (Linux; U; Android 16; en_IN; MovieBox; Build/BP22.250325.006; Cronet/133.0.6876.3)',
+      'Referer': base,
+      'User-Agent': 'com.community.mbox.in/50020042 (Linux; U; Android 15; en_IN; MovieBox; Build/AP3A.240905.015; Cronet/133.0.6876.3)',
     };
 
-    // streams[] format
-    for (final item in (data['streams'] as List? ?? [])) {
-      if (item is! Map) continue;
-      final url = item['url']?.toString() ?? '';
-      if (url.isEmpty) continue;
-      final resStr = item['resolutions']?.toString() ?? '';
-      final res = resStr.isNotEmpty ? '${resStr.split(',').first.trim()}p' : 'HD';
-      final fmt = item['format']?.toString() ?? _fmt(url);
-      final codec = item['codecName']?.toString() ?? '';
-      final size = _size(item['size']);
-      final label = '$title • $res • $fmt${codec.isNotEmpty ? " ($codec)" : ""}${size != null ? " ($size)" : ""}';
-      final h = baseHeaders();
-      final cookie = item['signCookie']?.toString();
-      if (cookie != null && cookie.isNotEmpty) h['Cookie'] = cookie;
-      sources.add(StreamSourceInfo(name: label, url: url, type: StreamSourceType.moviebox, headers: h));
-    }
+    // 2. Query play-info for each audio dub
+    for (final dubItem in subjectIds) {
+      final currentSid = dubItem['id']!;
+      final lang = dubItem['lang']!;
 
-    // resourceDetectors format
-    if (sources.isEmpty) {
-      for (final det in (data['resourceDetectors'] as List? ?? [])) {
-        if (det is! Map) continue;
-        for (final v in (det['resolutionList'] as List? ?? [])) {
-          if (v is! Map) continue;
-          final url = v['resourceLink']?.toString() ?? '';
-          if (url.isEmpty) continue;
-          sources.add(StreamSourceInfo(
-            name: '$title • ${v['resolution'] ?? 'HD'} • ${_fmt(url)}',
-            url: url, type: StreamSourceType.moviebox, headers: baseHeaders(),
-          ));
+      final (playRes, _) = await _request(
+        method: 'GET',
+        url: '$base/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSid&se=$se&ep=$ep',
+        token: token,
+      );
+
+      if (playRes == null || playRes['code'] != 0) continue;
+      final data = playRes['data'] as Map? ?? {};
+      if (data['needUpdate'] == true || data['forceUpdate'] == true) continue;
+
+      // streams[] format
+      for (final item in (data['streams'] as List? ?? [])) {
+        if (item is! Map) continue;
+        final url = item['url']?.toString() ?? '';
+        if (url.isEmpty || _isUpdateVideo(url)) continue;
+
+        final resStr = item['resolutions']?.toString() ?? '';
+        final res = resStr.isNotEmpty ? '${resStr.split(',').first.trim()}p' : 'HD';
+        final fmt = item['format']?.toString() ?? _fmt(url);
+        final codec = item['codecName']?.toString() ?? '';
+        final size = _size(item['size']);
+        final label = '$title • $lang • $res • $fmt${codec.isNotEmpty ? " ($codec)" : ""}${size != null ? " ($size)" : ""}';
+        
+        final h = baseHeaders();
+        final cookie = item['signCookie']?.toString();
+        if (cookie != null && cookie.isNotEmpty) h['Cookie'] = cookie;
+        
+        sources.add(StreamSourceInfo(
+          name: label,
+          url: url,
+          type: StreamSourceType.moviebox,
+          quality: res,
+          headers: h,
+        ));
+      }
+
+      // resourceDetectors format
+      if (sources.isEmpty) {
+        for (final det in (data['resourceDetectors'] as List? ?? [])) {
+          if (det is! Map) continue;
+          for (final v in (det['resolutionList'] as List? ?? [])) {
+            if (v is! Map) continue;
+            final url = v['resourceLink']?.toString() ?? '';
+            if (url.isEmpty || _isUpdateVideo(url)) continue;
+            final res = v['resolution']?.toString() ?? 'HD';
+            sources.add(StreamSourceInfo(
+              name: '$title • $lang • $res • ${_fmt(url)}',
+              url: url,
+              type: StreamSourceType.moviebox,
+              quality: res,
+              headers: baseHeaders(),
+            ));
+          }
         }
       }
     }
 
-    debugPrint('MovieboxResolver: ${sources.length} streams for "$title"');
+    debugPrint('MovieboxResolver: ${sources.length} valid streams for "$title"');
     return sources;
   }
 

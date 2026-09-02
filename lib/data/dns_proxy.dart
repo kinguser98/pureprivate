@@ -127,7 +127,13 @@ class CustomDnsProxy {
         final list = await InternetAddress.lookup(host).timeout(const Duration(seconds: 2));
         for (final addr in list) {
           final ip = addr.address;
-          if (ip != '0.0.0.0' && ip != '::' && !ip.startsWith('218.248.')) {
+          // Filter out: BSNL/ISP block page IPs, loopback (Private DNS block returns 127.0.0.1),
+          // and unspecified addresses
+          if (ip != '0.0.0.0' &&
+              ip != '127.0.0.1' &&
+              ip != '::1' &&
+              ip != '::' &&
+              !ip.startsWith('218.248.')) {
             ips.add(ip);
           }
         }
@@ -264,10 +270,10 @@ class CustomDnsProxy {
       targetSocket = await _connectToHost(host, portVal);
       
       debugPrint('CustomDnsProxy CONNECT: Established TCP to $host:$portVal. Detaching client socket.');
-      clientSocket = await request.response.detachSocket();
-      clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: CustomDnsProxy\r\n\r\n');
+      // MUST use writeHeaders: false to prevent HttpServer from writing default headers
+      clientSocket = await request.response.detachSocket(writeHeaders: false);
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       await clientSocket.flush();
-
 
       // Setup bi-directional tunnel piping
       clientSocket.listen(
@@ -322,6 +328,57 @@ class CustomDnsProxy {
     final client = _getHttpClient();
     
     try {
+      // Virtual Multi-Quality Master Playlist for peakstorm / movy variant streams
+      if (request.uri.path == '/virtual_master.m3u8' || request.uri.path == '/master.m3u8') {
+        final targetUrl = request.uri.queryParameters['url'] ?? '';
+        if (targetUrl.isNotEmpty) {
+          final uri = Uri.parse(targetUrl);
+          final match = RegExp(r'index-s(\d+p)-v(\d+)-a(\d+)\.m3u8').firstMatch(uri.path);
+          if (match != null) {
+            final v = match.group(2)!;
+            final a = match.group(3)!;
+            final basePath = uri.path.substring(0, match.start);
+            
+            final qualities = [
+              {'q': '2160p', 'res': '3840x2160', 'bw': '12000000', 'label': '4K (2160p)'},
+              {'q': '1080p', 'res': '1920x1080', 'bw': '5000000', 'label': '1080p (Full HD)'},
+              {'q': '720p', 'res': '1280x720', 'bw': '2500000', 'label': '720p (HD)'},
+              {'q': '480p', 'res': '854x480', 'bw': '1200000', 'label': '480p (SD)'},
+            ];
+            
+            final buf = StringBuffer();
+            buf.writeln('#EXTM3U');
+            buf.writeln('#EXT-X-VERSION:6');
+            
+            final headersJson = jsonEncode({
+              'Referer': 'https://www.movy.bz/',
+              'Origin': 'https://www.movy.bz',
+            });
+            
+            for (final item in qualities) {
+              final q = item['q']!;
+              final res = item['res']!;
+              final bw = item['bw']!;
+              final subStreamPath = '${basePath}index-s$q-v$v-a$a.m3u8';
+              final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+              
+              final proxySubStream = 'http://127.0.0.1:$port/proxy/${uri.scheme}/$hostWithPort$subStreamPath?local_proxy_headers=${Uri.encodeComponent(headersJson)}';
+              
+              buf.writeln('#EXT-X-STREAM-INF:BANDWIDTH=$bw,RESOLUTION=$res,NAME="$q"');
+              buf.writeln(proxySubStream);
+            }
+            
+            final bytes = utf8.encode(buf.toString());
+            request.response.statusCode = 200;
+            request.response.headers.contentType = ContentType('application', 'vnd.apple.mpegurl');
+            request.response.contentLength = bytes.length;
+            request.response.add(bytes);
+            await request.response.close();
+            return;
+          }
+        }
+      }
+
       final pathSegments = request.uri.pathSegments;
       if (pathSegments.length >= 3 && pathSegments[0] == 'proxy') {
         final targetScheme = pathSegments[1];
@@ -811,10 +868,10 @@ class CustomDnsProxy {
 
   void _cleanup(Socket? s1, Socket? s2) {
     try {
-      s1?.close();
+      s1?.destroy();
     } catch (_) {}
     try {
-      s2?.close();
+      s2?.destroy();
     } catch (_) {}
   }
 }

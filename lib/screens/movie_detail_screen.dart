@@ -38,6 +38,12 @@ import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
+import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
+import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
+import 'package:private_cinema_mobile/data/movy_resolver.dart';
+import 'package:private_cinema_mobile/data/mkvbase_resolver.dart';
+import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
+import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 
@@ -75,17 +81,27 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveNetmirrorSources = [];
   List<StreamSource> _liveCinemmSources = [];
   List<StreamSource> _liveMovieboxSources = [];
+  List<StreamSource> _liveMovySources = [];
+  List<StreamSource> _liveMoviesdriveSources = [];
+  List<StreamSource> _liveHdhub4uSources = [];
+  List<StreamSource> _liveMkvbaseSources = [];
   List<StreamSource> _liveStalkerSources = [];
   List<StreamSource> _liveStravoSources = [];
   List<StreamSource> _liveStremioSources = [];
   List<StreamSource> _liveNuveoSources = [];
   List<StreamSource> _liveCastleSources = [];
   List<StreamSource> _liveTelegramSources = [];
+  List<StreamSource> _liveVegamoviesSources = [];
+  List<StreamSource> _liveCinejoySources = [];
 
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
   bool _resolvingMoviebox = false;
+  bool _resolvingMovy = false;
+  bool _resolvingMoviesdrive = false;
+  bool _resolvingHdhub4u = false;
+  bool _resolvingMkvbase = false;
   bool _resolvingStalker = false;
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
@@ -93,7 +109,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingCastle = false;
   bool _resolvingTorrent = false;
   bool _resolvingTelegram = false;
+  bool _resolvingVegamovies = false;
+  bool _resolvingCinejoy = false;
 
+  bool _showMovy = true;
+  bool _showMoviesdrive = true;
+  bool _showHdhub4u = true;
+  bool _showMkvbase = true;
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showCinemm = true;
@@ -105,6 +127,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showNuveoAddon = true;
   bool _showCastle = true;
   bool _showTelegram = true;
+  bool _showVegamovies = true;
+  bool _showCinejoy = true;
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [];
   StateSetter? _modalSetState;
@@ -357,6 +381,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
+        _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
+        _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
+        _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
+        _showMkvbase = cloud.containsKey('source_show_mkvbase') ? cloud['source_show_mkvbase'] == 'true' : (prefs.getBool('source_show_mkvbase') ?? true);
         _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
         _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
         _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
@@ -381,6 +409,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
       final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('movy')) mergedOrder.add('movy');
+      if (!mergedOrder.contains('moviesdrive')) mergedOrder.add('moviesdrive');
+      if (!mergedOrder.contains('hdhub4u')) mergedOrder.add('hdhub4u');
+      if (!mergedOrder.contains('mkvbase')) mergedOrder.add('mkvbase');
       if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
       setState(() => _sourceOrder = mergedOrder);
     }
@@ -423,6 +455,181 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (_showTelegram) {
       _resolveLiveTelegram();
+    }
+
+    if (_showVegamovies) {
+      _resolveLiveVegamovies(movie.title, movie.year?.toString() ?? '2026');
+    }
+
+    if (_showCinejoy) {
+      _resolveLiveCinejoy(movie.title, movie.tmdbId);
+    }
+
+    final tmdbId = movie.tmdbId?.toString() ?? movie.id;
+    if (_showMovy && tmdbId.isNotEmpty && tmdbId != '0' && tmdbId != 'null') {
+      _resolveLiveMovy(tmdbId);
+    }
+
+    if (_showMoviesdrive && movie.title.isNotEmpty) {
+      _resolveLiveMoviesdrive(movie.title, movie.year?.toString() ?? '2024');
+    }
+
+    if (_showHdhub4u && movie.title.isNotEmpty) {
+      _resolveLiveHdhub4u(movie.title, movie.year?.toString() ?? '2024');
+    }
+
+    if (_showMkvbase && movie.title.isNotEmpty) {
+      _resolveLiveMkvbase(movie.title, movie.year?.toString() ?? '2024');
+    }
+  }
+
+  Future<void> _resolveLiveMovy(String tmdbId) async {
+    if (mounted) setState(() => _resolvingMovy = true);
+    try {
+      final infos = await MovyResolver.resolveMovieStreams(
+        tmdbId: tmdbId,
+        title: movie.title,
+        year: movie.year?.toString(),
+      );
+      if (mounted) {
+        setState(() {
+          _liveMovySources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+            quality: info.quality,
+          )).toList();
+          _resolvingMovy = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Movy.bz stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingMovy = false);
+    }
+  }
+
+  Future<void> _resolveLiveMoviesdrive(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingMoviesdrive = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2024;
+      final infos = await MoviesdriveResolver.resolveStreams(
+        title: title,
+        year: y,
+      );
+      if (mounted) {
+        setState(() {
+          _liveMoviesdriveSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+            quality: info.quality,
+          )).toList();
+          _resolvingMoviesdrive = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('MoviesDrive stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingMoviesdrive = false);
+    }
+  }
+
+  Future<void> _resolveLiveHdhub4u(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingHdhub4u = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2024;
+      final infos = await Hdhub4uResolver.resolveStreams(
+        title: title,
+        year: y,
+      );
+      if (mounted) {
+        setState(() {
+          _liveHdhub4uSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+            quality: info.quality,
+          )).toList();
+          _resolvingHdhub4u = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('HDHub4u stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingHdhub4u = false);
+    }
+  }
+
+  Future<void> _resolveLiveMkvbase(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingMkvbase = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2024;
+      final infos = await MkvbaseResolver.resolveStreams(
+        title: title,
+        year: y,
+      );
+      if (mounted) {
+        setState(() {
+          _liveMkvbaseSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+            quality: info.quality,
+          )).toList();
+          _resolvingMkvbase = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('MKVBase stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingMkvbase = false);
+    }
+  }
+
+  Future<void> _resolveLiveVegamovies(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingVegamovies = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2026;
+      final infos = await VegamoviesResolver.resolveStreams(
+        title: title,
+        year: y,
+        originalLanguage: movie.language,
+      );
+      if (mounted) {
+        setState(() {
+          _liveVegamoviesSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+          )).toList();
+          _resolvingVegamovies = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Vegamovies stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingVegamovies = false);
+    }
+  }
+
+  Future<void> _resolveLiveCinejoy(String title, String? tmdbId) async {
+    if (mounted) setState(() => _resolvingCinejoy = true);
+    try {
+      final y = movie.year ?? 2026;
+      final infos = await CinejoyResolver.resolveStreams(
+        title: title,
+        year: y,
+        tmdbId: tmdbId,
+      );
+      if (mounted) {
+        setState(() {
+          _liveCinejoySources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+          )).toList();
+          _resolvingCinejoy = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Cinejoy stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingCinejoy = false);
     }
   }
 
@@ -2238,8 +2445,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return;
     }
 
+    final sLower = source.toLowerCase();
+    final nameLower = (sourceName ?? '').toLowerCase();
+    final isWebStream = nameLower.contains('vegamovies') ||
+        nameLower.contains('cinejoy') ||
+        nameLower.contains('movy') ||
+        nameLower.contains('mkvbase') ||
+        nameLower.contains('moviesdrive') ||
+        nameLower.contains('hdhub4u') ||
+        nameLower.contains('moviebox') ||
+        sLower.contains('moviebox') ||
+        sLower.contains('movy.bz') ||
+        sLower.contains('mkvbase') ||
+        sLower.contains('moviesdrive') ||
+        sLower.contains('hdhub4u') ||
+        sLower.contains('slast') ||
+        sLower.contains('vegamovie') ||
+        sLower.contains('nexdrive') ||
+        sLower.contains('cinejoy') ||
+        sLower.contains('vcloud') ||
+        sLower.contains('fastcloud') ||
+        sLower.contains('gdflix') ||
+        sLower.contains('fsl') ||
+        sLower.contains('hubcloud');
+
     bool isYoutube = false;
-    bool isEmbed = false;
+    bool isEmbed = isWebStream;
 
     if (sourceName != null && sourceName.toLowerCase().startsWith('stravo:')) {
       isYoutube = false;
@@ -2247,18 +2478,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     } else if (sourceName != null && sourceName.isNotEmpty) {
       if (sourceName.toLowerCase() == 'youtube') {
         isYoutube = true;
-      } else if (sourceName.toLowerCase() == 'embed') {
+      } else if (sourceName.toLowerCase() == 'embed' || isWebStream) {
         isEmbed = true;
       } else if (sourceName.toLowerCase() == 'mp4/mkv') {
         isYoutube = false;
         isEmbed = false;
       } else {
         isYoutube = _isYoutubeUrl(source);
-        isEmbed = _isEmbedUrl(source);
+        isEmbed = isWebStream || _isEmbedUrl(source);
       }
     } else {
       isYoutube = _isYoutubeUrl(source);
-      isEmbed = _isEmbedUrl(source);
+      isEmbed = isWebStream || _isEmbedUrl(source);
     }
 
     if (isYoutube) {
@@ -2317,15 +2548,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
         return;
       }
+
       // Attempt to resolve the direct stream link in background off-screen webview
       final resolvedUrl = await EmbedResolver.resolve(context, source);
       if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
-        // Always provide VidSrc/VidsrcMe referer headers for resolved embeds to satisfy CDN host security
         final headers = EmbedResolver.getHeadersForUrl(
           resolvedUrl,
           fallbackHeaders: {
-            'Referer': 'https://vidsrcme.ru/',
-            'Origin': 'https://vidsrcme.ru',
+            'Referer': 'https://slast430did.com/',
+            'Origin': 'https://slast430did.com',
           },
         );
         _play(
@@ -2485,6 +2716,126 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             int pos(String key) => orderPos[key] ?? 99;
 
             final Map<String, Widget> sourceWidgets = {};
+
+            // Movy.bz Multi-Source
+            if ((_resolvingMovy || _liveMovySources.isNotEmpty) && enabledKeys.contains('movy')) {
+              sourceWidgets['movy'] = _buildSourceTile(
+                icon: Icons.auto_awesome_motion_rounded,
+                title: '${pos('movy')}. Movy.bz Multi-Source',
+                subtitle: _resolvingMovy
+                    ? 'Searching Movy...'
+                    : '${_liveMovySources.length} Multi-Quality & Audio streams',
+                disabled: _resolvingMovy,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMovySources.length == 1) {
+                    _playWithResolution(
+                      _liveMovySources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMovySources.first.name,
+                      headers: _liveMovySources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVY.BZ MULTI-SOURCE STREAMS',
+                      _liveMovySources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // MoviesDrive (FSL & HubCloud)
+            if ((_resolvingMoviesdrive || _liveMoviesdriveSources.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
+              sourceWidgets['moviesdrive'] = _buildSourceTile(
+                icon: Icons.flash_on_rounded,
+                title: '${pos('moviesdrive')}. MoviesDrive FSL',
+                subtitle: _resolvingMoviesdrive
+                    ? 'Searching South & Hindi Fast Servers...'
+                    : '${_liveMoviesdriveSources.length} Multi-Audio 4K/1080p streams',
+                disabled: _resolvingMoviesdrive,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMoviesdriveSources.length == 1) {
+                    _playWithResolution(
+                      _liveMoviesdriveSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMoviesdriveSources.first.name,
+                      headers: _liveMoviesdriveSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVIESDRIVE FAST STREAMS',
+                      _liveMoviesdriveSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // HDHub4u API
+            if ((_resolvingHdhub4u || _liveHdhub4uSources.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
+              sourceWidgets['hdhub4u'] = _buildSourceTile(
+                icon: Icons.hd_rounded,
+                title: '${pos('hdhub4u')}. HDHub4u 4K & Dolby',
+                subtitle: _resolvingHdhub4u
+                    ? 'Searching Pingora index...'
+                    : '${_liveHdhub4uSources.length} 4K/1080p Dolby streams',
+                disabled: _resolvingHdhub4u,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveHdhub4uSources.length == 1) {
+                    _playWithResolution(
+                      _liveHdhub4uSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveHdhub4uSources.first.name,
+                      headers: _liveHdhub4uSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'HDHUB4U 4K & DOLBY STREAMS',
+                      _liveHdhub4uSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // MKVBase / HubCloud
+            if ((_resolvingMkvbase || _liveMkvbaseSources.isNotEmpty) && enabledKeys.contains('mkvbase')) {
+              sourceWidgets['mkvbase'] = _buildSourceTile(
+                icon: Icons.video_collection_rounded,
+                title: '${pos('mkvbase')}. MKVBase / HubCloud',
+                subtitle: _resolvingMkvbase
+                    ? 'Searching Indian Multi-Audio...'
+                    : '${_liveMkvbaseSources.length} Multi-Audio 1080p/4K streams',
+                disabled: _resolvingMkvbase,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMkvbaseSources.length == 1) {
+                    _playWithResolution(
+                      _liveMkvbaseSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMkvbaseSources.first.name,
+                      headers: _liveMkvbaseSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MKVBASE MULTI-AUDIO STREAMS',
+                      _liveMkvbaseSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
 
             // 2. Vidlink Server
             if ((_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
@@ -2744,6 +3095,66 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                      );
                    }
                  },
+              );
+            }
+
+            // Vegamovies Server
+            if ((_resolvingVegamovies || _liveVegamoviesSources.isNotEmpty) && enabledKeys.contains('vegamovies')) {
+              sourceWidgets['vegamovies'] = _buildSourceTile(
+                icon: Icons.movie_creation_rounded,
+                title: '${pos('vegamovies')}. Vegamovies.se Server',
+                subtitle: _resolvingVegamovies
+                    ? 'Searching Vegamovies...'
+                    : '${_liveVegamoviesSources.length} links available',
+                disabled: _resolvingVegamovies,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveVegamoviesSources.length == 1) {
+                    _playWithResolution(
+                      _liveVegamoviesSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveVegamoviesSources.first.name,
+                      headers: _liveVegamoviesSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'VEGAMOVIES STREAMS',
+                      _liveVegamoviesSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // Cinejoy Server
+            if ((_resolvingCinejoy || _liveCinejoySources.isNotEmpty) && enabledKeys.contains('cinejoy')) {
+              sourceWidgets['cinejoy'] = _buildSourceTile(
+                icon: Icons.play_circle_fill_rounded,
+                title: '${pos('cinejoy')}. Cinejoy.to Server',
+                subtitle: _resolvingCinejoy
+                    ? 'Searching Cinejoy...'
+                    : '${_liveCinejoySources.length} servers available',
+                disabled: _resolvingCinejoy,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveCinejoySources.length == 1) {
+                    _playWithResolution(
+                      _liveCinejoySources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveCinejoySources.first.name,
+                      headers: _liveCinejoySources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'CINEJOY SERVERS',
+                      _liveCinejoySources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
               );
             }
  

@@ -95,6 +95,87 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
             }
         }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.goxio.mob/media_saver").setMethodCallHandler { call, result ->
+            if (call.method == "saveToGallery") {
+                val filePath = call.argument<String>("filePath")
+                val filename = call.argument<String>("filename") ?: "media_file"
+                val isVideo = call.argument<Boolean>("isVideo") ?: true
+
+                if (filePath != null) {
+                    try {
+                        val sourceFile = java.io.File(filePath)
+                        if (!sourceFile.exists()) {
+                            result.error("FILE_NOT_FOUND", "Source file does not exist", null)
+                            return@setMethodCallHandler
+                        }
+
+                        val contentValues = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                            if (isVideo) {
+                                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_MOVIES + "/GoXio")
+                                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                                }
+                            } else {
+                                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/GoXio")
+                                    put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+                                }
+                            }
+                        }
+
+                        val collection = if (isVideo) {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                android.provider.MediaStore.Video.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                            } else {
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                            }
+                        } else {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                            } else {
+                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            }
+                        }
+
+                        val uri = contentResolver.insert(collection, contentValues)
+                        if (uri != null) {
+                            contentResolver.openOutputStream(uri)?.use { out ->
+                                java.io.FileInputStream(sourceFile).use { input ->
+                                    input.copyTo(out)
+                                }
+                            }
+
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                contentValues.clear()
+                                contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                                contentResolver.update(uri, contentValues, null, null)
+                            }
+
+                            android.media.MediaScannerConnection.scanFile(
+                                applicationContext,
+                                arrayOf(sourceFile.absolutePath),
+                                null,
+                                null
+                            )
+
+                            result.success(true)
+                        } else {
+                            result.error("INSERT_FAILED", "Failed to create MediaStore entry", null)
+                        }
+                    } catch (e: Exception) {
+                        result.error("SAVE_FAILED", e.message, null)
+                    }
+                } else {
+                    result.error("INVALID_PATH", "File path cannot be null", null)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
     }
 
     private fun enterPipMode(): Boolean {

@@ -71,5 +71,13 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>GoXio needs access to your photos to save and view downloaded videos and media.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>GoXio needs permission to save downloaded movies and videos to your photo gallery.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 </dict>
 </plist>

@@ -64,6 +64,28 @@ void main() async {
   await dnsProxy.start();
   if (dnsProxy.port != null) {
     HttpOverrides.global = MyHttpOverrides(dnsProxy.port!);
+
+    if (Platform.isAndroid) {
+      try {
+        await ProxyController.instance().setProxyOverride(
+          settings: ProxySettings(
+            proxyRules: [
+              ProxyRule(
+                url: 'http://127.0.0.1:${dnsProxy.port}',
+              ),
+            ],
+            bypassRules: [
+              'localhost',
+              '127.0.0.1',
+              '::1',
+            ],
+          ),
+        );
+        debugPrint('WebView proxy set to 127.0.0.1:${dnsProxy.port}');
+      } catch (e) {
+        debugPrint('Failed to set WebView proxy: $e');
+      }
+    }
   }
 
   
