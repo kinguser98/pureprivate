@@ -42,6 +42,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _stravoUrlCtrl = TextEditingController();
   final _vegamoviesUrlCtrl = TextEditingController();
   final _cinejoyUrlCtrl = TextEditingController();
+  final _movieboxUrlCtrl = TextEditingController();
+  final _moviesdriveUrlCtrl = TextEditingController();
+  final _hdhub4uUrlCtrl = TextEditingController();
+  final _mkvbaseUrlCtrl = TextEditingController();
+  final _movyUrlCtrl = TextEditingController();
   final _netmirrorDomainsCtrl = TextEditingController();
   final _seedrTokenCtrl = TextEditingController();
   final _epgUrlsCtrl = TextEditingController();
@@ -68,6 +73,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _stravoUrlCtrl.dispose();
     _vegamoviesUrlCtrl.dispose();
     _cinejoyUrlCtrl.dispose();
+    _movieboxUrlCtrl.dispose();
+    _moviesdriveUrlCtrl.dispose();
+    _hdhub4uUrlCtrl.dispose();
+    _mkvbaseUrlCtrl.dispose();
+    _movyUrlCtrl.dispose();
     _netmirrorDomainsCtrl.dispose();
     _seedrTokenCtrl.dispose();
     _epgUrlsCtrl.dispose();
@@ -88,7 +98,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'moviebox', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
+      final allSources = ['movy', 'moviesdrive', 'hdhub4u', 'mkvbase', 'cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'moviebox', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
       final List<String> enabledSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
@@ -176,8 +186,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       // 10. Parse Provider Addons, EPG & External API Keys
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
-      _vegamoviesUrlCtrl.text = settingsMap['domain_vegamovies'] ?? 'https://vegamovies.se';
+       _vegamoviesUrlCtrl.text = settingsMap['domain_vegamovies'] ?? 'https://vegamovies.se';
       _cinejoyUrlCtrl.text = settingsMap['domain_cinejoy'] ?? 'https://cinejoy.to';
+      _movieboxUrlCtrl.text = settingsMap['domain_moviebox'] ?? 'https://api4.aoneroom.com';
+      _moviesdriveUrlCtrl.text = settingsMap['domain_moviesdrive'] ?? 'https://new3.moviesdrive.christmas';
+      _hdhub4uUrlCtrl.text = settingsMap['domain_hdhub4u'] ?? 'https://new5.hdhub4u.cl';
+      _mkvbaseUrlCtrl.text = settingsMap['domain_mkvbase'] ?? 'https://mkvbase.site';
+      _movyUrlCtrl.text = settingsMap['domain_movy'] ?? 'https://movy.bz';
       _netmirrorDomainsCtrl.text = settingsMap['netmirror_domains'] ?? '';
       _seedrTokenCtrl.text = settingsMap['seedr_token'] ?? '';
       _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
@@ -205,6 +220,10 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
 
   String _getSourceLabel(String key) {
     switch (key) {
+      case 'movy': return 'Movy.bz Multi-Source (Multi-Audio & Multi-Quality)';
+      case 'moviesdrive': return 'MoviesDrive FSL (Fast Server, R2 & S3 Multi-Audio)';
+      case 'hdhub4u': return 'HDHub4u (4K UHD & Dolby Atmos Multi-Audio)';
+      case 'mkvbase': return 'MKVBase / HubCloud (Indian Multi-Audio 1080p/4K)';
       case 'vidlink': return 'VidLink Server';
       case 'netmirror': return 'NetMirror Server';
       case 'cinemm': return 'CineMM Server';
@@ -337,6 +356,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
         'domain_cinejoy': _cinejoyUrlCtrl.text.trim(),
+        'domain_moviebox': _movieboxUrlCtrl.text.trim(),
+        'domain_moviesdrive': _moviesdriveUrlCtrl.text.trim(),
+        'domain_hdhub4u': _hdhub4uUrlCtrl.text.trim(),
+        'domain_mkvbase': _mkvbaseUrlCtrl.text.trim(),
+        'domain_movy': _movyUrlCtrl.text.trim(),
         'netmirror_domains': _netmirrorDomainsCtrl.text.trim(),
         'seedr_token': _seedrTokenCtrl.text.trim(),
         'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
@@ -1318,6 +1342,41 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Cinejoy Domain',
                 controller: _cinejoyUrlCtrl,
                 hint: 'https://cinejoy.to',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.video_collection_rounded,
+                label: 'MovieBox API / Mirror Domain',
+                controller: _movieboxUrlCtrl,
+                hint: 'https://api4.aoneroom.com',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.flash_on_rounded,
+                label: 'MoviesDrive Domain',
+                controller: _moviesdriveUrlCtrl,
+                hint: 'https://new3.moviesdrive.christmas',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.hd_rounded,
+                label: 'HDHub4u Domain',
+                controller: _hdhub4uUrlCtrl,
+                hint: 'https://new5.hdhub4u.cl',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.layers_rounded,
+                label: 'MKVBase Domain',
+                controller: _mkvbaseUrlCtrl,
+                hint: 'https://mkvbase.site',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.auto_awesome_motion_rounded,
+                label: 'Movy.bz Domain',
+                controller: _movyUrlCtrl,
+                hint: 'https://movy.bz',
               ),
               const SizedBox(height: 16),
               _buildInputRow(
