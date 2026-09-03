@@ -617,9 +617,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           if (lowerSubtitle.contains('stalker') ||
               lowerSubtitle.contains('castle') ||
               lowerSubtitle.contains('telegram') ||
+              lowerSubtitle.contains('streamplay') ||
+              lowerSubtitle.contains('moviebox') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
+              lowerSourceName.contains('streamplay') ||
+              lowerSourceName.contains('moviebox') ||
+              lowerUrl.contains('hakunaymatata.com') ||
+              lowerUrl.contains('aoneroom.com') ||
+              lowerUrl.contains('vidlink.pro') ||
               lowerUrl.contains('hlowb.com') ||
               lowerUrl.contains('castle') ||
               lowerUrl.contains('127.0.0.1') ||

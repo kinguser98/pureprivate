@@ -18,6 +18,9 @@ import 'package:private_cinema_mobile/data/youtube_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
 import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
+import 'package:private_cinema_mobile/data/streamplay_resolver.dart';
+import 'package:private_cinema_mobile/data/simkl_service.dart';
+import 'package:private_cinema_mobile/data/tmdb_service.dart';
 import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
@@ -77,6 +80,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _stravoSources = [];
   final Map<String, Map<String, int>> _customMagnetStats = {};
 
+  List<StreamSource> _liveStreamplaySources = [];
   List<StreamSource> _liveVidlinkSources = [];
   List<StreamSource> _liveNetmirrorSources = [];
   List<StreamSource> _liveCinemmSources = [];
@@ -94,6 +98,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveVegamoviesSources = [];
   List<StreamSource> _liveCinejoySources = [];
 
+  bool _resolvingStreamplay = false;
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingCinemm = false;
@@ -112,6 +117,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingVegamovies = false;
   bool _resolvingCinejoy = false;
 
+  bool _showStreamplay = true;
   bool _showMovy = true;
   bool _showMoviesdrive = true;
   bool _showHdhub4u = true;
@@ -154,6 +160,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _loadFavoriteStatus();
     _loadWatchlistState();
     _loadTmdbDetails();
+    _loadUserRating();
     _checkDownloadStatus();
     _loadWatchProgress();
     _loadTorrentioStreams();
@@ -381,6 +388,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
+        _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
         _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
@@ -409,6 +417,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
       final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('streamplay')) mergedOrder.add('streamplay');
       if (!mergedOrder.contains('movy')) mergedOrder.add('movy');
       if (!mergedOrder.contains('moviesdrive')) mergedOrder.add('moviesdrive');
       if (!mergedOrder.contains('hdhub4u')) mergedOrder.add('hdhub4u');
@@ -428,9 +437,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                   movie.tmdbId!.isNotEmpty &&
                   movie.tmdbId != '0' &&
                   movie.tmdbId != 'null')
-              ? movie.tmdbId
-              : null);
+               ? movie.tmdbId
+               : null);
 
+    if (_showStreamplay) _resolveLiveStreamplay(movie.title);
     if (_showVidlink && activeId != null) {
       _resolveLiveVidlink(activeId);
     }
@@ -701,6 +711,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       debugPrint('CineMM resolution failed: $e');
     } finally {
       if (mounted) setState(() => _resolvingCinemm = false);
+    }
+  }
+
+  Future<void> _resolveLiveStreamplay(String title) async {
+    if (mounted) setState(() => _resolvingStreamplay = true);
+    try {
+      debugPrint('StreamPlay: Resolving streams for $title...');
+      final streams = await StreamplayResolver.resolveStreams(
+        title: title,
+        year: movie.year?.toString(),
+        tmdbId: movie.tmdbId,
+        imdbId: movie.imdbId,
+        isSeries: false,
+      );
+      final resolved = streams
+          .map((s) => StreamSource(name: s.name, url: s.url, headers: s.headers, quality: s.quality))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _liveStreamplaySources = resolved;
+        });
+      }
+    } catch (e) {
+      debugPrint('StreamPlay resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingStreamplay = false);
     }
   }
 
@@ -1504,21 +1540,94 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final list = prefs.getStringList('watchlist_ids') ?? [];
-      if (list.contains(movie.id)) {
-        list.remove(movie.id);
-        setState(() => _inWatchlist = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Removed from Watchlist.')),
-        );
-      } else {
+      final newWatchlistState = !list.contains(movie.id);
+
+      if (newWatchlistState) {
         list.add(movie.id);
-        setState(() => _inWatchlist = true);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Added to Watchlist.')));
+      } else {
+        list.remove(movie.id);
       }
       await prefs.setStringList('watchlist_ids', list);
+      if (mounted) {
+        setState(() => _inWatchlist = newWatchlistState);
+      }
+
+      final tmdbId = movie.tmdbId ?? movie.id;
+      if (tmdbId.isNotEmpty && tmdbId != '0') {
+        // Sync to TMDb Watchlist
+        try {
+          await TmdbService.addToWatchlist(tmdbId, newWatchlistState);
+        } catch (_) {}
+        // Sync to SIMKL Plan to Watch (Watchlist)
+        try {
+          if (newWatchlistState) {
+            await SimklService.addToWatchlist(tmdbId: tmdbId);
+          } else {
+            await SimklService.removeFromWatchlist(tmdbId: tmdbId);
+          }
+        } catch (_) {}
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(newWatchlistState ? 'Added to Watchlist (Synced with SIMKL & TMDb)!' : 'Removed from Watchlist.'),
+            backgroundColor: newWatchlistState ? const Color(0xFF10B981) : null,
+          ),
+        );
+      }
     } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite() async {
+    try {
+      final newFavState = !_isFavorite;
+      setState(() => _isFavorite = newFavState);
+
+      final prefs = await SharedPreferences.getInstance();
+      final favorites = prefs.getStringList('favorites') ?? [];
+      if (newFavState) {
+        if (!favorites.contains(movie.id)) favorites.add(movie.id);
+      } else {
+        favorites.remove(movie.id);
+      }
+      await prefs.setStringList('favorites', favorites);
+
+      // 1. Cloud API
+      try {
+        await ApiService.toggleFavoriteCloud(movie.id);
+      } catch (_) {}
+
+      // 2. Sync to TMDb Account Favorites
+      final tmdbId = movie.tmdbId ?? movie.id;
+      if (tmdbId.isNotEmpty && tmdbId != '0') {
+        try {
+          await TmdbService.markAsFavorite(tmdbId, newFavState);
+        } catch (_) {}
+      }
+
+      // 3. Sync to SIMKL Favorites
+      if (tmdbId.isNotEmpty && tmdbId != '0') {
+        try {
+          if (newFavState) {
+            await SimklService.addToFavorites(tmdbId: tmdbId);
+          } else {
+            await SimklService.removeFromFavorites(tmdbId: tmdbId);
+          }
+        } catch (_) {}
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(newFavState ? 'Added to Favorites (Synced with SIMKL & TMDb)!' : 'Removed from Favorites.'),
+            backgroundColor: newFavState ? const Color(0xFFE11D48) : null,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error toggling favorite: $e');
+    }
   }
 
   Future<void> _loadFavoriteStatus() async {
@@ -1544,24 +1653,157 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  Future<void> _toggleFavorite() async {
-    final isFav = await ApiService.toggleFavoriteCloud(movie.id);
-    final prefs = await SharedPreferences.getInstance();
-    final favorites = prefs.getStringList('favorites') ?? [];
-    if (isFav) {
-      if (!favorites.contains(movie.id)) {
-        favorites.add(movie.id);
-      }
-    } else {
-      favorites.remove(movie.id);
-    }
-    await prefs.setStringList('favorites', favorites);
+  double? _tmdbUserRating;
+  double? _simklUserRating;
 
-    if (mounted) {
-      setState(() {
-        _isFavorite = isFav;
-      });
-    }
+  Future<void> _loadUserRating() async {
+    final tmdbId = movie.tmdbId;
+    if (tmdbId == null || tmdbId.isEmpty || tmdbId == '0' || tmdbId == 'null') return;
+
+    // 1. Fetch personal TMDb rating
+    try {
+      final tmdbRating = await TmdbService.getUserRating(tmdbId);
+      if (tmdbRating != null && mounted) {
+        setState(() => _tmdbUserRating = (tmdbRating / 2.0));
+      }
+    } catch (_) {}
+
+    // 2. Fetch personal SIMKL rating
+    try {
+      final simklRating = await SimklService.fetchUserRating(tmdbId: tmdbId);
+      if (simklRating != null && mounted) {
+        setState(() => _simklUserRating = (simklRating / 2.0));
+      }
+    } catch (_) {}
+  }
+
+  void _showRatingDialog(BuildContext context) {
+    double tempRating = _tmdbUserRating ?? _simklUserRating ?? 4.0;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              title: Row(
+                children: [
+                  const Icon(Icons.star_rounded, color: Colors.amberAccent, size: 28),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Rate "${movie.title}"',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${tempRating.toStringAsFixed(tempRating % 1 == 0 ? 0 : 1)} / 5 ★',
+                    style: GoogleFonts.outfit(
+                      color: Colors.amberAccent,
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(5, (i) {
+                      final starIndex = i + 1;
+                      return GestureDetector(
+                        onTap: () {
+                          setDialogState(() => tempRating = starIndex.toDouble());
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                          child: Icon(
+                            tempRating >= starIndex
+                                ? Icons.star_rounded
+                                : (tempRating >= starIndex - 0.5
+                                    ? Icons.star_half_rounded
+                                    : Icons.star_border_rounded),
+                            color: Colors.amberAccent,
+                            size: 32,
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  SliderTheme(
+                    data: SliderTheme.of(ctx).copyWith(
+                      activeTrackColor: Colors.amberAccent,
+                      thumbColor: Colors.amberAccent,
+                      inactiveTrackColor: Colors.white24,
+                    ),
+                    child: Slider(
+                      value: tempRating,
+                      min: 0.5,
+                      max: 5.0,
+                      divisions: 9,
+                      onChanged: (v) {
+                        setDialogState(() => tempRating = v);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Syncs automatically to both your SIMKL and TMDb accounts',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amberAccent,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    setState(() {
+                      _tmdbUserRating = tempRating;
+                      _simklUserRating = tempRating;
+                    });
+                    if (movie.tmdbId != null && movie.tmdbId!.isNotEmpty) {
+                      // Convert 5-star scale to 10-point scale for backend APIs
+                      final int apiRating = (tempRating * 2.0).round();
+                      await SimklService.submitRating(tmdbId: movie.tmdbId!, rating: apiRating);
+                      await TmdbService.rateMovie(movie.tmdbId!, apiRating.toDouble());
+                    }
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Rated ${tempRating.toStringAsFixed(tempRating % 1 == 0 ? 0 : 1)}/5 Stars! Synced to SIMKL & TMDb.'),
+                          backgroundColor: const Color(0xFF10B981),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Save Rating', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _loadTmdbDetails() async {
@@ -2447,19 +2689,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     final sLower = source.toLowerCase();
     final nameLower = (sourceName ?? '').toLowerCase();
-    final isWebStream = nameLower.contains('vegamovies') ||
+    
+    // Direct media streams should NEVER be treated as web embeds or run through off-screen webview scrapers
+    final isDirectMediaStream = nameLower.contains('moviebox') ||
+        nameLower.contains('streamplay') ||
+        sLower.contains('hakunaymatata.com') ||
+        sLower.contains('aoneroom.com') ||
+        sLower.contains('slast') ||
+        sLower.contains('.mpd') ||
+        forceNative;
+
+    final isWebStream = !isDirectMediaStream && (nameLower.contains('vegamovies') ||
         nameLower.contains('cinejoy') ||
         nameLower.contains('movy') ||
         nameLower.contains('mkvbase') ||
         nameLower.contains('moviesdrive') ||
         nameLower.contains('hdhub4u') ||
-        nameLower.contains('moviebox') ||
-        sLower.contains('moviebox') ||
         sLower.contains('movy.bz') ||
         sLower.contains('mkvbase') ||
         sLower.contains('moviesdrive') ||
         sLower.contains('hdhub4u') ||
-        sLower.contains('slast') ||
         sLower.contains('vegamovie') ||
         sLower.contains('nexdrive') ||
         sLower.contains('cinejoy') ||
@@ -2467,10 +2716,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         sLower.contains('fastcloud') ||
         sLower.contains('gdflix') ||
         sLower.contains('fsl') ||
-        sLower.contains('hubcloud');
+        sLower.contains('hubcloud'));
 
     bool isYoutube = false;
-    bool isEmbed = isWebStream;
+    bool isEmbed = isWebStream && !isDirectMediaStream;
 
     if (sourceName != null && sourceName.toLowerCase().startsWith('stravo:')) {
       isYoutube = false;
@@ -2478,18 +2727,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     } else if (sourceName != null && sourceName.isNotEmpty) {
       if (sourceName.toLowerCase() == 'youtube') {
         isYoutube = true;
-      } else if (sourceName.toLowerCase() == 'embed' || isWebStream) {
+      } else if (sourceName.toLowerCase() == 'embed' || (isWebStream && !isDirectMediaStream)) {
         isEmbed = true;
-      } else if (sourceName.toLowerCase() == 'mp4/mkv') {
+      } else if (sourceName.toLowerCase() == 'mp4/mkv' || isDirectMediaStream) {
         isYoutube = false;
         isEmbed = false;
       } else {
         isYoutube = _isYoutubeUrl(source);
-        isEmbed = isWebStream || _isEmbedUrl(source);
+        isEmbed = !isDirectMediaStream && (isWebStream || _isEmbedUrl(source));
       }
     } else {
       isYoutube = _isYoutubeUrl(source);
-      isEmbed = isWebStream || _isEmbedUrl(source);
+      isEmbed = !isDirectMediaStream && (isWebStream || _isEmbedUrl(source));
     }
 
     if (isYoutube) {
@@ -2598,7 +2847,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
     } else {
       final isLocalTelegram = source.contains('127.0.0.1') || source.contains('localhost') || source.contains('/tg/');
-      final isStalkerOrDirect = (sourceName != null && sourceName.toLowerCase().contains('stalker')) || headers != null;
+      final isStalkerOrDirect = (sourceName != null &&
+              (sourceName.toLowerCase().contains('stalker') ||
+                  sourceName.toLowerCase().contains('moviebox') ||
+                  sourceName.toLowerCase().contains('streamplay'))) ||
+          source.contains('hakunaymatata.com') ||
+          source.contains('aoneroom.com') ||
+          source.contains('.mp4') ||
+          source.contains('.mpd') ||
+          source.contains('.m3u8') ||
+          headers != null;
 
       String playUrl = source;
       Map<String, String>? playHeaders = headers;
@@ -2880,6 +3138,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       context,
                       'CINEMM STREAMS',
                       _liveCinemmSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // StreamPlay Multi-API
+            if ((_resolvingStreamplay || _liveStreamplaySources.isNotEmpty) && enabledKeys.contains('streamplay')) {
+              sourceWidgets['streamplay'] = _buildSourceTile(
+                icon: Icons.flash_on_rounded,
+                title: '${pos('streamplay')}. StreamPlay Multi-API',
+                subtitle: _resolvingStreamplay
+                    ? 'Querying stream servers...'
+                    : '${_liveStreamplaySources.length} links available',
+                disabled: _resolvingStreamplay,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveStreamplaySources.length == 1) {
+                    _playWithResolution(
+                      _liveStreamplaySources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveStreamplaySources.first.name,
+                      headers: _liveStreamplaySources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'STREAMPLAY STREAMS',
+                      _liveStreamplaySources,
                       resumeDirectly: resumeDirectly,
                     );
                   }
@@ -4211,6 +4499,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           );
         }
 
+        // StreamPlay Multi-API
+        if ((_resolvingStreamplay || _liveStreamplaySources.isNotEmpty) && enabledKeys.contains('streamplay')) {
+          downloadSourceWidgets['streamplay'] = _buildSourceTile(
+            icon: Icons.flash_on_rounded,
+            title: '${pos('streamplay')}. StreamPlay Multi-API',
+            subtitle: _resolvingStreamplay
+                ? 'Querying stream servers...'
+                : '${_liveStreamplaySources.length} links available',
+            disabled: _resolvingStreamplay,
+            onTap: () {
+              Navigator.of(context).pop();
+              if (_liveStreamplaySources.length == 1) {
+                _downloadMovieboxStream(_liveStreamplaySources.first);
+              } else {
+                _showDownloadSubSelector('STREAMPLAY DOWNLOADS', _liveStreamplaySources, isMoviebox: true);
+              }
+            },
+          );
+        }
+
         // MovieBox Server
         if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
           downloadSourceWidgets['moviebox'] = _buildSourceTile(
@@ -5179,9 +5487,107 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                   ),
                                   child: ClipRRect(
                                     borderRadius: BorderRadius.circular(14),
-                                    child: MovieImage(
-                                      source: movie.posterUrl,
-                                      fit: BoxFit.cover,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        MovieImage(
+                                          source: movie.posterUrl,
+                                          fit: BoxFit.cover,
+                                        ),
+                                        // 1. Top-Left TMDb Rating Circle (only if TMDb connected)
+                                        ValueListenableBuilder<bool>(
+                                          valueListenable: TmdbService.isAuthenticated,
+                                          builder: (context, isTmdbAuth, _) {
+                                            if (!isTmdbAuth) return const SizedBox.shrink();
+                                            return Positioned(
+                                              top: 6,
+                                              left: 6,
+                                              child: GestureDetector(
+                                                onTap: () => _showRatingDialog(context),
+                                                child: Container(
+                                                  padding: const EdgeInsets.all(2.5),
+                                                  decoration: BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    color: const Color(0xFF081C22).withOpacity(0.9),
+                                                    border: Border.all(color: Colors.white.withOpacity(0.2), width: 0.8),
+                                                    boxShadow: const [
+                                                      BoxShadow(color: Colors.black87, blurRadius: 4, offset: Offset(0, 2)),
+                                                    ],
+                                                  ),
+                                                  child: Container(
+                                                    width: 22,
+                                                    height: 22,
+                                                    alignment: Alignment.center,
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      border: Border.all(
+                                                        color: _tmdbUserRating != null ? const Color(0xFF21D07A) : Colors.white24,
+                                                        width: 1.6,
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      _tmdbUserRating != null
+                                                          ? '${(_tmdbUserRating! * 20).toInt()}%'
+                                                          : '--',
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 7.0,
+                                                        fontWeight: FontWeight.w900,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+
+                                        // 2. Bottom-Right SIMKL Popcorn Tag (only if SIMKL connected)
+                                        ValueListenableBuilder<bool>(
+                                          valueListenable: SimklService.isAuthenticated,
+                                          builder: (context, isSimklAuth, _) {
+                                            if (!isSimklAuth) return const SizedBox.shrink();
+                                            return Positioned(
+                                              bottom: 6,
+                                              right: 6,
+                                              child: GestureDetector(
+                                                onTap: () => _showRatingDialog(context),
+                                                child: Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 2.5),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFF081C22).withOpacity(0.9),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                    border: Border.all(
+                                                      color: Colors.white.withOpacity(0.2),
+                                                      width: 0.8,
+                                                    ),
+                                                    boxShadow: const [
+                                                      BoxShadow(color: Colors.black87, blurRadius: 4, offset: Offset(0, 2)),
+                                                    ],
+                                                  ),
+                                                  child: Row(
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      const Text('🍿', style: TextStyle(fontSize: 10)),
+                                                      const SizedBox(width: 2.5),
+                                                      Text(
+                                                        _simklUserRating != null
+                                                            ? '${_simklUserRating!.toStringAsFixed(_simklUserRating! % 1 == 0 ? 0 : 1)}/5'
+                                                            : 'Rate',
+                                                        style: TextStyle(
+                                                          color: _simklUserRating != null ? Colors.amberAccent : Colors.white70,
+                                                          fontSize: 9.5,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),

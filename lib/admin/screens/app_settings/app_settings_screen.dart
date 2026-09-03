@@ -98,7 +98,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['movy', 'moviesdrive', 'hdhub4u', 'mkvbase', 'cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'moviebox', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
+      final allSources = ['streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'mkvbase', 'cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
       final List<String> enabledSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
@@ -220,6 +220,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
 
   String _getSourceLabel(String key) {
     switch (key) {
+      case 'streamplay': return 'StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)';
       case 'movy': return 'Movy.bz Multi-Source (Multi-Audio & Multi-Quality)';
       case 'moviesdrive': return 'MoviesDrive FSL (Fast Server, R2 & S3 Multi-Audio)';
       case 'hdhub4u': return 'HDHub4u (4K UHD & Dolby Atmos Multi-Audio)';

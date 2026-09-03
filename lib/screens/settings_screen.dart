@@ -1,17 +1,24 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
+import 'package:private_cinema_mobile/data/simkl_service.dart';
+import 'package:private_cinema_mobile/data/tmdb_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 
 import 'package:private_cinema_mobile/screens/telegram_login_screen.dart';
+import 'package:private_cinema_mobile/screens/simkl_login_screen.dart';
+import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
@@ -1071,6 +1078,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: const SizedBox.shrink(),
                   ),
 
+                  // Trakt & TMDb Cloud Sync & Personal Lists
+                  _buildCloudAccountsSection(),
+                  const SizedBox(height: 24),
+
                   // 3. Maintenance & Storage Settings
                   _buildSectionHeader('Storage & Maintenance'),
                   const SizedBox(height: 12),
@@ -1888,6 +1899,344 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     );
   }
+
+  Widget _buildCloudAccountsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionHeader('Cloud Accounts & Personal Sync'),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            children: [
+              // SIMKL Account
+              ValueListenableBuilder<bool>(
+                valueListenable: SimklService.isAuthenticated,
+                builder: (context, isSimklAuth, _) {
+                  return ValueListenableBuilder<String?>(
+                    valueListenable: SimklService.currentUsername,
+                    builder: (context, simklUser, _) {
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        leading: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.amberAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text('🍿', style: TextStyle(fontSize: 22)),
+                        ),
+                        title: Row(
+                          children: [
+                            Text(
+                              'SIMKL Cloud Tracker',
+                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isSimklAuth
+                                    ? Colors.greenAccent.withOpacity(0.15)
+                                    : Colors.white10,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                isSimklAuth ? 'Connected' : 'Not Connected',
+                                style: TextStyle(
+                                  color: isSimklAuth ? Colors.greenAccent : Colors.white38,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        subtitle: Text(
+                          isSimklAuth
+                              ? 'Logged in as @$simklUser • Dual Ratings & History Sync'
+                              : 'Sync Watched Timeline, Ratings, and Watchlist',
+                          style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+                        ),
+                        trailing: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isSimklAuth ? Colors.white10 : Colors.amberAccent,
+                            foregroundColor: isSimklAuth ? Colors.white : Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () {
+                            if (isSimklAuth) {
+                              _showSimklDisconnectDialog(context);
+                            } else {
+                              _showSimklConnectDialog(context);
+                            }
+                          },
+                          child: Text(
+                            isSimklAuth ? 'Manage' : 'Connect',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+
+              // SIMKL Cinema Watched Timeline Action (if connected)
+              ValueListenableBuilder<bool>(
+                valueListenable: SimklService.isAuthenticated,
+                builder: (context, isSimklAuth, _) {
+                  if (!isSimklAuth) return const SizedBox.shrink();
+                  return Column(
+                    children: [
+                      const Divider(color: Colors.white10, height: 1),
+                      ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        leading: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.amberAccent.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text('🎬', style: TextStyle(fontSize: 18)),
+                        ),
+                        title: const Text(
+                          'My Watch Timeline',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        subtitle: const Text('Interactive animated rope timeline of all completed movies', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.amberAccent, size: 16),
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => const WatchedTimelineScreen()),
+                          );
+                        },
+                      ),
+                    ],
+                  );
+                },
+              ),
+
+              const Divider(color: Colors.white10, height: 1),
+
+              // TMDb Account
+              ValueListenableBuilder<bool>(
+                valueListenable: TmdbService.isAuthenticated,
+                builder: (context, isTmdbAuth, _) {
+                  return ValueListenableBuilder<String?>(
+                    valueListenable: TmdbService.currentUsername,
+                    builder: (context, tmdbUser, _) {
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        leading: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF01B4E4).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.movie_rounded, color: Color(0xFF01B4E4), size: 24),
+                        ),
+                        title: Row(
+                          children: [
+                            Text(
+                              'TheMovieDB (TMDb)',
+                              style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isTmdbAuth
+                                    ? Colors.greenAccent.withOpacity(0.15)
+                                    : Colors.white10,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                isTmdbAuth ? 'Connected' : 'Not Connected',
+                                style: TextStyle(
+                                  color: isTmdbAuth ? Colors.greenAccent : Colors.white38,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        subtitle: Text(
+                          isTmdbAuth
+                              ? 'Logged in as @$tmdbUser • Dual Ratings Sync Active'
+                              : 'Sync your ratings to your personal TMDb account',
+                          style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+                        ),
+                        trailing: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isTmdbAuth ? Colors.white10 : const Color(0xFF01B4E4),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () {
+                            if (isTmdbAuth) {
+                              _showTmdbDisconnectDialog(context);
+                            } else {
+                              _showTmdbConnectDialog(context);
+                            }
+                          },
+                          child: Text(
+                            isTmdbAuth ? 'Manage' : 'Connect',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showSimklConnectDialog(BuildContext context) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const SimklLoginScreen()),
+    );
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Connected to SIMKL (@${SimklService.currentUsername.value})!'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+    }
+  }
+
+  void _showSimklDisconnectDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('SIMKL Account', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text('Disconnect SIMKL account (@${SimklService.currentUsername.value})?', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await SimklService.disconnect();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Disconnected from SIMKL')));
+              }
+            },
+            child: const Text('Disconnect', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTmdbConnectDialog(BuildContext context) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF01B4E4))),
+    );
+
+    final reqToken = await TmdbService.createRequestToken();
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    if (reqToken == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to initialize TMDb login')),
+      );
+      return;
+    }
+
+    final authUrl = 'https://www.themoviedb.org/authenticate/$reqToken';
+    try {
+      await launchUrl(Uri.parse(authUrl), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Row(
+          children: [
+            Icon(Icons.open_in_browser_rounded, color: Color(0xFF01B4E4)),
+            SizedBox(width: 10),
+            Text('Approve TMDb Access', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          'Please approve access on the TMDb website in your browser, then tap "Complete Login" below.',
+          style: TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF01B4E4)),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              final ok = await TmdbService.createSession(reqToken);
+              if (mounted) {
+                if (ok) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Connected to TMDb (@${TmdbService.currentUsername.value})!'),
+                      backgroundColor: const Color(0xFF01B4E4),
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('TMDb authorization was not approved.')),
+                  );
+                }
+              }
+            },
+            child: const Text('Complete Login', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTmdbDisconnectDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('TMDb Account', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text('Disconnect TMDb account (@${TmdbService.currentUsername.value})?', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await TmdbService.logout();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Disconnected from TMDb')));
+              }
+            },
+            child: const Text('Disconnect', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 
@@ -2007,9 +2356,6 @@ class _MobileCategoryPickerDialogState extends State<MobileCategoryPickerDialog>
       ],
     );
   }
-
-
-
 }
 
 class MobilePortalPickerDialog extends StatelessWidget {

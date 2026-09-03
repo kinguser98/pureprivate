@@ -17,6 +17,8 @@ import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
 import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
+import 'package:private_cinema_mobile/data/streamplay_resolver.dart';
+import 'package:private_cinema_mobile/data/domain_service.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/data/embed_resolver.dart';
 import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
@@ -72,7 +74,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   dynamic _selectedEpisodeData;
 
   // Source visibility flags
-
+  bool _showStreamplay = true;
   bool _showStravo = true;
   bool _showStalker = true;
   bool _showCinemm = true;
@@ -98,7 +100,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['movy','moviesdrive','hdhub4u','mkvbase','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','moviebox','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','mkvbase','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
         _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
@@ -129,6 +132,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final order = await SyncService.fetchSourceOrder();
     if (order.isNotEmpty && mounted) {
       final List<String> mergedOrder = List<String>.from(order);
+      if (!mergedOrder.contains('streamplay')) mergedOrder.add('streamplay');
       if (!mergedOrder.contains('movy')) mergedOrder.add('movy');
       if (!mergedOrder.contains('moviesdrive')) mergedOrder.add('moviesdrive');
       if (!mergedOrder.contains('hdhub4u')) mergedOrder.add('hdhub4u');
@@ -451,6 +455,21 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         tasks.add(_resolveCinemm(title, movieYear));
       }
 
+      // Resolve StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)
+      if (_showStreamplay) {
+        tasks.add(
+          _resolveStreamplay(
+            title,
+            movieYear,
+            tmdbId: tmdbId,
+            imdbId: imdbId,
+            isSeries: _isSeriesSearch,
+            season: season,
+            episode: episode,
+          ),
+        );
+      }
+
       // Resolve MovieBox
       if (_showMoviebox) {
         tasks.add(
@@ -662,6 +681,29 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('CineMM resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveStreamplay(String title, String year, {String? tmdbId, String? imdbId, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showStreamplay) return;
+    try {
+      debugPrint('StreamPlay: Resolving streams for $title (TMDB: $tmdbId, IMDB: $imdbId)...');
+      final streams = await StreamplayResolver.resolveStreams(
+        title: title,
+        year: year.isNotEmpty ? year : null,
+        tmdbId: tmdbId,
+        imdbId: imdbId,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('StreamPlay resolution failed: $e');
     }
   }
 
@@ -1315,7 +1357,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       return;
     }
 
-    if (source.type == StreamSourceType.moviebox) {
+    if (source.type == StreamSourceType.streamplay || source.type == StreamSourceType.moviebox) {
       final Map<String, String> headers = {};
       if (source.headers != null) {
         headers.addAll(source.headers!);
@@ -1325,7 +1367,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           builder: (_) => VideoPlayerScreen(
             videoSource: source.url,
             title: movieTitle,
-            subtitle: 'MovieBox Server',
+            subtitle: source.type == StreamSourceType.streamplay
+                ? 'StreamPlay Server'
+                : 'MovieBox Server',
             movieId: 'special_search_${_selectedMovie['id']}',
             resumeDirectly: false,
             headers: headers.isNotEmpty ? headers : null,
@@ -1515,12 +1559,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       targetHeaders = EmbedResolver.getHeadersForUrl(resolved, fallbackHeaders: headers);
     }
 
-    final hlsResult = await runHlsPreflight(
-      context: context,
-      url: targetUrl,
-      movieTitle: movieTitle,
-      headers: targetHeaders,
-    );
+    final bool isDirect = lower.contains('hakunaymatata.com') ||
+        lower.contains('aoneroom.com') ||
+        lower.contains('.mp4') ||
+        lower.contains('.mpd') ||
+        lower.contains('.m3u8');
+
+    final hlsResult = isDirect
+        ? null
+        : await runHlsPreflight(
+            context: context,
+            url: targetUrl,
+            movieTitle: movieTitle,
+            headers: targetHeaders,
+          );
     final finalUrl = hlsResult?.url ?? targetUrl;
 
     final tvDeviceId = prefs.getString('paired_tv_device_id');
@@ -2587,6 +2639,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       orderPos[_sourceOrder[i]] = i + 1;
     }
     int pos(String key) => orderPos[key] ?? 99;
+    final streamplayStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.streamplay)
+        .toList();
     final movyStreams = filteredSources
         .where((s) => s.type == StreamSourceType.movy)
         .toList();
@@ -2655,6 +2710,25 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     if (_activeGroupType == null) {
       final Map<String, Widget> sourceWidgets = {};
+
+      // StreamPlay Multi-API
+      if (_showStreamplay && (_resolvingStreams || streamplayStreams.isNotEmpty) && enabledKeys.contains('streamplay')) {
+        sourceWidgets['streamplay'] = _buildServerGroupCard(
+          title: '${pos('streamplay')}. StreamPlay Multi-API',
+          subtitle: _resolvingStreams && streamplayStreams.isEmpty
+              ? 'Querying fast stream servers...'
+              : (streamplayStreams.isNotEmpty
+                    ? '${streamplayStreams.length} high-speed links available'
+                    : 'Not available'),
+          icon: Icons.flash_on_rounded,
+          accentColor: const Color(0xFF00E676),
+          onTap: streamplayStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.streamplay,
+                ),
+        );
+      }
 
       // Movy.bz
       if (_showMovy && (_resolvingStreams || movyStreams.isNotEmpty) && enabledKeys.contains('movy')) {
@@ -3042,7 +3116,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final Color accentColor;
       final IconData iconData;
 
-      if (_activeGroupType == StreamSourceType.movy) {
+      if (_activeGroupType == StreamSourceType.streamplay) {
+        activeList = streamplayStreams;
+        accentColor = const Color(0xFF00E676);
+        iconData = Icons.flash_on_rounded;
+      } else if (_activeGroupType == StreamSourceType.movy) {
         activeList = movyStreams;
         accentColor = const Color(0xFFE50914);
         iconData = Icons.auto_awesome_motion_rounded;
@@ -3498,6 +3576,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 }
 
 enum StreamSourceType {
+  streamplay,
   movy,
   moviesdrive,
   hdhub4u,

@@ -32,6 +32,8 @@ dependencies:
   qr_flutter: ^4.1.0
   dio: ^5.7.0
   crypto: ^3.0.6
+  url_launcher: ^6.3.0
+  webview_flutter: ^4.10.0
   freebuff_core:
     path: ./freebuff_core
   mtflute:

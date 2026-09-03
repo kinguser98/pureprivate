@@ -17,6 +17,7 @@ import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
 import 'package:private_cinema_mobile/screens/category_grid_screen.dart';
 import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
+import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -41,7 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _carouselTimer;
   final PageController _carouselController = PageController(initialPage: 1000, viewportFraction: 0.62);
 
-  final List<String> _categoryTabs = const ['Movies', 'Live TV', 'Series', 'Library'];
+  final List<String> _categoryTabs = const ['Movies', 'Live TV', 'Series', 'Vault'];
   String _selectedCategoryTab = 'Movies';
 
   @override
@@ -447,6 +448,10 @@ class _HomeScreenState extends State<HomeScreen> {
         context: context,
         builder: (context) => const SpecialSearchDialog(isSeriesSearch: true),
       );
+    } else if (tab == 'Vault') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const WatchedTimelineScreen()),
+      );
     } else if (tab == 'Library') {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const DownloadsScreen()),
@@ -590,6 +595,54 @@ class _HomeScreenState extends State<HomeScreen> {
               itemCount: _categoryTabs.length,
               itemBuilder: (context, index) {
                 final tab = _categoryTabs[index];
+                final isVault = tab == 'Vault';
+
+                if (isVault) {
+                  return GestureDetector(
+                    onTap: () => _onCategoryTabSelected(tab),
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFFF59E0B).withOpacity(0.25),
+                            const Color(0xFFD97706).withOpacity(0.12),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.amberAccent.withOpacity(0.6),
+                          width: 1.2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.amberAccent.withOpacity(0.15),
+                            blurRadius: 8,
+                            spreadRadius: 0.5,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.shield_rounded, color: Colors.amberAccent, size: 15),
+                          const SizedBox(width: 6),
+                          Text(
+                            tab,
+                            style: GoogleFonts.outfit(
+                              color: Colors.amberAccent,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
                 return GestureDetector(
                   onTap: () => _onCategoryTabSelected(tab),
                   child: Container(
