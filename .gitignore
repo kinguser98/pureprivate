@@ -5,7 +5,10 @@
 *.py
 *.apk
 *.ps1
+scratch/
 scratch_*
+*.bak
+test_*.dart
 task.md
 .DS_Store
 .atom/

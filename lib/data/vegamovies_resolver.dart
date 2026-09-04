@@ -2,12 +2,17 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/data/domain_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class VegamoviesResolver {
-  static const String _defaultDomain = 'https://vegamovie.se';
+  static const String _defaultDomain = 'https://vegamovies.catering';
 
   static Future<String> getBaseDomain() async {
+    try {
+      final dyn = await DomainService.getDomain('vegamovies');
+      if (dyn.isNotEmpty) return dyn;
+    } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('domain_vegamovies') ?? '';
     if (saved.isNotEmpty) return saved.endsWith('/') ? saved.substring(0, saved.length - 1) : saved;

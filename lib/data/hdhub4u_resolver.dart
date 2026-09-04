@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/data/domain_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class Hdhub4uResolver {
@@ -20,6 +21,10 @@ class Hdhub4uResolver {
   };
 
   static Future<String> getBaseDomain() async {
+    try {
+      final dyn = await DomainService.getDomain('hdhub4u');
+      if (dyn.isNotEmpty) return dyn;
+    } catch (_) {}
     try {
       final cloud = await SyncService.fetchAppSettings();
       if (cloud.containsKey('domain_hdhub4u') && cloud['domain_hdhub4u']!.isNotEmpty) {

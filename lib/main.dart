@@ -9,10 +9,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:private_cinema_mobile/data/dns_proxy.dart';
 import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/domain_service.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
+import 'package:private_cinema_mobile/data/simkl_service.dart';
+import 'package:private_cinema_mobile/data/tmdb_service.dart';
+import 'package:private_cinema_mobile/data/logo_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:private_cinema_mobile/screens/navigation_holder.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
 
 Future<void> fetchHotConfig() async {
   try {
@@ -46,6 +51,9 @@ Future<void> fetchHotConfig() async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+
+  // Initialize dynamic domain manager
+  DomainService.init();
 
   // Load cached hot-config blocklist if available
   try {
@@ -116,6 +124,16 @@ void main() async {
     await DownloadManager.init();
   } catch (e) {
     debugPrint('Error initializing DownloadManager: $e');
+  }
+
+  // Initialize SIMKL and TMDb sessions
+  try {
+    await SimklService.init();
+    await TmdbService.init();
+    await HomeWallpaperManager.init();
+    await LogoService.init();
+  } catch (e) {
+    debugPrint('Error initializing Services: $e');
   }
 
   // Hook up Telegram credentials to the admin-pushed values so
