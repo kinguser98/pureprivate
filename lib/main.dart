@@ -13,9 +13,11 @@ import 'package:private_cinema_mobile/data/domain_service.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/simkl_service.dart';
 import 'package:private_cinema_mobile/data/tmdb_service.dart';
+import 'package:private_cinema_mobile/data/logo_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:private_cinema_mobile/screens/navigation_holder.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
 
 Future<void> fetchHotConfig() async {
   try {
@@ -128,8 +130,10 @@ void main() async {
   try {
     await SimklService.init();
     await TmdbService.init();
+    await HomeWallpaperManager.init();
+    await LogoService.init();
   } catch (e) {
-    debugPrint('Error initializing SIMKL/TMDb Service: $e');
+    debugPrint('Error initializing Services: $e');
   }
 
   // Hook up Telegram credentials to the admin-pushed values so

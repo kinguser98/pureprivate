@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -10,6 +12,8 @@ import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
+import 'package:private_cinema_mobile/screens/home_wallpaper_live_editor_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/simkl_service.dart';
 import 'package:private_cinema_mobile/data/tmdb_service.dart';
@@ -871,6 +875,432 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+                  ),
+
+                  // Home Ambient Wallpaper Customization
+                  const SizedBox(height: 16),
+                  ValueListenableBuilder<HomeWallpaperSettings>(
+                    valueListenable: HomeWallpaperManager.notifier,
+                    builder: (context, bgSettings, _) {
+                      return Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: bgSettings.enabled ? AppColors.accentBright.withOpacity(0.4) : Colors.white10,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.accentBright.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(Icons.wallpaper_rounded, color: AppColors.accentBright, size: 20),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Home Ambient Wallpaper',
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      const Text(
+                                        'Immersive background blur and vignette for home screen',
+                                        style: TextStyle(color: Colors.white54, fontSize: 11),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Switch.adaptive(
+                                  value: bgSettings.enabled,
+                                  activeColor: AppColors.accentBright,
+                                  onChanged: (val) {
+                                    HomeWallpaperManager.update(bgSettings.copyWith(enabled: val));
+                                  },
+                                ),
+                              ],
+                            ),
+                            if (bgSettings.enabled) ...[
+                              const Divider(color: Colors.white10, height: 24),
+                              
+                              // Live Mini Preview Box (Interactive Tap to open Full-Screen Editor)
+                              InkWell(
+                                onTap: () {
+                                  HapticFeedback.lightImpact();
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(builder: (_) => const HomeWallpaperLiveEditorScreen()),
+                                  );
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Container(
+                                    height: 96,
+                                    width: double.infinity,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.white12),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        if (bgSettings.localPath != null &&
+                                            bgSettings.localPath!.isNotEmpty &&
+                                            File(bgSettings.localPath!).existsSync())
+                                          Image.file(File(bgSettings.localPath!), fit: BoxFit.cover)
+                                        else if (bgSettings.wallpaperUrl.isNotEmpty)
+                                          CachedNetworkImage(
+                                            imageUrl: bgSettings.wallpaperUrl,
+                                            fit: BoxFit.cover,
+                                            placeholder: (_, __) => Container(color: const Color(0xFF090D16)),
+                                            errorWidget: (_, __, ___) => Container(color: const Color(0xFF090D16)),
+                                          ),
+                                        ClipRect(
+                                          child: BackdropFilter(
+                                            filter: ImageFilter.blur(sigmaX: bgSettings.blur, sigmaY: bgSettings.blur),
+                                            child: Container(color: Colors.black.withOpacity(bgSettings.darkness)),
+                                          ),
+                                        ),
+                                        Container(
+                                          decoration: BoxDecoration(
+                                            gradient: RadialGradient(
+                                              center: Alignment.center,
+                                              radius: 1.1,
+                                              colors: [
+                                                Colors.transparent,
+                                                Colors.black.withOpacity(bgSettings.vignette * 0.4),
+                                                Colors.black.withOpacity(bgSettings.vignette),
+                                              ],
+                                              stops: const [0.35, 0.75, 1.0],
+                                            ),
+                                          ),
+                                        ),
+                                        Center(
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withOpacity(0.6),
+                                              borderRadius: BorderRadius.circular(20),
+                                              border: Border.all(color: Colors.white24),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                const Icon(Icons.fullscreen_rounded, color: Colors.amberAccent, size: 18),
+                                                const SizedBox(width: 6),
+                                                Text(
+                                                  'Tap for Full-Screen Live Editor',
+                                                  style: GoogleFonts.outfit(
+                                                    color: Colors.white,
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+
+                              // Full-Screen Preview Action Button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 40,
+                                child: OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.amberAccent,
+                                    side: const BorderSide(color: Colors.amberAccent, width: 1.2),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  onPressed: () {
+                                    HapticFeedback.lightImpact();
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(builder: (_) => const HomeWallpaperLiveEditorScreen()),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.tune_rounded, size: 16),
+                                  label: Text(
+                                    'Open Live Home Layout Preview',
+                                    style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Presets Header + Gallery Button
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Choose Wallpaper Preset',
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white70,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  InkWell(
+                                    onTap: () async {
+                                      HapticFeedback.lightImpact();
+                                      final picked = await HomeWallpaperManager.pickFromGallery();
+                                      if (picked && context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('Custom wallpaper loaded from Gallery!'),
+                                            behavior: SnackBarBehavior.floating,
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.accentBright.withOpacity(0.18),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: AppColors.accentBright.withOpacity(0.4)),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.photo_library_rounded, color: AppColors.accentBright, size: 14),
+                                          const SizedBox(width: 5),
+                                          Text(
+                                            bgSettings.localPath != null ? 'Change Photo' : 'Upload Gallery',
+                                            style: GoogleFonts.outfit(
+                                              color: AppColors.accentBright,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+
+                              // Presets Horizontal list
+                              SizedBox(
+                                height: 72,
+                                child: ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: HomeWallpaperManager.presets.length,
+                                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                                  itemBuilder: (ctx, i) {
+                                    final p = HomeWallpaperManager.presets[i];
+                                    final isSelected = bgSettings.localPath == null && bgSettings.wallpaperUrl == p['url'];
+                                    return GestureDetector(
+                                      onTap: () {
+                                        HapticFeedback.lightImpact();
+                                        HomeWallpaperManager.update(
+                                          bgSettings.copyWith(
+                                            wallpaperUrl: p['url'],
+                                            clearLocalPath: true,
+                                            enabled: true,
+                                          ),
+                                        );
+                                      },
+                                      child: Container(
+                                        width: 100,
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(
+                                            color: isSelected ? AppColors.accentBright : Colors.white12,
+                                            width: isSelected ? 2 : 1,
+                                          ),
+                                        ),
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(9),
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              CachedNetworkImage(
+                                                imageUrl: p['url']!,
+                                                fit: BoxFit.cover,
+                                              ),
+                                              Container(
+                                                color: Colors.black.withOpacity(0.45),
+                                              ),
+                                              Center(
+                                                child: Padding(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                                  child: Text(
+                                                    p['name']!,
+                                                    textAlign: TextAlign.center,
+                                                    style: GoogleFonts.outfit(
+                                                      color: Colors.white,
+                                                      fontSize: 11,
+                                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              if (isSelected)
+                                                Positioned(
+                                                  top: 4,
+                                                  right: 4,
+                                                  child: Container(
+                                                    padding: const EdgeInsets.all(2),
+                                                    decoration: BoxDecoration(
+                                                      color: AppColors.accentBright,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: const Icon(Icons.check, size: 10, color: Colors.white),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+
+                              const SizedBox(height: 18),
+                              const Divider(color: Colors.white10),
+                              const SizedBox(height: 10),
+
+                              // Sliders
+                              // 1. Glass Blur Intensity
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Glass Blur Intensity',
+                                    style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white10,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${bgSettings.blur.toStringAsFixed(1)} px',
+                                      style: GoogleFonts.outfit(color: AppColors.accentBright, fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  activeTrackColor: AppColors.accentBright,
+                                  thumbColor: AppColors.accentBright,
+                                  inactiveTrackColor: Colors.white24,
+                                  trackHeight: 3,
+                                ),
+                                child: Slider(
+                                  value: bgSettings.blur,
+                                  min: 0.0,
+                                  max: 25.0,
+                                  onChanged: (v) {
+                                    HomeWallpaperManager.update(bgSettings.copyWith(blur: v));
+                                  },
+                                ),
+                              ),
+
+                              // 2. Edge Vignette
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Edge Vignette Darkness',
+                                    style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white10,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${(bgSettings.vignette * 100).toInt()}%',
+                                      style: GoogleFonts.outfit(color: AppColors.accentBright, fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  activeTrackColor: AppColors.accentBright,
+                                  thumbColor: AppColors.accentBright,
+                                  inactiveTrackColor: Colors.white24,
+                                  trackHeight: 3,
+                                ),
+                                child: Slider(
+                                  value: bgSettings.vignette,
+                                  min: 0.0,
+                                  max: 1.0,
+                                  onChanged: (v) {
+                                    HomeWallpaperManager.update(bgSettings.copyWith(vignette: v));
+                                  },
+                                ),
+                              ),
+
+                              // 3. Background Dimming
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Background Dimming',
+                                    style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white10,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${(bgSettings.darkness * 100).toInt()}%',
+                                      style: GoogleFonts.outfit(color: AppColors.accentBright, fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  activeTrackColor: AppColors.accentBright,
+                                  thumbColor: AppColors.accentBright,
+                                  inactiveTrackColor: Colors.white24,
+                                  trackHeight: 3,
+                                ),
+                                child: Slider(
+                                  value: bgSettings.darkness,
+                                  min: 0.0,
+                                  max: 1.0,
+                                  onChanged: (v) {
+                                    HomeWallpaperManager.update(bgSettings.copyWith(darkness: v));
+                                  },
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
                   ),
                   const SizedBox(height: 24),
 

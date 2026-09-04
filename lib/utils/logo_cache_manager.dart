@@ -8,8 +8,8 @@ class LogoCacheManager {
   static final CacheManager instance = CacheManager(
     Config(
       key,
-      stalePeriod: const Duration(days: 30),
-      maxNrOfCacheObjects: 500,
+      stalePeriod: const Duration(days: 3650), // Permanent local cache
+      maxNrOfCacheObjects: 2000,
       repo: JsonCacheInfoRepository(databaseName: key),
       fileService: HttpFileService(),
     ),

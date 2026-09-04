@@ -10,6 +10,7 @@ import '../models/movie.dart';
 import '../theme/app_colors.dart';
 import '../data/simkl_service.dart';
 import '../data/tmdb_service.dart';
+import '../widgets/quick_movie_rater_dialog.dart';
 import 'movie_detail_screen.dart';
 
 class WatchedTimelineScreen extends StatefulWidget {
@@ -536,6 +537,21 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome_rounded, color: Colors.amberAccent),
+            tooltip: 'Quick Movie Rater',
+            onPressed: () {
+              final existingIds = _historyItems
+                  .map((item) => item.movie.tmdbId ?? item.movie.id)
+                  .where((id) => id.isNotEmpty)
+                  .toList();
+              QuickMovieRaterDialog.show(
+                context,
+                existingRatedTmdbIds: existingIds,
+                onDataChanged: _loadTimeline,
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.palette_rounded, color: Colors.amberAccent),
             tooltip: 'Live Ambience & Wallpaper',

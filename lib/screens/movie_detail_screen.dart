@@ -21,6 +21,7 @@ import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 import 'package:private_cinema_mobile/data/streamplay_resolver.dart';
 import 'package:private_cinema_mobile/data/simkl_service.dart';
 import 'package:private_cinema_mobile/data/tmdb_service.dart';
+import 'package:private_cinema_mobile/data/logo_service.dart';
 import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
@@ -195,86 +196,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _showClearLogos = prefs.getBool('show_clear_logos') ?? true;
     if (!_showClearLogos) return;
 
-    // 0. Check direct database/model property (set via admin panel)
-    if (movie.logoUrl != null && movie.logoUrl!.isNotEmpty) {
-      if (mounted) {
-        setState(() {
-          _clearLogoUrl = movie.logoUrl;
-          _showLogoInCrossFade = true;
-        });
-        _startLogoFadeTimer();
-      }
+    // 1. Instant Synchronous Check (0ms)
+    final syncLogo = LogoService.getCachedLogoSync(movie);
+    if (syncLogo != null && syncLogo.isNotEmpty && mounted) {
+      setState(() {
+        _clearLogoUrl = syncLogo;
+        _showLogoInCrossFade = true;
+      });
+      _startLogoFadeTimer();
       return;
     }
 
-    final cacheKey = 'logo_cache_${movie.tmdbId ?? movie.id}_${movie.title.hashCode}';
-
-    // 1. Check memory cache (0ms latency, zero API calls)
-    if (_logoMemoryCache.containsKey(cacheKey)) {
-      final cachedUrl = _logoMemoryCache[cacheKey]!;
-      if (cachedUrl.isNotEmpty && mounted) {
-        setState(() {
-          _clearLogoUrl = cachedUrl;
-          _showLogoInCrossFade = true;
-        });
-        _startLogoFadeTimer();
-      }
-      return;
-    }
-
-    // 2. Check SharedPreferences disk cache (instant load across app restarts)
-    final diskCached = prefs.getString(cacheKey);
-    if (diskCached != null) {
-      _logoMemoryCache[cacheKey] = diskCached;
-      if (diskCached.isNotEmpty && mounted) {
-        setState(() {
-          _clearLogoUrl = diskCached;
-          _showLogoInCrossFade = true;
-        });
-        _startLogoFadeTimer();
-      }
-      return;
-    }
-
-    final rawId = movie.tmdbId?.toString() ?? movie.id;
-    final title = movie.title;
-    final isTvHint = movie.genre.toLowerCase().contains('tv') || movie.genre.toLowerCase().contains('series');
-
-    String? logo;
-
-    // 3. Check our backend server directly for a hosted logo
-    if (rawId.isNotEmpty && rawId != '0' && rawId != 'null') {
-      final serverLogoUrl = 'https://ot.goprivate.fun/uploads/logos/$rawId.png';
-      try {
-        final res = await http.head(Uri.parse(serverLogoUrl)).timeout(const Duration(seconds: 2));
-        if (res.statusCode == 200) {
-          logo = serverLogoUrl;
-        }
-      } catch (_) {}
-    }
-
-    // 4. Try directly via TMDB API if rawId is a valid numeric TMDB ID
-    if (logo == null && rawId.isNotEmpty && rawId != '0' && rawId != 'null' && int.tryParse(rawId) != null) {
-      final firstType = isTvHint ? 'tv' : 'movie';
-      final secondType = isTvHint ? 'movie' : 'tv';
-
-      logo = await _fetchLogoForType(firstType, rawId);
-      logo ??= await _fetchLogoForType(secondType, rawId);
-    }
-
-    // 5. Fallback to TMDB Title Search (for Stalker VODs, IMDb IDs, or unlinked items)
-    logo ??= await _searchTmdbForLogo(title);
-
-    if (logo != null && logo.isNotEmpty) {
-      _logoMemoryCache[cacheKey] = logo;
-      prefs.setString(cacheKey, logo);
-      if (mounted) {
-        setState(() {
-          _clearLogoUrl = logo;
-          _showLogoInCrossFade = true;
-        });
-        _startLogoFadeTimer();
-      }
+    // 2. Resolve via LogoService and update
+    final logo = await LogoService.resolveLogo(movie);
+    if (logo != null && logo.isNotEmpty && mounted) {
+      setState(() {
+        _clearLogoUrl = logo;
+        _showLogoInCrossFade = true;
+      });
+      _startLogoFadeTimer();
     }
   }
 

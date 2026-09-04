@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,10 +9,13 @@ import 'package:private_cinema_mobile/data/mock_catalog.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/download_manager.dart';
+import 'package:private_cinema_mobile/data/logo_service.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/models/language_item.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
 import 'package:private_cinema_mobile/widgets/movie_image.dart';
+import 'package:private_cinema_mobile/widgets/carousel_logo_widget.dart';
 import 'package:private_cinema_mobile/widgets/movie_section_row.dart';
 import 'package:private_cinema_mobile/widgets/language_section_row.dart';
 import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
@@ -48,15 +53,30 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _carouselController.addListener(_onCarouselScroll);
     _fetchApiData();
     _startCarouselTimer();
   }
 
   @override
   void dispose() {
+    _carouselController.removeListener(_onCarouselScroll);
     _carouselTimer?.cancel();
     _carouselController.dispose();
     super.dispose();
+  }
+
+  void _onCarouselScroll() {
+    if (!_carouselController.hasClients) return;
+    final carouselMovies = _getCarouselMovies();
+    if (carouselMovies.isEmpty) return;
+    final page = _carouselController.page ?? 1000.0;
+    final newIndex = page.round() % carouselMovies.length;
+    if (newIndex != _carouselIndex) {
+      setState(() {
+        _carouselIndex = newIndex;
+      });
+    }
   }
 
   void _startCarouselTimer() {
@@ -66,8 +86,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final next = _carouselController.page!.round() + 1;
         _carouselController.animateToPage(
           next,
-          duration: const Duration(milliseconds: 800),
-          curve: Curves.easeInOutCubic,
+          duration: const Duration(milliseconds: 650),
+          curve: Curves.easeOutCubic,
         );
       }
     });
@@ -158,6 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadContinueWatching();
 
       final featuredList = parsedMovies.take(5).toList();
+      LogoService.precacheLogos(recentList.isNotEmpty ? recentList : featuredList);
 
       if (mounted) {
         setState(() {
@@ -266,171 +287,225 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: RefreshIndicator(
-        onRefresh: _fetchApiData,
-        color: AppColors.accentBright,
-        backgroundColor: AppColors.surface,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.only(bottom: 110),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ValueListenableBuilder<HomeWallpaperSettings>(
+      valueListenable: HomeWallpaperManager.notifier,
+      builder: (context, wallpaper, _) {
+        return Scaffold(
+          backgroundColor: wallpaper.enabled ? Colors.transparent : AppColors.background,
+          body: Stack(
+            fit: StackFit.expand,
             children: [
-              // Top GoXio App Header
-              _buildTopHeader(),
+              // 1. Live Ambient Wallpaper (if enabled)
+              if (wallpaper.enabled) ...[
+                if (wallpaper.localPath != null &&
+                    wallpaper.localPath!.isNotEmpty &&
+                    File(wallpaper.localPath!).existsSync())
+                  Image.file(
+                    File(wallpaper.localPath!),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(color: const Color(0xFF090D16)),
+                  )
+                else if (wallpaper.wallpaperUrl.isNotEmpty)
+                  CachedNetworkImage(
+                    imageUrl: wallpaper.wallpaperUrl,
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => Container(color: const Color(0xFF090D16)),
+                    errorWidget: (_, __, ___) => Container(color: const Color(0xFF090D16)),
+                  ),
 
-              // Top Category Tabs
-              _buildCategoryTabs(),
+                // 2. Glass Blur & Darkness Overlay
+                ClipRect(
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: wallpaper.blur, sigmaY: wallpaper.blur),
+                    child: Container(color: Colors.black.withOpacity(wallpaper.darkness)),
+                  ),
+                ),
 
-              const SizedBox(height: 12),
+                // 3. Edge Vignette Radial Overlay
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: Alignment.center,
+                      radius: 1.1,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(wallpaper.vignette * 0.4),
+                        Colors.black.withOpacity(wallpaper.vignette),
+                      ],
+                      stops: const [0.35, 0.75, 1.0],
+                    ),
+                  ),
+                ),
+              ],
 
-              // Carousel Featured Banner
-              _buildCarousel(),
+              // 4. Main Scrollable Content
+              RefreshIndicator(
+                onRefresh: _fetchApiData,
+                color: AppColors.accentBright,
+                backgroundColor: AppColors.surface,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.only(bottom: 110),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Top GoXio App Header
+                      _buildTopHeader(),
 
-              // Carousel Metadata Info
-              _buildCarouselMetadata(),
+                      // Top Category Tabs
+                      _buildCategoryTabs(),
 
-              const SizedBox(height: 24),
+                      const SizedBox(height: 12),
 
-              // 1. "New" Section (Pure posters matching mockup)
-              MovieSectionRow(
-                title: 'New',
-                movies: MockCatalog.recentlyReleased,
-                hideTitle: true,
-                onMoviePressed: _openMovieDetail,
-                onSeeAllPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => CategoryGridScreen(
+                      // Carousel Featured Banner
+                      _buildCarousel(),
+
+                      // Carousel Metadata Info
+                      _buildCarouselMetadata(),
+
+                      const SizedBox(height: 4),
+
+                      // 1. "New" Section (Pure posters matching mockup)
+                      MovieSectionRow(
                         title: 'New',
                         movies: MockCatalog.recentlyReleased,
+                        hideTitle: true,
+                        onMoviePressed: _openMovieDetail,
+                        onSeeAllPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CategoryGridScreen(
+                                title: 'New',
+                                movies: MockCatalog.recentlyReleased,
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                  );
-                },
-              ),
 
-              const SizedBox(height: 20),
+                      const SizedBox(height: 20),
 
-              // 2. "Language" Section
-              LanguageSectionRow(
-                languages: _languages,
-                onLanguageSelected: (lang) {
-                  final langMovies = MockCatalog.allMovies.where((m) => m.language == lang).toList();
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => CategoryGridScreen(
-                        title: '$lang Movies',
-                        movies: langMovies,
+                      // 2. "Language" Section
+                      LanguageSectionRow(
+                        languages: _languages,
+                        onLanguageSelected: (lang) {
+                          final langMovies = MockCatalog.allMovies.where((m) => m.language == lang).toList();
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CategoryGridScreen(
+                                title: '$lang Movies',
+                                movies: langMovies,
+                              ),
+                            ),
+                          ).then((_) => _loadContinueWatching());
+                        },
                       ),
-                    ),
-                  ).then((_) => _loadContinueWatching());
-                },
-              ),
 
-              const SizedBox(height: 20),
+                      const SizedBox(height: 20),
 
-              // 3. "Top Rated" Section
-              MovieSectionRow(
-                title: 'Top Rated',
-                movies: MockCatalog.topRated,
-                onMoviePressed: _openMovieDetail,
-                onSeeAllPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => CategoryGridScreen(
+                      // 3. "Top Rated" Section
+                      MovieSectionRow(
                         title: 'Top Rated',
                         movies: MockCatalog.topRated,
+                        onMoviePressed: _openMovieDetail,
+                        onSeeAllPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CategoryGridScreen(
+                                title: 'Top Rated',
+                                movies: MockCatalog.topRated,
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                  );
-                },
-              ),
 
-              const SizedBox(height: 20),
+                      const SizedBox(height: 20),
 
-              // 4. "Continue Watching" Section (if present)
-              if (_continueWatchingMovies.isNotEmpty) ...[
-                MovieSectionRow(
-                  title: 'Continue Watching',
-                  movies: _continueWatchingMovies,
-                  isLandscape: true,
-                  onMoviePressed: _openMovieDetail,
-                  onSeeAllPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CategoryGridScreen(
+                      // 4. "Continue Watching" Section (if present)
+                      if (_continueWatchingMovies.isNotEmpty) ...[
+                        MovieSectionRow(
                           title: 'Continue Watching',
                           movies: _continueWatchingMovies,
+                          isLandscape: true,
+                          onMoviePressed: _openMovieDetail,
+                          onSeeAllPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => CategoryGridScreen(
+                                  title: 'Continue Watching',
+                                  movies: _continueWatchingMovies,
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-              ],
+                        const SizedBox(height: 20),
+                      ],
 
-              // 5. Curated Collections
-              for (final colName in _movieCollections) ...[
-                MovieSectionRow(
-                  title: colName,
-                  movies: MockCatalog.allMovies.where((m) => m.collection?.trim().toLowerCase() == colName.toLowerCase()).toList(),
-                  onMoviePressed: _openMovieDetail,
-                  onSeeAllPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CategoryGridScreen(
+                      // 5. Curated Collections
+                      for (final colName in _movieCollections) ...[
+                        MovieSectionRow(
                           title: colName,
                           movies: MockCatalog.allMovies.where((m) => m.collection?.trim().toLowerCase() == colName.toLowerCase()).toList(),
+                          onMoviePressed: _openMovieDetail,
+                          onSeeAllPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => CategoryGridScreen(
+                                  title: colName,
+                                  movies: MockCatalog.allMovies.where((m) => m.collection?.trim().toLowerCase() == colName.toLowerCase()).toList(),
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-              ],
+                        const SizedBox(height: 20),
+                      ],
 
-              // 6. Genres
-              for (final genre in _movieGenres) ...[
-                MovieSectionRow(
-                  title: '$genre Movies',
-                  movies: MockCatalog.allMovies.where((m) => m.genre == genre).toList(),
-                  onMoviePressed: _openMovieDetail,
-                  onSeeAllPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CategoryGridScreen(
+                      // 6. Genres
+                      for (final genre in _movieGenres) ...[
+                        MovieSectionRow(
                           title: '$genre Movies',
                           movies: MockCatalog.allMovies.where((m) => m.genre == genre).toList(),
+                          onMoviePressed: _openMovieDetail,
+                          onSeeAllPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => CategoryGridScreen(
+                                  title: '$genre Movies',
+                                  movies: MockCatalog.allMovies.where((m) => m.genre == genre).toList(),
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-              ],
+                        const SizedBox(height: 20),
+                      ],
 
-              // 7. General Movies Section
-              MovieSectionRow(
-                title: 'Movies',
-                movies: MockCatalog.allMovies,
-                onMoviePressed: _openMovieDetail,
-                onSeeAllPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => CategoryGridScreen(
+                      // 7. General Movies Section
+                      MovieSectionRow(
                         title: 'Movies',
                         movies: MockCatalog.allMovies,
+                        onMoviePressed: _openMovieDetail,
+                        onSeeAllPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CategoryGridScreen(
+                                title: 'Movies',
+                                movies: MockCatalog.allMovies,
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                  );
-                },
+                    ],
+                  ),
+                ),
               ),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -694,22 +769,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Column(
       children: [
-        const SizedBox(height: 12),
-        // Title
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Text(
-            movie.title,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.outfit(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-            ),
-          ),
+        const SizedBox(height: 8),
+        // Movie ClearLogo with incoming/outgoing animation and typography fallback
+        CarouselLogoWidget(
+          movie: movie,
+          maxHeight: 52,
+          maxWidth: 270,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         // Badges Row
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -721,7 +788,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildRatingBadge(movie.rating),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         // Page Indicator Dots
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -870,6 +937,43 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: MovieImage(
                         source: movie.posterUrl,
                         fit: BoxFit.cover,
+                      ),
+                    ),
+                    // Reduced size movie title at poster bottom
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(12, 28, 12, 12),
+                        decoration: BoxDecoration(
+                          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.4),
+                              Colors.black.withValues(alpha: 0.88),
+                            ],
+                            stops: const [0.0, 0.45, 1.0],
+                          ),
+                        ),
+                        child: Text(
+                          movie.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.2,
+                            shadows: const [
+                              Shadow(color: Colors.black, blurRadius: 4),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                     if (movie.rating > 0)
