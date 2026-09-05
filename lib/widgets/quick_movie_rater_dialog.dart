@@ -275,7 +275,24 @@ class _QuickMovieRaterDialogState extends State<QuickMovieRaterDialog>
     );
   }
 
-  final Map<String, int> _pageTracker = {};
+  int _currentDiscoverPage = 1;
+  int _totalDiscoverPages = 999;
+  int _currentSortIndex = 0;
+  static const List<String> _sortStrategies = [
+    'popularity.desc',
+    'vote_count.desc',
+    'vote_average.desc',
+    'primary_release_date.desc',
+  ];
+
+  bool _isContiguousYearSelection() {
+    if (_selectedYears.length <= 1) return true;
+    final sorted = _selectedYears.toList()..sort();
+    for (int i = 0; i < sorted.length - 1; i++) {
+      if (sorted[i + 1] - sorted[i] > 1) return false;
+    }
+    return true;
+  }
 
   Future<void> _fetchMovies({bool clearExisting = false}) async {
     if (clearExisting) {
@@ -283,7 +300,9 @@ class _QuickMovieRaterDialogState extends State<QuickMovieRaterDialog>
         _isLoading = true;
         _movieQueue.clear();
         _currentSelectedRating = 0.0;
-        _pageTracker.clear();
+        _currentDiscoverPage = 1;
+        _totalDiscoverPages = 999;
+        _currentSortIndex = 0;
       });
     } else {
       if (_isFetchingMore) return;
@@ -292,116 +311,159 @@ class _QuickMovieRaterDialogState extends State<QuickMovieRaterDialog>
 
     try {
       final List<_QuickMovieItem> fetchedItems = [];
-      final List<int?> targetYears = _selectedYears.isEmpty ? [null] : _selectedYears.toList();
+      final isContiguous = _isContiguousYearSelection();
+      int attempts = 0;
+      const int maxAttempts = 15;
 
-      // We want to fetch until we have gathered at least 30 fresh unrated movies (or reached total pages)
-      int loopCycles = 0;
-      const int maxCycles = 25; // scan up to 25 page rounds to cover all pages
+      while (fetchedItems.length < 25 &&
+             _currentDiscoverPage <= _totalDiscoverPages &&
+             attempts < maxAttempts) {
+        attempts++;
+        final sortParam = _sortStrategies[_currentSortIndex % _sortStrategies.length];
+        List<dynamic> rawResults = [];
 
-      while (fetchedItems.length < 30 && loopCycles < maxCycles) {
-        loopCycles++;
-        bool anyResultsFoundInRound = false;
-
-        for (final yr in targetYears) {
-          final trackerKey = '$_selectedLanguage-$yr';
-          final currentPage = _pageTracker[trackerKey] ?? 1;
-          _pageTracker[trackerKey] = currentPage + 1;
-
-          // Build query params
+        if (_selectedYears.isEmpty || isContiguous) {
+          // Range query (single fast TMDB discover call per page!)
           final queryParams = <String, String>{
             'api_key': TmdbService.apiKey,
             'include_adult': 'false',
-            'page': currentPage.toString(),
+            'page': _currentDiscoverPage.toString(),
+            'sort_by': sortParam,
           };
 
           if (_selectedLanguage != 'all') {
             queryParams['with_original_language'] = _selectedLanguage;
           }
 
-          if (yr != null) {
-            queryParams['primary_release_year'] = yr.toString();
-            queryParams['sort_by'] = 'popularity.desc';
-          } else {
-            final sortOptions = [
-              'popularity.desc',
-              'vote_count.desc',
-              'revenue.desc',
-              'vote_average.desc',
-            ];
-            queryParams['sort_by'] = sortOptions[(currentPage - 1) % sortOptions.length];
-            queryParams['primary_release_date.gte'] = '1990-01-01';
-            queryParams['primary_release_date.lte'] = DateTime.now().toIso8601String().split('T')[0];
-            if (_selectedLanguage == 'all') {
-              queryParams['vote_count.gte'] = '5';
-            }
+          if (sortParam == 'vote_average.desc') {
+            queryParams['vote_count.gte'] = '5';
           }
 
-          final uri = Uri.https('api.themoviedb.org', '/3/discover/movie', queryParams);
-          final res = await http.get(uri).timeout(const Duration(seconds: 8));
+          if (_selectedYears.isNotEmpty) {
+            final minYr = _selectedYears.reduce(min);
+            final maxYr = _selectedYears.reduce(max);
+            queryParams['primary_release_date.gte'] = '$minYr-01-01';
+            queryParams['primary_release_date.lte'] = '$maxYr-12-31';
+          } else {
+            queryParams['primary_release_date.gte'] = '1970-01-01';
+            queryParams['primary_release_date.lte'] = DateTime.now().toIso8601String().split('T')[0];
+          }
 
-          if (res.statusCode == 200) {
-            final data = jsonDecode(res.body);
-            final results = data['results'] as List? ?? [];
-            final totalPages = (data['total_pages'] as num?)?.toInt() ?? 1;
-
-            if (results.isNotEmpty) {
-              anyResultsFoundInRound = true;
+          try {
+            final uri = Uri.https('api.themoviedb.org', '/3/discover/movie', queryParams);
+            final res = await http.get(uri).timeout(const Duration(seconds: 6));
+            if (res.statusCode == 200) {
+              final data = jsonDecode(res.body);
+              rawResults = data['results'] as List? ?? [];
+              final total = (data['total_pages'] as num?)?.toInt() ?? 1;
+              _totalDiscoverPages = total;
             }
+          } catch (e) {
+            debugPrint('TMDB Discover page $_currentDiscoverPage error: $e');
+          }
+          _currentDiscoverPage++;
 
-            if (currentPage >= totalPages) {
-              _pageTracker[trackerKey] = totalPages + 10;
+          // If reached end of current sort strategy, cycle to next sort mode
+          if (_currentDiscoverPage > _totalDiscoverPages && _currentSortIndex < _sortStrategies.length - 1) {
+            _currentSortIndex++;
+            _currentDiscoverPage = 1;
+            _totalDiscoverPages = 999;
+          }
+        } else {
+          // Non-contiguous individual years: parallel fetch for each selected year
+          final yearFutures = _selectedYears.map((yr) async {
+            final queryParams = <String, String>{
+              'api_key': TmdbService.apiKey,
+              'include_adult': 'false',
+              'page': _currentDiscoverPage.toString(),
+              'primary_release_year': yr.toString(),
+              'sort_by': sortParam,
+            };
+            if (_selectedLanguage != 'all') {
+              queryParams['with_original_language'] = _selectedLanguage;
             }
-
-            for (final item in results) {
-              final id = item['id']?.toString() ?? '';
-              if (id.isEmpty) continue;
-
-              // Only skip if already in excluded list
-              if (_hideAlreadyRated && _excludedIds.contains(id)) continue;
-
-              final relDate = item['release_date']?.toString() ?? '';
-              int? parsedYear;
-              if (relDate.isNotEmpty && relDate.length >= 4) {
-                parsedYear = int.tryParse(relDate.substring(0, 4));
+            try {
+              final uri = Uri.https('api.themoviedb.org', '/3/discover/movie', queryParams);
+              final res = await http.get(uri).timeout(const Duration(seconds: 6));
+              if (res.statusCode == 200) {
+                final data = jsonDecode(res.body);
+                return (data['results'] as List? ?? []);
               }
-
-              final genreIds = (item['genre_ids'] as List? ?? []).cast<int>();
-              final genreNames = genreIds
-                  .map((gId) => _genreMap[gId] ?? '')
-                  .where((g) => g.isNotEmpty)
-                  .take(3)
-                  .toList();
-
-              final isFav = _favoriteIds.contains(id);
-
-              fetchedItems.add(_QuickMovieItem(
-                tmdbId: id,
-                title: item['title']?.toString() ?? 'Untitled Movie',
-                originalTitle: item['original_title']?.toString(),
-                posterPath: item['poster_path']?.toString(),
-                backdropPath: item['backdrop_path']?.toString(),
-                releaseDate: relDate,
-                year: parsedYear,
-                voteAverage: (item['vote_average'] as num?)?.toDouble() ?? 0.0,
-                voteCount: (item['vote_count'] as num?)?.toInt() ?? 0,
-                overview: item['overview']?.toString() ?? '',
-                originalLanguage: item['original_language']?.toString() ?? 'en',
-                genreNames: genreNames,
-                isFavorite: isFav,
-              ));
+            } catch (e) {
+              debugPrint('Error fetching year $yr page $_currentDiscoverPage: $e');
             }
+            return <dynamic>[];
+          });
+
+          final resultsPerYear = await Future.wait(yearFutures);
+          for (final r in resultsPerYear) {
+            rawResults.addAll(r);
+          }
+          _currentDiscoverPage++;
+        }
+
+        if (rawResults.isEmpty) {
+          if (_currentSortIndex < _sortStrategies.length - 1) {
+            _currentSortIndex++;
+            _currentDiscoverPage = 1;
+            _totalDiscoverPages = 999;
+            continue;
+          } else {
+            break;
           }
         }
 
-        if (!anyResultsFoundInRound) {
-          break;
+        // Process and filter results
+        for (final item in rawResults) {
+          final id = item['id']?.toString() ?? '';
+          if (id.isEmpty) continue;
+
+          if (_hideAlreadyRated && _excludedIds.contains(id)) continue;
+
+          final relDate = item['release_date']?.toString() ?? '';
+          int? parsedYear;
+          if (relDate.isNotEmpty && relDate.length >= 4) {
+            parsedYear = int.tryParse(relDate.substring(0, 4));
+          }
+
+          // If specific years selected, ensure parsedYear matches
+          if (_selectedYears.isNotEmpty && parsedYear != null) {
+            if (!_selectedYears.contains(parsedYear)) continue;
+          }
+
+          final genreIds = (item['genre_ids'] as List? ?? []).cast<int>();
+          final genreNames = genreIds
+              .map((gId) => _genreMap[gId] ?? '')
+              .where((g) => g.isNotEmpty)
+              .take(3)
+              .toList();
+
+          final isFav = _favoriteIds.contains(id);
+
+          fetchedItems.add(_QuickMovieItem(
+            tmdbId: id,
+            title: item['title']?.toString() ?? 'Untitled Movie',
+            originalTitle: item['original_title']?.toString(),
+            posterPath: item['poster_path']?.toString(),
+            backdropPath: item['backdrop_path']?.toString(),
+            releaseDate: relDate,
+            year: parsedYear,
+            voteAverage: (item['vote_average'] as num?)?.toDouble() ?? 0.0,
+            voteCount: (item['vote_count'] as num?)?.toInt() ?? 0,
+            overview: item['overview']?.toString() ?? '',
+            originalLanguage: item['original_language']?.toString() ?? 'en',
+            genreNames: genreNames,
+            isFavorite: isFav,
+          ));
         }
       }
 
       // Deduplicate by TMDB ID
       final Map<String, _QuickMovieItem> uniqueMap = {};
       for (final item in fetchedItems) {
-        uniqueMap[item.tmdbId] = item;
+        if (!_movieQueue.any((m) => m.tmdbId == item.tmdbId)) {
+          uniqueMap[item.tmdbId] = item;
+        }
       }
       final uniqueList = uniqueMap.values.toList();
 
@@ -820,7 +882,54 @@ class _QuickMovieRaterDialogState extends State<QuickMovieRaterDialog>
                                 );
                               }),
                             ),
-                            const SizedBox(height: 24),
+                            const SizedBox(height: 16),
+
+                            // 4. Skipped Movies Reset (if any)
+                            if (_skippedIds.isNotEmpty) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${_skippedIds.length} Skipped Movies',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const Text(
+                                            'You previously skipped these from discovery',
+                                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.amberAccent,
+                                      ),
+                                      icon: const Icon(Icons.refresh_rounded, size: 16),
+                                      label: const Text('Reset', style: TextStyle(fontWeight: FontWeight.bold)),
+                                      onPressed: () async {
+                                        await _resetSkippedList();
+                                        setFilterState(() {});
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                           ],
                         ),
                       ),

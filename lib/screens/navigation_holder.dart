@@ -18,23 +18,28 @@ class NavigationHolder extends StatefulWidget {
 
 class _NavigationHolderState extends State<NavigationHolder> {
   int _currentIndex = 0;
+  late final List<Widget> _screens;
 
-  List<Widget> get _screens => [
-    HomeScreen(
-      key: const ValueKey('home'),
-      onSwitchTab: (index) {
-        if (mounted) {
-          setState(() {
-            _currentIndex = index;
-          });
-        }
-      },
-    ),
-    const AllMoviesScreen(key: ValueKey('search')),
-    const LiveTvScreen(key: ValueKey('livetv')),
-    const FavoritesScreen(key: ValueKey('favorites')),
-    const SettingsScreen(key: ValueKey('settings')),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      HomeScreen(
+        key: const PageStorageKey('home'),
+        onSwitchTab: (index) {
+          if (mounted) {
+            setState(() {
+              _currentIndex = index;
+            });
+          }
+        },
+      ),
+      const AllMoviesScreen(key: PageStorageKey('search')),
+      const LiveTvScreen(key: PageStorageKey('livetv')),
+      const FavoritesScreen(key: PageStorageKey('favorites')),
+      const SettingsScreen(key: PageStorageKey('settings')),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,23 +50,11 @@ class _NavigationHolderState extends State<NavigationHolder> {
           backgroundColor: AppColors.background,
           body: Stack(
             children: [
-              // Screens with transition
+              // Screens kept alive with IndexedStack so tab switches and Home button presses never reload pages
               Positioned.fill(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  transitionBuilder: (child, animation) {
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.01),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
-                        child: child,
-                      ),
-                    );
-                  },
-                  child: _screens[_currentIndex],
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _screens,
                 ),
               ),
               
@@ -182,9 +175,11 @@ class _NavigationHolderState extends State<NavigationHolder> {
 
     return GestureDetector(
       onTap: () {
-        setState(() {
-          _currentIndex = index;
-        });
+        if (_currentIndex != index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        }
       },
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
