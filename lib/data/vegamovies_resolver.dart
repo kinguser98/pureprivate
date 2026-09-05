@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/domain_service.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 import '../widgets/special_search_dialog.dart';
 
 class VegamoviesResolver {
@@ -68,7 +68,6 @@ class VegamoviesResolver {
         return [];
       }
 
-      // Process top matching posts (up to 3)
       final postsToProcess = postUrls.take(3).toList();
       for (final targetPostUrl in postsToProcess) {
         debugPrint('VegamoviesResolver: Inspecting post $targetPostUrl');
@@ -101,20 +100,17 @@ class VegamoviesResolver {
       }
     }
 
-    // Sort streams: prioritize original language & Slast native player
-    if (originalLanguage != null && originalLanguage.isNotEmpty) {
-      final langLower = originalLanguage.toLowerCase();
-      uniqueSources.sort((a, b) {
-        final aMatch = a.name.toLowerCase().contains(langLower);
-        final bMatch = b.name.toLowerCase().contains(langLower);
-        if (aMatch && !bMatch) return -1;
-        if (!aMatch && bMatch) return 1;
-        return 0;
-      });
-    }
+    // Quality sorting: 4K -> 1080p -> 720p -> 480p
+    final sortedSources = sortStreamsByQuality<StreamSourceInfo>(
+      uniqueSources,
+      getName: (s) => s.name,
+      getUrl: (s) => s.url,
+      getQuality: (s) => s.quality,
+      getSize: (s) => s.size,
+    );
 
-    debugPrint('VegamoviesResolver: Resolved ${uniqueSources.length} sources');
-    return uniqueSources;
+    debugPrint('VegamoviesResolver: Resolved ${sortedSources.length} sources');
+    return sortedSources;
   }
 
   static String _cleanQuery(String query) {
@@ -131,7 +127,6 @@ class VegamoviesResolver {
     final urls = <String>[];
     final words = cleanQuery.toLowerCase().split(' ').where((w) => w.length > 2).toList();
     
-    // Pattern 1: Links ending with .html
     final htmlRegex = RegExp(r'href="([^"]+\.html)"', caseSensitive: false);
     for (final m in htmlRegex.allMatches(html)) {
       var u = m.group(1);
@@ -151,7 +146,6 @@ class VegamoviesResolver {
       }
     }
 
-    // Pattern 2: Rel bookmark links
     final bookmarkRegex = RegExp(r'<a\s+[^>]*href="([^"]+)"[^>]*rel="bookmark"[^>]*>', caseSensitive: false);
     for (final m in bookmarkRegex.allMatches(html)) {
       var u = m.group(1);
@@ -174,37 +168,33 @@ class VegamoviesResolver {
     final sources = <StreamSourceInfo>[];
     final langTag = (origLang != null && origLang.isNotEmpty) ? origLang : 'Original';
 
-    // Extract post title for quality / audio info if available
     final titleMatch = RegExp(r'<h1[^>]*>([\s\S]*?)<\/h1>', caseSensitive: false).firstMatch(html);
     final postTitle = titleMatch != null ? titleMatch.group(1)!.replaceAll(RegExp(r'<[^>]+>'), '').trim() : '';
 
-    String quality = 'HD';
-    if (postTitle.contains('2160p') || postTitle.contains('4K')) {
-      quality = '2160p 4K';
+    String quality = '1080p Full HD';
+    if (postTitle.contains('2160p') || postTitle.contains('4K') || postTitle.contains('UHD')) {
+      quality = '4K (2160p)';
     } else if (postTitle.contains('1080p')) {
-      quality = '1080p';
+      quality = '1080p Full HD';
     } else if (postTitle.contains('720p')) {
-      quality = '720p';
+      quality = '720p HD';
     } else if (postTitle.contains('480p')) {
-      quality = '480p';
-    } else if (postTitle.toLowerCase().contains('hdtc') || postTitle.toLowerCase().contains('cam')) {
-      quality = 'HDTC / CAM';
+      quality = '480p SD';
     }
 
     final isMultiAudio = html.contains('Multi Audio') || html.contains('Dual Audio') || postTitle.contains('Dual');
     final audioTag = isMultiAudio ? 'Dual Audio' : langTag;
 
-    // 1. Check for IndStreamPlayerConfigs (Slast Native Embedded Player)
     final configMatch = RegExp(r'IndStreamPlayerConfigs\s*=\s*\{[\s\S]*?src\s*:\s*["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(html);
     if (configMatch != null) {
       final srcId = configMatch.group(1)!;
 
       final translators = [
-        {'tr': '8', 'label': 'Malayalam (HD)', 'quality': '1080p / 720p HD'},
-        {'tr': '4', 'label': 'Hindi (LiNE / Dual Audio)', 'quality': quality},
-        {'tr': '3', 'label': 'Tamil (HDTC / CAM)', 'quality': 'HDTC / CAM'},
-        {'tr': '2', 'label': 'Telugu (HD)', 'quality': '1080p / 720p HD'},
-        {'tr': '5', 'label': 'Kannada (HD)', 'quality': '1080p / 720p HD'},
+        {'tr': '8', 'label': 'Malayalam (HD)', 'quality': '1080p Full HD', 'lang': 'Malayalam'},
+        {'tr': '4', 'label': 'Hindi (LiNE / Dual Audio)', 'quality': quality, 'lang': 'Hindi'},
+        {'tr': '3', 'label': 'Tamil (HDTC / CAM)', 'quality': '720p HD', 'lang': 'Tamil'},
+        {'tr': '2', 'label': 'Telugu (HD)', 'quality': '1080p Full HD', 'lang': 'Telugu'},
+        {'tr': '5', 'label': 'Kannada (HD)', 'quality': '1080p Full HD', 'lang': 'Kannada'},
       ];
 
       for (final item in translators) {
@@ -224,14 +214,14 @@ class VegamoviesResolver {
               'Referer': '$domain/',
             },
             quality: q,
+            languages: [item['lang']!],
           ),
         );
       }
     } else {
-      // Fallback: use post URL to resolve embed stream
       sources.add(
         StreamSourceInfo(
-          name: '$movieTitle • Vegamovies Web Stream ($quality • $audioTag)',
+          name: 'Web Stream ($quality • $audioTag)',
           url: postUrl,
           type: StreamSourceType.vegamovies,
           headers: {

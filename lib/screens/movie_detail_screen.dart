@@ -66,6 +66,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _isFavorite = false;
   bool _inWatchlist = false;
   bool _isDownloaded = false;
+  String? _downloadedLocalPath;
 
   List<CastMember> _dynamicCast = [];
   String? _dynamicDirector;
@@ -1445,10 +1446,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _checkDownloadStatus() async {
-    final isDown = await DownloadManager.isDownloaded(movie.id);
+    final localPath = await DownloadManager.getLocalPath(movie.id);
+    final isDown = localPath != null && (kIsWeb || await File(localPath).exists());
     if (mounted) {
       setState(() {
         _isDownloaded = isDown;
+        _downloadedLocalPath = isDown ? localPath : null;
       });
     }
   }
@@ -3389,7 +3392,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
  
             final List<Widget> items = [];
- 
+
+            // 0. OFFLINE DOWNLOADED FILE (Always shown at the very top at Index 0 irrespective of source order & visibility)
+            if (_isDownloaded && _downloadedLocalPath != null) {
+              items.add(
+                _buildSourceTile(
+                  icon: Icons.offline_pin_rounded,
+                  title: '[DOWNLOADED] Offline Local Copy',
+                  subtitle: 'Play saved offline copy directly from device storage',
+                  disabled: false,
+                  isDownloaded: true,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _play(_downloadedLocalPath!, resumeDirectly: resumeDirectly, sourceName: 'Offline Download');
+                  },
+                ),
+              );
+            }
+
             // 1. Direct MP4/MKV Link (always shown at top if exist)
             if (dbMp4Sources.isNotEmpty) {
               items.add(
@@ -3537,19 +3557,57 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     required String subtitle,
     required bool disabled,
     required VoidCallback onTap,
+    bool isDownloaded = false,
   }) {
     return ListTile(
-      leading: Icon(
-        icon,
-        color: disabled ? Colors.white24 : AppColors.accentBright,
-      ),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: disabled ? Colors.white30 : Colors.white,
-          fontWeight: FontWeight.bold,
-          fontSize: 14,
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isDownloaded
+              ? const Color(0xFF10B981).withValues(alpha: 0.2)
+              : Colors.white.withValues(alpha: 0.05),
+          shape: BoxShape.circle,
         ),
+        child: Icon(
+          icon,
+          color: isDownloaded
+              ? const Color(0xFF34D399)
+              : (disabled ? Colors.white24 : AppColors.accentBright),
+          size: 20,
+        ),
+      ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                color: disabled ? Colors.white30 : Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          if (isDownloaded) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+              ),
+              child: const Text(
+                'DOWNLOADED',
+                style: TextStyle(
+                  color: Color(0xFF34D399),
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
       subtitle: Text(
         subtitle,
@@ -3560,10 +3618,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       ),
       trailing: Icon(
         Icons.chevron_right_rounded,
-        color: disabled ? Colors.white10 : Colors.white54,
+        color: disabled ? Colors.white10 : (isDownloaded ? const Color(0xFF34D399) : Colors.white54),
       ),
-      tileColor: Colors.white.withValues(alpha: 0.03),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      tileColor: isDownloaded
+          ? const Color(0xFF059669).withValues(alpha: 0.12)
+          : Colors.white.withValues(alpha: 0.03),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: isDownloaded
+            ? BorderSide(color: const Color(0xFF10B981).withValues(alpha: 0.4), width: 1.2)
+            : BorderSide.none,
+      ),
       onTap: disabled ? null : onTap,
     );
   }
@@ -3771,37 +3836,46 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
                 const SizedBox(height: 16),
                 Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: sources.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final source = sources[index];
-                        return StreamMetadataTile(
-                          name: source.name,
-                          url: source.url,
-                          headers: source.headers,
-                          isSelected: false,
-                          onTap: () {
-                            Navigator.of(context).pop();
-                            _playWithResolution(
-                              source.url,
-                              resumeDirectly: resumeDirectly,
-                              sourceName: source.name,
-                              headers: source.headers,
-                            );
-                          },
-                          onLongPress: () {
-                            Clipboard.setData(ClipboardData(text: source.url));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Copied Link: ${source.url}'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          },
-                        );
-                      },
+                  child: Builder(
+                    builder: (context) {
+                      final sortedSources = sortStreamsByQuality<StreamSource>(
+                        sources,
+                        getName: (s) => s.name,
+                        getUrl: (s) => s.url,
+                      );
+                      return ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: sortedSources.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final source = sortedSources[index];
+                          return StreamMetadataTile(
+                            name: source.name,
+                            url: source.url,
+                            headers: source.headers,
+                            isSelected: false,
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              _playWithResolution(
+                                source.url,
+                                resumeDirectly: resumeDirectly,
+                                sourceName: source.name,
+                                headers: source.headers,
+                              );
+                            },
+                            onLongPress: () {
+                              Clipboard.setData(ClipboardData(text: source.url));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Copied Link: ${source.url}'),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      );
+                    },
                   ),
                 ),
               ],
@@ -4037,7 +4111,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           title: Text(addonEntry.key, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                           subtitle: Text('$totalLinks links across ${siteEntries.length} source(s)', style: TextStyle(color: Colors.white38, fontSize: 11)),
                           children: siteEntries.map((siteEntry) {
-                            final streams = siteEntry.value;
+                            final streams = sortStreamsByQuality<StreamSource>(
+                              siteEntry.value,
+                              getName: (s) => s.name,
+                              getUrl: (s) => s.url,
+                            );
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -4073,12 +4151,17 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Widget _buildFlatSourceList(List<StreamSource> sources, bool resumeDirectly) {
+    final sorted = sortStreamsByQuality<StreamSource>(
+      sources,
+      getName: (s) => s.name,
+      getUrl: (s) => s.url,
+    );
     return ListView.separated(
       shrinkWrap: true,
-      itemCount: sources.length,
+      itemCount: sorted.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) {
-        final s = sources[i];
+        final s = sorted[i];
         return StreamMetadataTile(
           name: s.name,
           url: s.url,

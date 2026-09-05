@@ -681,7 +681,9 @@ abstract final class DownloadManager {
     final List<dynamic> decoded = json.decode(rawList);
 
     final match = decoded.firstWhere(
-      (item) => item['id']?.toString() == movieId,
+      (item) => item['id']?.toString() == movieId ||
+                (item['tmdb_id'] != null && item['tmdb_id']?.toString() == movieId) ||
+                (item['title'] != null && item['title']?.toString().toLowerCase() == movieId.toLowerCase()),
       orElse: () => null,
     );
     if (match == null) return null;

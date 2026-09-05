@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 import '../widgets/special_search_dialog.dart';
 
 class MkvbaseResolver {
@@ -54,7 +55,6 @@ class MkvbaseResolver {
               'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
         ),
         onLoadStop: (controller, uri) async {
-          // Wait briefly for client-side challenge/DOM render
           await Future.delayed(const Duration(milliseconds: 2000));
           try {
             final html = await controller.evaluateJavascript(source: 'document.documentElement.outerHTML');
@@ -128,8 +128,17 @@ class MkvbaseResolver {
       }
     }
 
-    debugPrint('MkvbaseResolver: Resolved ${uniqueSources.length} sources for "$title"');
-    return uniqueSources;
+    // Quality sorting: 4K -> 1080p -> 720p -> 480p
+    final sortedSources = sortStreamsByQuality<StreamSourceInfo>(
+      uniqueSources,
+      getName: (s) => s.name,
+      getUrl: (s) => s.url,
+      getQuality: (s) => s.quality,
+      getSize: (s) => s.size,
+    );
+
+    debugPrint('MkvbaseResolver: Resolved ${sortedSources.length} sources for "$title"');
+    return sortedSources;
   }
 
   static String _cleanQuery(String query) {
@@ -146,7 +155,6 @@ class MkvbaseResolver {
     final postUrls = <String>[];
     final titleWords = cleanTitle.toLowerCase().split(' ').where((w) => w.length > 2).toList();
 
-    // Regex to match article / entry links
     final linkRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
     final matches = linkRegex.allMatches(html);
 
@@ -161,7 +169,6 @@ class MkvbaseResolver {
       final lowerText = anchorText.toLowerCase();
       final lowerHref = href.toLowerCase();
 
-      // Check if href is a post link (not category, tag, author, page, wp-content)
       if (lowerHref.startsWith(domain.toLowerCase()) &&
           !lowerHref.contains('/category/') &&
           !lowerHref.contains('/tag/') &&
@@ -173,7 +180,6 @@ class MkvbaseResolver {
           href != domain &&
           href != '$domain/') {
         
-        // Check if title words match anchor text or URL slug
         bool match = false;
         if (titleWords.isNotEmpty) {
           int matchCount = 0;
@@ -206,7 +212,6 @@ class MkvbaseResolver {
   ) {
     final sources = <StreamSourceInfo>[];
 
-    // Look for HubCloud, GDFlix, FastCloud, PixelDrain, or direct drive links
     final hrefRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
     final matches = hrefRegex.allMatches(html);
 
@@ -215,6 +220,9 @@ class MkvbaseResolver {
       final text = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '')?.trim() ?? '';
       final lowerUrl = url.toLowerCase();
       final lowerText = text.toLowerCase();
+
+      // Skip fuckingfast
+      if (lowerUrl.contains('fuckingfast.net')) continue;
 
       final isTargetProvider = lowerUrl.contains('hubcloud') ||
           lowerUrl.contains('gdflix') ||
@@ -232,8 +240,7 @@ class MkvbaseResolver {
           lowerText.contains('4k');
 
       if (isTargetProvider && url.startsWith('http') && !url.contains('mkvbase.site')) {
-        // Determine quality tag
-        String quality = '1080p';
+        String quality = '1080p Full HD';
         if (lowerUrl.contains('2160p') || lowerUrl.contains('4k') || lowerText.contains('2160p') || lowerText.contains('4k')) {
           quality = '4K (2160p)';
         } else if (lowerUrl.contains('1080p') || lowerText.contains('1080p')) {
@@ -244,7 +251,6 @@ class MkvbaseResolver {
           quality = '480p SD';
         }
 
-        // Determine audio tag
         String audio = 'Multi-Audio';
         if (lowerText.contains('hindi') || lowerUrl.contains('hindi')) {
           audio = 'Hindi';
@@ -256,11 +262,17 @@ class MkvbaseResolver {
           audio = 'Dual-Audio';
         }
 
+        String? size;
+        final sizeMatch = RegExp(r'\[([0-9.]+\s*[GM]B)\]', caseSensitive: false).firstMatch(text);
+        if (sizeMatch != null) {
+          size = sizeMatch.group(1);
+        }
+
         final serverName = lowerUrl.contains('hubcloud')
             ? 'HubCloud'
             : (lowerUrl.contains('gdflix') ? 'GDFlix' : 'FastCloud');
 
-        final displayName = 'MKVBase $serverName - $quality [$audio]';
+        final displayName = '$serverName • $quality [$audio]${size != null ? " [$size]" : ""}';
 
         sources.add(
           StreamSourceInfo(
@@ -268,6 +280,7 @@ class MkvbaseResolver {
             url: url,
             type: StreamSourceType.mkvbase,
             quality: quality,
+            size: size,
             headers: {
               'Referer': postUrl,
               'User-Agent':

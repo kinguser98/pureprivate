@@ -3,122 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/data/mock_catalog.dart';
+import 'package:private_cinema_mobile/data/api_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_card.dart';
+import 'package:private_cinema_mobile/widgets/ott_badge.dart';
 import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-
-Widget getOttLogo(String name, {String? logoUrl, double size = 38}) {
-  final lower = name.toLowerCase();
-
-  String? primaryUrl = logoUrl;
-  Color bg;
-  Color accentColor;
-  String text;
-  IconData? icon;
-
-  if (lower.contains('netflix') || lower.contains('(nf)')) {
-    primaryUrl ??= 'https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.png';
-    bg = const Color(0xFF000000);
-    accentColor = const Color(0xFFE50914);
-    text = 'N';
-  } else if (lower.contains('prime') || lower.contains('amazon') || lower.contains('(pv)')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/11/Amazon_Prime_Video_logo.svg/185px-Amazon_Prime_Video_logo.svg.png';
-    bg = const Color(0xFF00A8E1);
-    accentColor = Colors.white;
-    text = 'PRIME';
-  } else if (lower.contains('hotstar') || lower.contains('disney') || lower.contains('jiohotstar') || lower.contains('(hs)')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Disney%2B_Hotstar_logo.svg/185px-Disney%2B_Hotstar_logo.svg.png';
-    bg = const Color(0xFF0F1016);
-    accentColor = const Color(0xFF00E5FF);
-    text = 'HOTSTAR';
-    icon = Icons.star_rounded;
-  } else if (lower.contains('sony') || lower.contains('liv')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/58/SonyLIV_logo.svg/185px-SonyLIV_logo.svg.png';
-    bg = const Color(0xFF16151A);
-    accentColor = const Color(0xFFFF5500);
-    text = 'LIV';
-  } else if (lower.contains('zee')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/ZEE5_logo.svg/185px-ZEE5_logo.svg.png';
-    bg = const Color(0xFF8230C6);
-    accentColor = const Color(0xFFFFC107);
-    text = 'ZEE5';
-  } else if (lower.contains('jio')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/JioCinema_logo.svg/185px-JioCinema_logo.svg.png';
-    bg = const Color(0xFFE20074);
-    accentColor = Colors.white;
-    text = 'Jio';
-  } else if (lower.contains('sun')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Sun_NXT_logo.png/185px-Sun_NXT_logo.png';
-    bg = const Color(0xFFFF5500);
-    accentColor = Colors.yellow;
-    text = 'SUN';
-  } else if (lower.contains('aha')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Aha_OTT_logo.png/185px-Aha_OTT_logo.png';
-    bg = const Color(0xFFFF5100);
-    accentColor = Colors.white;
-    text = 'aha';
-  } else if (lower.contains('apple')) {
-    primaryUrl ??= 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Apple_TV_Plus_Logo.svg/185px-Apple_TV_Plus_Logo.svg.png';
-    bg = const Color(0xFF1C1C1E);
-    accentColor = Colors.white;
-    text = 'tv+';
-    icon = Icons.apple;
-  } else {
-    bg = const Color(0xFF25293A);
-    accentColor = Colors.white70;
-    text = name.isNotEmpty ? name[0].toUpperCase() : 'O';
-  }
-
-  final fallbackWidget = Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      color: bg,
-      borderRadius: BorderRadius.circular(size * 0.28),
-      border: Border.all(color: accentColor.withOpacity(0.5), width: 1.2),
-      boxShadow: [
-        BoxShadow(
-          color: bg.withOpacity(0.4),
-          blurRadius: 4,
-        ),
-      ],
-    ),
-    child: Center(
-      child: icon != null
-          ? Icon(icon, color: accentColor, size: size * 0.55)
-          : Text(
-              text,
-              style: TextStyle(
-                color: accentColor,
-                fontWeight: FontWeight.bold,
-                fontSize: size * 0.36,
-                letterSpacing: -0.5,
-              ),
-            ),
-    ),
-  );
-
-  if (primaryUrl != null && primaryUrl.isNotEmpty) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(size * 0.28),
-      child: CachedNetworkImage(
-        imageUrl: primaryUrl,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        memCacheWidth: 100,
-        memCacheHeight: 100,
-        fadeInDuration: Duration.zero,
-        fadeOutDuration: Duration.zero,
-        placeholder: (_, __) => fallbackWidget,
-        errorWidget: (_, __, ___) => fallbackWidget,
-      ),
-    );
-  }
-
-  return fallbackWidget;
-}
 
 class AllMoviesScreen extends StatefulWidget {
   const AllMoviesScreen({super.key, this.initialOttProvider});
@@ -141,6 +30,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
   List<String> _languages = [];
   List<String> _ottProviders = [];
   final Map<String, String?> _ottLogoMap = {};
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -151,6 +41,31 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     _loadFilters();
     _applyFilters();
     _searchController.addListener(_applyFilters);
+    _loadMoviesFromApi();
+  }
+
+  Future<void> _loadMoviesFromApi() async {
+    if (ApiService.cachedMovies.isEmpty) {
+      setState(() => _isLoading = true);
+    }
+    try {
+      final rawData = await ApiService.fetchRawData();
+      final rawMovies = rawData['movies'] as List<dynamic>? ?? [];
+      final rawLanguages = rawData['languages'] as List<dynamic>? ?? [];
+      final parsed = ApiService.parseMovies(rawMovies, rawLanguages);
+      ApiService.cachedMovies = parsed;
+      MockCatalog.allMovies = parsed;
+      if (mounted) {
+        _isLoading = false;
+        _loadFilters();
+        _applyFilters();
+      }
+    } catch (e) {
+      debugPrint('AllMoviesScreen _loadMoviesFromApi error: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -160,7 +75,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
   }
 
   void _loadFilters() {
-    final all = MockCatalog.allMovies;
+    final all = ApiService.cachedMovies.isNotEmpty ? ApiService.cachedMovies : MockCatalog.allMovies;
     
     // Extract unique non-empty values dynamically from catalog & database
     final genres = all.map((m) => m.genre).where((g) => g.trim().isNotEmpty).toSet().toList()..sort();
@@ -171,7 +86,11 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     for (final m in all) {
       if (m.ottName != null && m.ottName!.trim().isNotEmpty) {
         final name = m.ottName!.trim();
-        ottMap[name] = (m.ottLogo != null && m.ottLogo!.isNotEmpty) ? m.ottLogo : ottMap[name];
+        if (m.ottLogo != null && m.ottLogo!.isNotEmpty) {
+          ottMap[name] = m.ottLogo;
+        } else {
+          ottMap.putIfAbsent(name, () => null);
+        }
       }
     }
 
@@ -188,7 +107,8 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
 
   void _applyFilters() {
     final query = _searchController.text.toLowerCase().trim();
-    var list = List<Movie>.from(MockCatalog.allMovies);
+    final catalog = ApiService.cachedMovies.isNotEmpty ? ApiService.cachedMovies : MockCatalog.allMovies;
+    var list = List<Movie>.from(catalog);
 
     if (query.isNotEmpty) {
       list = list.where((m) {
@@ -210,8 +130,12 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
 
     if (_selectedOtts.isNotEmpty) {
       list = list.where((m) {
-        if (m.ottName == null) return false;
-        return _selectedOtts.any((s) => s.toLowerCase() == m.ottName!.toLowerCase() || m.ottName!.toLowerCase().contains(s.toLowerCase()));
+        if (m.ottName == null || m.ottName!.trim().isEmpty) return false;
+        final movieOtt = m.ottName!.toLowerCase().trim();
+        return _selectedOtts.any((s) {
+          final target = s.toLowerCase().trim();
+          return movieOtt == target || movieOtt.contains(target) || target.contains(movieOtt);
+        });
       }).toList();
     }
 
@@ -611,6 +535,63 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     );
   }
 
+  Widget _buildOttLogoCube(String name) {
+    final isSelected = _selectedOtts.contains(name);
+    final logoUrl = _ottLogoMap[name];
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _selectedOtts.remove(name);
+          } else {
+            _selectedOtts.clear();
+            _selectedOtts.add(name);
+          }
+          _applyFilters();
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected 
+              ? const Color(0x409333EA) 
+              : AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFC084FC) : Colors.white.withValues(alpha: 0.14),
+            width: isSelected ? 1.5 : 0.8,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF9333EA).withValues(alpha: 0.35),
+                    blurRadius: 8,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            getOttLogo(name, logoUrl: logoUrl, size: 20),
+            const SizedBox(width: 6),
+            Text(
+              name,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white70,
+                fontSize: 11.5,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
@@ -649,7 +630,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.15)),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
                 ),
                 child: TextField(
                   controller: _searchController,
@@ -747,47 +728,68 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
               ),
             ),
 
+            // Quick 1-tap OTT Provider Row
+            if (_ottProviders.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 34,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  itemCount: _ottProviders.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, idx) => _buildOttLogoCube(_ottProviders[idx]),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 8),
 
             // Movie Grid
             Expanded(
-              child: _filteredMovies.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.movie_filter_outlined, color: Colors.white24, size: 48),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No movies match your filters',
-                            style: GoogleFonts.outfit(color: Colors.white60, fontSize: 14),
-                          ),
-                        ],
+              child: _isLoading && _filteredMovies.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: Color(0xFFC084FC),
                       ),
                     )
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(14),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        childAspectRatio: childAspectRatio,
-                        crossAxisSpacing: spacing,
-                        mainAxisSpacing: spacing,
-                      ),
-                      itemCount: _filteredMovies.length,
-                      itemBuilder: (context, index) {
-                        final movie = _filteredMovies[index];
-                        return MovieCard(
-                          movie: movie,
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => MovieDetailScreen(movie: movie),
+                  : _filteredMovies.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.movie_filter_outlined, color: Colors.white24, size: 48),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No movies match your filters',
+                                style: GoogleFonts.outfit(color: Colors.white60, fontSize: 14),
                               ),
+                            ],
+                          ),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.all(14),
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: crossAxisCount,
+                            childAspectRatio: childAspectRatio,
+                            crossAxisSpacing: spacing,
+                            mainAxisSpacing: spacing,
+                          ),
+                          itemCount: _filteredMovies.length,
+                          itemBuilder: (context, index) {
+                            final movie = _filteredMovies[index];
+                            return MovieCard(
+                              movie: movie,
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => MovieDetailScreen(movie: movie),
+                                  ),
+                                );
+                              },
                             );
                           },
-                        );
-                      },
-                    ),
+                        ),
             ),
           ],
         ),

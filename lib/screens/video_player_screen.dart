@@ -30,6 +30,9 @@ class VideoPlayerScreen extends StatefulWidget {
     this.isLive = false,
     this.sourceName,
     this.logoUrl,
+    this.season,
+    this.episode,
+    this.isTvShow = false,
   });
 
   final String videoSource;
@@ -42,6 +45,9 @@ class VideoPlayerScreen extends StatefulWidget {
   final bool isLive;
   final String? sourceName;
   final String? logoUrl;
+  final int? season;
+  final int? episode;
+  final bool isTvShow;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -1210,75 +1216,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Widget _buildPopupMenuS() {
-    return Theme(
-      data: Theme.of(context).copyWith(
-        cardColor: AppColors.surface,
-      ),
-      child: PopupMenuButton<SubtitleTrack>(
-        child: Padding(
-          padding: const EdgeInsets.only(left: 10),
-          child: _buildTopBarMenuIcon(Icons.subtitles_rounded),
-        ),
-        color: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onSelected: (track) {
-          if (track.id == 'import_online') {
-            _showOnlineSubtitleImportDialog();
-          } else {
-            _player.setSubtitleTrack(track);
-          }
-        },
-        itemBuilder: (context) {
-          final tracks = _player.state.tracks.subtitle;
-          final current = _player.state.track.subtitle;
-          final List<PopupMenuEntry<SubtitleTrack>> items = [];
-          
-          items.addAll(tracks.map((track) {
-            String name = track.title ?? track.language ?? 'Track ${track.id}';
-            if (track.id == 'auto') name = 'Auto';
-            if (track.id == 'no') name = 'Off';
-            final isCurrent = track.id == current.id;
-            return PopupMenuItem<SubtitleTrack>(
-              value: track,
-              child: Row(
-                children: [
-                  Icon(
-                    isCurrent ? Icons.check_circle_rounded : Icons.circle_outlined,
-                    color: isCurrent ? AppColors.accentBright : Colors.white54,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    name,
-                    style: TextStyle(
-                      color: isCurrent ? Colors.white : Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }));
-
-          items.add(const PopupMenuDivider());
-          items.add(
-            PopupMenuItem<SubtitleTrack>(
-              value: const SubtitleTrack('import_online', 'Import Online Subtitle...', 'en'),
-              child: Row(
-                children: [
-                  Icon(Icons.add_link_rounded, color: AppColors.accentBright, size: 18),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'Import Online Subtitle...',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-          );
-
-          return items;
-        },
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: _showSubtitleManagerSheet,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 10),
+        child: _buildTopBarMenuIcon(Icons.subtitles_rounded),
       ),
     );
   }
@@ -1333,10 +1276,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     );
   }
 
-  void _showOnlineSubtitleImportDialog() {
+  void _showSubtitleManagerSheet() {
     final textController = TextEditingController();
-    final manualSearchController = TextEditingController();
-    int activeTab = 0; // 0: OpenSubtitles Search, 1: Manual URL
+    final cleanSearchTitle = (widget.title ?? '')
+        .replaceAll(RegExp(r'\s*•.*'), '')
+        .replaceAll(RegExp(r'\s*\[.*?\]'), '')
+        .replaceAll(RegExp(r'\s*\(.*?\)'), '')
+        .trim();
+    String currentMovieTitle = cleanSearchTitle.isNotEmpty ? cleanSearchTitle : (widget.title ?? 'Current Video');
+    final manualSearchController = TextEditingController(text: currentMovieTitle);
+    int activeTab = 0; // 0: Tracks & Sync, 1: OpenSubtitles Search, 2: Manual URL
     bool loading = false;
     bool isSearchingTmdb = false;
     List<dynamic> tmdbResults = [];
@@ -1345,10 +1294,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     String? expandedLang;
     String errorMsg = '';
     String? currentImdbId = widget.imdbId;
-    String currentMovieTitle = widget.title ?? 'Current Video';
 
     final langNames = {
       'eng': 'English',
+      'mal': 'Malayalam',
+      'hin': 'Hindi',
+      'tam': 'Tamil',
+      'tel': 'Telugu',
+      'kan': 'Kannada',
       'spa': 'Spanish',
       'fre': 'French',
       'ger': 'German',
@@ -1359,53 +1312,33 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       'chi': 'Chinese',
       'jpn': 'Japanese',
       'kor': 'Korean',
-      'hin': 'Hindi',
-      'tam': 'Tamil',
-      'tel': 'Telugu',
-      'mal': 'Malayalam',
-      'kan': 'Kannada',
       'ind': 'Indonesian',
       'may': 'Malay',
       'tha': 'Thai',
       'tur': 'Turkish',
       'vie': 'Vietnamese',
-      'dut': 'Dutch',
-      'pol': 'Polish',
-      'swe': 'Swedish',
-      'nor': 'Norwegian',
-      'dan': 'Danish',
-      'fin': 'Finnish',
-      'heb': 'Hebrew',
-      'gre': 'Greek',
-      'bul': 'Bulgarian',
-      'ron': 'Romanian',
-      'hun': 'Hungarian',
-      'cze': 'Czech',
-      'slv': 'Slovenian',
-      'hrv': 'Croatian',
-      'srp': 'Serbian',
-      'slk': 'Slovak',
-      'ukr': 'Ukrainian',
       'est': 'Estonian',
       'lav': 'Latvian',
       'lit': 'Lithuanian',
     };
 
-    showDialog<void>(
+    showModalBottomSheet<void>(
       context: context,
-      builder: (context) {
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
+          builder: (context, setSheetState) {
             Future<void> fetchSubtitles() async {
               final imdb = currentImdbId;
               if (imdb == null || imdb.isEmpty || imdb == 'null') {
-                setDialogState(() {
-                  errorMsg = 'No IMDb ID available. Search movie title above.';
+                setSheetState(() {
+                  errorMsg = 'No IMDb ID available. Search movie title below.';
                 });
                 return;
               }
 
-              setDialogState(() {
+              setSheetState(() {
                 loading = true;
                 errorMsg = '';
                 subtitleTracks = [];
@@ -1437,7 +1370,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     grouped[lang]!.add(s);
                   }
 
-                  setDialogState(() {
+                  setSheetState(() {
                     subtitleTracks = subs;
                     groupedTracks = grouped;
                     loading = false;
@@ -1447,7 +1380,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 }
               } catch (e) {
                 debugPrint('Failed to query OpenSubtitles: $e');
-                setDialogState(() {
+                setSheetState(() {
                   loading = false;
                   errorMsg = 'Could not retrieve subtitles from OpenSubtitles.';
                 });
@@ -1455,404 +1388,276 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             }
 
             Future<void> searchTmdb(String query) async {
-              setDialogState(() {
+              setSheetState(() {
                 isSearchingTmdb = true;
                 errorMsg = '';
                 tmdbResults = [];
               });
 
               try {
-                final searchUrl = 'https://api.themoviedb.org/3/search/multi?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=${Uri.encodeComponent(query)}';
-                final res = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 8));
+                final encoded = Uri.encodeComponent(query.trim());
+                final isTv = widget.isTvShow || (widget.season != null && widget.season! > 0);
+                final endpoint = isTv ? 'tv' : 'movie';
+                final url = 'https://api.themoviedb.org/3/search/$endpoint?api_key=8baba8ab6b8bbe247645bcae7df63d0d&query=$encoded';
+                final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 8));
+
                 if (res.statusCode == 200) {
-                  final searchData = jsonDecode(res.body);
-                  final results = searchData['results'] as List<dynamic>? ?? [];
-                  setDialogState(() {
-                    tmdbResults = results.where((item) => item['media_type'] == 'movie' || item['media_type'] == 'tv').toList();
+                  final data = jsonDecode(res.body);
+                  final results = data['results'] as List<dynamic>? ?? [];
+                  setSheetState(() {
+                    tmdbResults = results;
                     isSearchingTmdb = false;
-                    if (tmdbResults.isEmpty) {
-                      errorMsg = 'No matches found on TMDB for "$query".';
+                    if (results.isEmpty) {
+                      errorMsg = 'No titles found on TMDB for "$query".';
                     }
                   });
                 } else {
-                  throw Exception('TMDB error ${res.statusCode}');
+                  throw Exception('Search failed');
                 }
               } catch (e) {
-                debugPrint('TMDB Search failed: $e');
-                setDialogState(() {
+                setSheetState(() {
                   isSearchingTmdb = false;
-                  errorMsg = 'Search failed: $e';
+                  errorMsg = 'Search failed. Try again.';
                 });
               }
             }
 
-            Future<void> selectTmdbItem(dynamic item) async {
-              setDialogState(() {
-                loading = true;
-                errorMsg = '';
-                tmdbResults = [];
-              });
+            // Auto-trigger OpenSubtitles search on first load of Tab 1 if IMDB ID is available
+            if (activeTab == 1 && currentImdbId != null && subtitleTracks.isEmpty && !loading && errorMsg.isEmpty && tmdbResults.isEmpty && !isSearchingTmdb) {
+              Future.microtask(() => fetchSubtitles());
+            }
 
-              final tmdbId = item['id']?.toString();
-              final isTv = item['media_type'] == 'tv';
-              final title = item['title'] ?? item['name'] ?? 'Selected Title';
-              final release = item['release_date'] ?? item['first_air_date'] ?? '';
-              final year = release.length >= 4 ? release.substring(0, 4) : '';
+            final currentTrack = _player.state.track.subtitle;
+            final availableTracks = _player.state.tracks.subtitle;
+            final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
 
-              try {
-                String? imdb;
-                if (isTv) {
-                  // Prompt for season/episode
-                  final formKey = GlobalKey<FormState>();
-                  final seasonController = TextEditingController(text: '1');
-                  final episodeController = TextEditingController(text: '1');
-                  final confirmed = await showDialog<bool>(
-                    context: this.context,
-                    builder: (ctx) => AlertDialog(
-                      backgroundColor: AppColors.surface,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      title: const Text('TV Series Episode Details', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                      content: Form(
-                        key: formKey,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                controller: seasonController,
-                                keyboardType: TextInputType.number,
-                                style: const TextStyle(color: Colors.white),
-                                decoration: const InputDecoration(labelText: 'Season', labelStyle: TextStyle(color: Colors.white70)),
-                                validator: (v) => (v == null || int.tryParse(v) == null) ? 'Invalid' : null,
-                              ),
+            Widget tabContent;
+            if (activeTab == 0) {
+              tabContent = _buildTracksAndSyncTab(
+                availableTracks: availableTracks,
+                currentTrack: currentTrack,
+                onTrackSelected: (t) {
+                  _player.setSubtitleTrack(t);
+                  setSheetState(() {});
+                },
+                onSearchOnlineTap: () {
+                  setSheetState(() => activeTab = 1);
+                },
+                setSheetState: setSheetState,
+              );
+            } else if (activeTab == 1) {
+              tabContent = _buildOpenSubtitlesSheetTab(
+                currentTitle: currentMovieTitle,
+                currentImdbId: currentImdbId,
+                loading: loading,
+                errorMsg: errorMsg,
+                groupedTracks: groupedTracks,
+                expandedLang: expandedLang,
+                langNames: langNames,
+                isSearchingTmdb: isSearchingTmdb,
+                tmdbResults: tmdbResults,
+                manualSearchController: manualSearchController,
+                onRetry: fetchSubtitles,
+                onSearchQuery: (q) => searchTmdb(q),
+                onSelectTmdbItem: (item) async {
+                  final tmdbId = item['id'];
+                  final isTv = item['media_type'] == 'tv';
+                  final title = item['title'] ?? item['name'] ?? 'Movie';
+                  setSheetState(() => loading = true);
+                  try {
+                    String? imdb;
+                    if (isTv) {
+                      final extUrl = 'https://api.themoviedb.org/3/tv/$tmdbId/external_ids?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
+                      final res = await http.get(Uri.parse(extUrl)).timeout(const Duration(seconds: 8));
+                      if (res.statusCode == 200) {
+                        final extData = jsonDecode(res.body);
+                        imdb = extData['imdb_id']?.toString();
+                      }
+                    } else {
+                      final detailUrl = 'https://api.themoviedb.org/3/movie/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
+                      final res = await http.get(Uri.parse(detailUrl)).timeout(const Duration(seconds: 8));
+                      if (res.statusCode == 200) {
+                        final detailData = jsonDecode(res.body);
+                        imdb = detailData['imdb_id']?.toString();
+                      }
+                    }
+                    if (imdb != null && imdb.isNotEmpty && imdb != 'null') {
+                      currentImdbId = imdb;
+                      currentMovieTitle = title;
+                      manualSearchController.text = title;
+                      tmdbResults = [];
+                      await fetchSubtitles();
+                    } else {
+                      throw Exception('No IMDb ID found');
+                    }
+                  } catch (e) {
+                    setSheetState(() {
+                      loading = false;
+                      errorMsg = 'Could not find subtitles for $title';
+                    });
+                  }
+                },
+                onLangTap: (lang) {
+                  setSheetState(() {
+                    expandedLang = expandedLang == lang ? null : lang;
+                  });
+                },
+                onTrackSelected: (track, displayLang) {
+                  final subUrl = track['url']?.toString() ?? '';
+                  if (subUrl.isNotEmpty) {
+                    _player.setSubtitleTrack(SubtitleTrack.uri(subUrl, title: 'OpenSubtitles: $displayLang', language: displayLang));
+                    Navigator.of(ctx).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(
+                        content: Text('OpenSubtitles ($displayLang) loaded successfully.'),
+                        backgroundColor: const Color(0xFF10B981),
+                      ),
+                    );
+                  }
+                },
+              );
+            } else {
+              tabContent = _buildCustomUrlTab(
+                controller: textController,
+                onImport: () {
+                  final url = textController.text.trim();
+                  if (url.isNotEmpty && url.startsWith('http')) {
+                    _player.setSubtitleTrack(SubtitleTrack.uri(url, title: 'Custom Subtitle', language: 'Custom'));
+                    Navigator.of(ctx).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Custom subtitle loaded successfully.'),
+                        backgroundColor: Color(0xFF10B981),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please enter a valid HTTP/HTTPS URL.'),
+                        backgroundColor: Color(0xFFEF4444),
+                      ),
+                    );
+                  }
+                },
+              );
+            }
+
+            return Align(
+              alignment: isLandscape ? Alignment.centerRight : Alignment.bottomCenter,
+              child: Container(
+                width: isLandscape ? 440 : double.infinity,
+                height: isLandscape ? MediaQuery.of(context).size.height : MediaQuery.of(context).size.height * 0.85,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF13151F),
+                  borderRadius: isLandscape
+                      ? const BorderRadius.horizontal(left: Radius.circular(20))
+                      : const BorderRadius.vertical(top: Radius.circular(24)),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+                child: Column(
+                  children: [
+                    // Top Drag Handle & Header
+                    const SizedBox(height: 8),
+                    if (!isLandscape)
+                      Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentBright.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: TextFormField(
-                                controller: episodeController,
-                                keyboardType: TextInputType.number,
-                                style: const TextStyle(color: Colors.white),
-                                decoration: const InputDecoration(labelText: 'Episode', labelStyle: TextStyle(color: Colors.white70)),
-                                validator: (v) => (v == null || int.tryParse(v) == null) ? 'Invalid' : null,
-                              ),
+                            child: Icon(Icons.subtitles_rounded, color: AppColors.accentBright, size: 18),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Subtitles & Captions',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Text(
+                                  currentTrack.id == 'no'
+                                      ? 'Subtitles Off'
+                                      : (currentTrack.id == 'auto'
+                                          ? 'Auto-Selected'
+                                          : (currentTrack.title ?? currentTrack.language ?? 'Track ${currentTrack.id}')),
+                                  style: TextStyle(
+                                    color: currentTrack.id == 'no' ? Colors.white38 : AppColors.accentBright,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 20),
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Modern Segmented Tab Bar
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                        ),
+                        child: Row(
+                          children: [
+                            _buildTabButton(
+                              title: 'Tracks & Sync',
+                              icon: Icons.tune_rounded,
+                              isActive: activeTab == 0,
+                              onTap: () => setSheetState(() => activeTab = 0),
+                            ),
+                            _buildTabButton(
+                              title: 'OpenSubtitles',
+                              icon: Icons.travel_explore_rounded,
+                              isActive: activeTab == 1,
+                              onTap: () => setSheetState(() => activeTab = 1),
+                            ),
+                            _buildTabButton(
+                              title: 'Custom URL',
+                              icon: Icons.link_rounded,
+                              isActive: activeTab == 2,
+                              onTap: () => setSheetState(() => activeTab = 2),
                             ),
                           ],
                         ),
                       ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentBright),
-                          onPressed: () {
-                            if (formKey.currentState!.validate()) Navigator.of(ctx).pop(true);
-                          },
-                          child: const Text('Confirm', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                        ),
-                      ],
                     ),
-                  );
+                    const SizedBox(height: 8),
 
-                  if (confirmed != true) {
-                    setDialogState(() => loading = false);
-                    return;
-                  }
-
-                  final season = int.parse(seasonController.text.trim());
-                  final episode = int.parse(episodeController.text.trim());
-
-                  final extUrl = 'https://api.themoviedb.org/3/tv/$tmdbId/external_ids?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
-                  final res = await http.get(Uri.parse(extUrl)).timeout(const Duration(seconds: 8));
-                  if (res.statusCode == 200) {
-                    final extData = jsonDecode(res.body);
-                    final showImdb = extData['imdb_id']?.toString();
-                    if (showImdb != null && showImdb.isNotEmpty && showImdb != 'null') {
-                      imdb = '$showImdb:$season:$episode';
-                    }
-                  }
-                } else {
-                  final detailUrl = 'https://api.themoviedb.org/3/movie/$tmdbId?api_key=8baba8ab6b8bbe247645bcae7df63d0d';
-                  final res = await http.get(Uri.parse(detailUrl)).timeout(const Duration(seconds: 8));
-                  if (res.statusCode == 200) {
-                    final detailData = jsonDecode(res.body);
-                    imdb = detailData['imdb_id']?.toString();
-                  }
-                }
-
-                if (imdb != null && imdb.isNotEmpty && imdb != 'null') {
-                  currentImdbId = imdb;
-                  currentMovieTitle = year.isNotEmpty ? '$title ($year)' : title;
-                  await fetchSubtitles();
-                } else {
-                  throw Exception('IMDb ID not found for this title.');
-                }
-              } catch (e) {
-                debugPrint('Resolving IMDb ID failed: $e');
-                setDialogState(() {
-                  loading = false;
-                  errorMsg = 'Could not resolve IMDb ID: $e';
-                });
-              }
-            }
-
-            // Auto-trigger subtitles fetch on first load of the OpenSubtitles search tab
-            if (activeTab == 0 && currentImdbId != null && subtitleTracks.isEmpty && !loading && errorMsg.isEmpty && tmdbResults.isEmpty && !isSearchingTmdb) {
-              Future.microtask(() => fetchSubtitles());
-            }
-
-            return AlertDialog(
-              backgroundColor: AppColors.surface,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-              contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-              title: Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => setDialogState(() => activeTab = 0),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: activeTab == 0 ? AppColors.accentBright : Colors.transparent,
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                        child: Text(
-                          'OpenSubtitles Search',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: activeTab == 0 ? Colors.white : Colors.white54,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => setDialogState(() => activeTab = 1),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: activeTab == 1 ? AppColors.accentBright : Colors.transparent,
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                        child: Text(
-                          'Custom URL Importer',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: activeTab == 1 ? Colors.white : Colors.white54,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: 500,
-                height: 250,
-                child: activeTab == 0
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Search row
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: manualSearchController,
-                                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                                  decoration: InputDecoration(
-                                    hintText: 'Search movie/show title manually...',
-                                    hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
-                                    filled: true,
-                                    fillColor: Colors.black26,
-                                    isDense: true,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                  ),
-                                  onSubmitted: (q) {
-                                    if (q.trim().isNotEmpty) searchTmdb(q.trim());
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                constraints: const BoxConstraints(),
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(Icons.search_rounded, color: Colors.tealAccent, size: 22),
-                                onPressed: () {
-                                  final q = manualSearchController.text.trim();
-                                  if (q.isNotEmpty) searchTmdb(q);
-                                },
-                              ),
-                              if (tmdbResults.isNotEmpty || manualSearchController.text.isNotEmpty)
-                                IconButton(
-                                  constraints: const BoxConstraints(),
-                                  padding: const EdgeInsets.only(left: 8),
-                                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 22),
-                                  onPressed: () {
-                                    manualSearchController.clear();
-                                    setDialogState(() {
-                                      tmdbResults = [];
-                                      errorMsg = '';
-                                    });
-                                    fetchSubtitles();
-                                  },
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          // Content list
-                          Expanded(
-                            child: isSearchingTmdb
-                                ? const Center(
-                                    child: CircularProgressIndicator(color: Colors.tealAccent),
-                                  )
-                                : (tmdbResults.isNotEmpty
-                                    ? ListView.separated(
-                                        itemCount: tmdbResults.length,
-                                        separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
-                                        itemBuilder: (context, index) {
-                                          final item = tmdbResults[index];
-                                          final title = item['title'] ?? item['name'] ?? 'Untitled';
-                                          final release = item['release_date'] ?? item['first_air_date'] ?? '';
-                                          final year = release.length >= 4 ? release.substring(0, 4) : 'N/A';
-                                          final poster = item['poster_path']?.toString() ?? '';
-                                          final type = item['media_type'] == 'tv' ? 'TV' : 'Movie';
-
-                                          return ListTile(
-                                            dense: true,
-                                            contentPadding: EdgeInsets.zero,
-                                            leading: poster.isNotEmpty
-                                                ? ClipRRect(
-                                                    borderRadius: BorderRadius.circular(4),
-                                                    child: Image.network(
-                                                      'https://image.tmdb.org/t/p/w92$poster',
-                                                      width: 32,
-                                                      height: 48,
-                                                      fit: BoxFit.cover,
-                                                      errorBuilder: (_, __, ___) => const Icon(Icons.movie, size: 32, color: Colors.white24),
-                                                    ),
-                                                  )
-                                                : const Icon(Icons.movie, size: 32, color: Colors.white24),
-                                            title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                                            subtitle: Text('$type • $year', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                                            onTap: () => selectTmdbItem(item),
-                                          );
-                                        },
-                                      )
-                                    : Column(
-                                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                                        children: [
-                                          if (currentImdbId != null && currentImdbId!.isNotEmpty)
-                                            Padding(
-                                              padding: const EdgeInsets.only(bottom: 6),
-                                              child: Text(
-                                                'Subtitles for: $currentMovieTitle',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                                              ),
-                                            ),
-                                          Expanded(
-                                            child: _buildOpenSubtitlesTab(
-                                              loading: loading,
-                                              errorMsg: errorMsg,
-                                              groupedTracks: groupedTracks,
-                                              expandedLang: expandedLang,
-                                              langNames: langNames,
-                                              onRetry: fetchSubtitles,
-                                              onLangTap: (lang) {
-                                                setDialogState(() {
-                                                  expandedLang = expandedLang == lang ? null : lang;
-                                                });
-                                              },
-                                              onTrackSelected: (track, displayLang) {
-                                                final subUrl = track['url']?.toString() ?? '';
-                                                if (subUrl.isNotEmpty) {
-                                                  _player.setSubtitleTrack(SubtitleTrack.uri(subUrl, title: 'OpenSubtitles: $displayLang', language: displayLang));
-                                                  Navigator.of(context).pop();
-                                                  ScaffoldMessenger.of(this.context).showSnackBar(
-                                                    SnackBar(content: Text('OpenSubtitles ($displayLang) loaded successfully.')),
-                                                  );
-                                                }
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      )),
-                          ),
-                        ],
-                      )
-                    : Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const Text(
-                            'Enter a direct URL to a WebVTT (.vtt) or SubRip (.srt) subtitle file:',
-                            style: TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: textController,
-                            style: const TextStyle(color: Colors.white, fontSize: 13),
-                            decoration: InputDecoration(
-                              hintText: 'https://example.com/subtitles.srt',
-                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
-                              filled: true,
-                              fillColor: Colors.black26,
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide.none),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                    // Tab Content
+                    Expanded(child: tabContent),
+                  ],
                 ),
-                if (activeTab == 1)
-                  ElevatedButton(
-                    onPressed: () {
-                      final url = textController.text.trim();
-                      if (url.isNotEmpty && url.startsWith('http')) {
-                        _player.setSubtitleTrack(SubtitleTrack.uri(url, title: 'Imported Subtitle', language: 'Imported'));
-                        Navigator.of(context).pop();
-                        ScaffoldMessenger.of(this.context).showSnackBar(
-                          const SnackBar(content: Text('Online subtitle imported successfully.')),
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please enter a valid HTTP/HTTPS URL.')),
-                        );
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accentBright,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                    child: const Text('Import', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                  ),
-              ],
+              ),
             );
           },
         );
@@ -1860,115 +1665,563 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     );
   }
 
-  Widget _buildOpenSubtitlesTab({
+  Widget _buildTabButton({
+    required String title,
+    required IconData icon,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isActive ? AppColors.accentBright.withValues(alpha: 0.15) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: isActive ? AppColors.accentBright : Colors.white54,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  color: isActive ? Colors.white : Colors.white54,
+                  fontSize: 12.5,
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTracksAndSyncTab({
+    required List<SubtitleTrack> availableTracks,
+    required SubtitleTrack currentTrack,
+    required ValueChanged<SubtitleTrack> onTrackSelected,
+    required VoidCallback onSearchOnlineTap,
+    required StateSetter setSheetState,
+  }) {
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      children: [
+        // 1. Available Embedded Tracks
+        Text(
+          'EMBEDDED SUBTITLE TRACKS',
+          style: GoogleFonts.outfit(
+            color: Colors.white54,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final track in availableTracks) ...[
+          _buildTrackRow(
+            track: track,
+            isSelected: track.id == currentTrack.id,
+            onTap: () => onTrackSelected(track),
+          ),
+          const SizedBox(height: 6),
+        ],
+        const SizedBox(height: 16),
+
+        // 2. Subtitle Appearance / Font Size Selector
+        Text(
+          'SUBTITLE FONT SIZE',
+          style: GoogleFonts.outfit(
+            color: Colors.white54,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            _buildSizeChip(label: 'Small', size: 24.0, setSheetState: setSheetState),
+            const SizedBox(width: 8),
+            _buildSizeChip(label: 'Normal', size: 36.0, setSheetState: setSheetState),
+            const SizedBox(width: 8),
+            _buildSizeChip(label: 'Large', size: 48.0, setSheetState: setSheetState),
+            const SizedBox(width: 8),
+            _buildSizeChip(label: 'Extra Large', size: 60.0, setSheetState: setSheetState),
+          ],
+        ),
+        const SizedBox(height: 18),
+
+        // 3. Subtitle Timing Sync (Delay Adjustment)
+        Text(
+          'SUBTITLE TIMING SYNC',
+          style: GoogleFonts.outfit(
+            color: Colors.white54,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Sync Offset:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.accentBright.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${_subtitleDelay >= 0 ? "+" : ""}${_subtitleDelay.toStringAsFixed(1)}s',
+                      style: TextStyle(
+                        color: AppColors.accentBright,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _buildDelayButton('-0.5s', -0.5, setSheetState),
+                  const SizedBox(width: 6),
+                  _buildDelayButton('-0.1s', -0.1, setSheetState),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () {
+                        _changeSubtitleDelay(0.0);
+                        setSheetState(() {});
+                      },
+                      child: const Text('Reset', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildDelayButton('+0.1s', 0.1, setSheetState),
+                  const SizedBox(width: 6),
+                  _buildDelayButton('+0.5s', 0.5, setSheetState),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+
+        // Quick button to open OpenSubtitles tab
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.accentBright.withValues(alpha: 0.15),
+            foregroundColor: AppColors.accentBright,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: AppColors.accentBright.withValues(alpha: 0.3)),
+            ),
+          ),
+          icon: const Icon(Icons.travel_explore_rounded, size: 18),
+          label: const Text('Search Subtitles on OpenSubtitles', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+          onPressed: onSearchOnlineTap,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTrackRow({
+    required SubtitleTrack track,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    String name = track.title ?? track.language ?? 'Track ${track.id}';
+    if (track.id == 'auto') name = 'Auto (Best Match)';
+    if (track.id == 'no') name = 'Off (Disable Subtitles)';
+
+    return Material(
+      color: isSelected ? AppColors.accentBright.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.03),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? AppColors.accentBright.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.05),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                color: isSelected ? AppColors.accentBright : Colors.white30,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  name,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.white70,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    fontSize: 13.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSizeChip({
+    required String label,
+    required double size,
+    required StateSetter setSheetState,
+  }) {
+    final isCurrent = _subtitleFontSize == size;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          _changeSubtitleSize(size);
+          setSheetState(() {});
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: isCurrent ? AppColors.accentBright : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isCurrent ? AppColors.accentBright : Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isCurrent ? Colors.black : Colors.white70,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDelayButton(String label, double delta, StateSetter setSheetState) {
+    return Expanded(
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        onPressed: () {
+          _changeSubtitleDelay(_subtitleDelay + delta);
+          setSheetState(() {});
+        },
+        child: Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+      ),
+    );
+  }
+
+  Widget _buildOpenSubtitlesSheetTab({
+    required String currentTitle,
+    required String? currentImdbId,
     required bool loading,
     required String errorMsg,
     required Map<String, List<dynamic>> groupedTracks,
     required String? expandedLang,
     required Map<String, String> langNames,
+    required bool isSearchingTmdb,
+    required List<dynamic> tmdbResults,
+    required TextEditingController manualSearchController,
     required VoidCallback onRetry,
+    required ValueChanged<String> onSearchQuery,
+    required ValueChanged<dynamic> onSelectTmdbItem,
     required ValueChanged<String> onLangTap,
     required void Function(dynamic track, String displayLang) onTrackSelected,
   }) {
-    if (loading) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: AppColors.accentBright),
-            const SizedBox(height: 12),
-            const Text('Searching OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
-          ],
-        ),
-      );
-    }
-
-    if (errorMsg.isNotEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(errorMsg, style: const TextStyle(color: Colors.white54, fontSize: 12), textAlign: TextAlign.center),
-            const SizedBox(height: 10),
-            TextButton(
-              onPressed: onRetry,
-              child: Text('Retry Search', style: TextStyle(color: AppColors.accentBright, fontSize: 13)),
+    return Column(
+      children: [
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
-          ],
-        ),
-      );
-    }
-
-    if (groupedTracks.isEmpty) {
-      return const Center(
-        child: Text('No subtitles found for this movie.', style: TextStyle(color: Colors.white54, fontSize: 13)),
-      );
-    }
-
-    return ListView.builder(
-      itemCount: groupedTracks.keys.length,
-      itemBuilder: (context, index) {
-        final langCode = groupedTracks.keys.elementAt(index);
-        final langDisplay = langNames[langCode] ?? langCode.toUpperCase();
-        final tracksList = groupedTracks[langCode] ?? [];
-        final isExpanded = expandedLang == langCode;
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-              title: Text(
-                langDisplay,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-              trailing: Icon(
-                isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
-                color: Colors.white54,
-                size: 18,
-              ),
-              onTap: () => onLangTap(langCode),
+            child: Row(
+              children: [
+                const Icon(Icons.search_rounded, color: Colors.white54, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: manualSearchController,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: currentTitle.isNotEmpty ? 'Searching for: $currentTitle' : 'Search title on TMDb...',
+                      hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                      border: InputBorder.none,
+                    ),
+                    onSubmitted: (q) {
+                      if (q.trim().isNotEmpty) onSearchQuery(q.trim());
+                    },
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.arrow_forward_rounded, color: AppColors.accentBright, size: 20),
+                  onPressed: () {
+                    final q = manualSearchController.text.trim();
+                    if (q.isNotEmpty) onSearchQuery(q);
+                  },
+                ),
+              ],
             ),
-            if (isExpanded)
-              Padding(
-                padding: const EdgeInsets.only(left: 16, bottom: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: List.generate(tracksList.length, (idx) {
-                    final track = tracksList[idx];
-                    final encoding = track['SubEncoding']?.toString() ?? 'Default';
-                    return GestureDetector(
-                      onTap: () => onTrackSelected(track, langDisplay),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-                        margin: const EdgeInsets.only(bottom: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(6),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // TMDB Results list (if user searched manually)
+        if (isSearchingTmdb)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator(color: AppColors.accentBright)),
+          )
+        else if (tmdbResults.isNotEmpty)
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: tmdbResults.length,
+              itemBuilder: (ctx, i) {
+                final item = tmdbResults[i];
+                final t = item['title'] ?? item['name'] ?? 'Unknown';
+                final r = item['release_date'] ?? item['first_air_date'] ?? '';
+                final y = r.length >= 4 ? ' (${r.substring(0, 4)})' : '';
+                return ListTile(
+                  dense: true,
+                  title: Text('$t$y', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                  subtitle: Text(item['media_type'] == 'tv' ? 'TV Series' : 'Movie', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white38),
+                  onTap: () => onSelectTmdbItem(item),
+                );
+              },
+            ),
+          )
+        else if (loading)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: AppColors.accentBright),
+                  const SizedBox(height: 12),
+                  const Text('Fetching subtitles from OpenSubtitles...', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                ],
+              ),
+            ),
+          )
+        else if (errorMsg.isNotEmpty)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(errorMsg, style: const TextStyle(color: Colors.white54, fontSize: 12), textAlign: TextAlign.center),
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: onRetry,
+                    child: Text('Retry Search', style: TextStyle(color: AppColors.accentBright, fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else if (groupedTracks.isEmpty)
+          const Expanded(
+            child: Center(
+              child: Text('No subtitles found on OpenSubtitles for this title.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: groupedTracks.keys.length,
+              itemBuilder: (context, index) {
+                final langCode = groupedTracks.keys.elementAt(index);
+                final langDisplay = langNames[langCode] ?? langCode.toUpperCase();
+                final tracksList = groupedTracks[langCode] ?? [];
+                final isExpanded = expandedLang == langCode;
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.035),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                  ),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        dense: true,
+                        title: Text(
+                          langDisplay,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              'Track ${idx + 1} ($langDisplay)',
-                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                '${tracksList.length}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
                             ),
-                            Text(
-                              encoding,
-                              style: const TextStyle(color: Colors.white30, fontSize: 10),
+                            const SizedBox(width: 6),
+                            Icon(
+                              isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                              color: Colors.white54,
+                              size: 20,
                             ),
                           ],
                         ),
+                        onTap: () => onLangTap(langCode),
                       ),
-                    );
-                  }),
-                ),
+                      if (isExpanded)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                          child: Column(
+                            children: List.generate(tracksList.length, (idx) {
+                              final track = tracksList[idx];
+                              final encoding = track['SubEncoding']?.toString() ?? 'Default';
+                              return GestureDetector(
+                                onTap: () => onTrackSelected(track, langDisplay),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.04),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.file_download_done_rounded, color: AppColors.accentBright, size: 16),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Track ${idx + 1} ($langDisplay)',
+                                            style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
+                                          ),
+                                        ],
+                                      ),
+                                      Text(
+                                        encoding,
+                                        style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCustomUrlTab({
+    required TextEditingController controller,
+    required VoidCallback onImport,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Direct Subtitle File URL',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Enter a direct HTTP or HTTPS link to a WebVTT (.vtt) or SubRip (.srt) subtitle file:',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: controller,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: InputDecoration(
+              hintText: 'https://example.com/subtitles.srt',
+              hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.04),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
               ),
-            const Divider(color: Colors.white12, height: 1),
-          ],
-        );
-      },
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+          ),
+          const SizedBox(height: 18),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.accentBright,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: onImport,
+            child: const Text('Apply Subtitle', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2199,10 +2452,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           },
                         ),
                         
-                        // Popup menu selectors (S, CC Size, Q, M)
+                        // Open in External Player (VLC / MX)
+                        _buildTopBarIcon(
+                          const Icon(Icons.open_in_new_rounded, color: Colors.white, size: 20),
+                          () async {
+                            final source = widget.videoSource;
+                            final displayName = await ExternalPlayerService.getPlayerDisplayName();
+                            if (mounted) ExternalPlayerService.showLaunchDialog(context, displayName);
+                            await ExternalPlayerService.launch(
+                              url: source,
+                              title: widget.title,
+                              headers: widget.headers,
+                            );
+                          },
+                        ),
+
+                        // Modern Subtitle Manager (Tracks, OpenSubtitles Search, Size & Timing Sync)
                         _buildTopBarIcon(
                           const Icon(Icons.subtitles_rounded, color: Colors.white, size: 20),
-                          () => _showSettingsSheet(initialPane: 3),
+                          _showSubtitleManagerSheet,
                         ),
                         _buildPopupMenuSubtitleSize(),
                         _buildPopupMenuQ(),
@@ -3061,6 +3329,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             });
           },
           getAspectRatioName: _getAspectRatioName,
+          onOpenSubtitleManager: _showSubtitleManagerSheet,
+          onOpenExternalPlayer: () async {
+            final source = widget.videoSource;
+            final displayName = await ExternalPlayerService.getPlayerDisplayName();
+            if (mounted) ExternalPlayerService.showLaunchDialog(context, displayName);
+            await ExternalPlayerService.launch(
+              url: source,
+              title: widget.title,
+              headers: widget.headers,
+            );
+          },
         );
       },
     );
@@ -3080,6 +3359,8 @@ class _SettingsPopover extends StatefulWidget {
   final Function(double) onSubtitleFontSizeChanged;
   final Function(int) onAspectRatioChanged;
   final String Function(int) getAspectRatioName;
+  final VoidCallback? onOpenSubtitleManager;
+  final VoidCallback? onOpenExternalPlayer;
 
   const _SettingsPopover({
     required this.player,
@@ -3094,6 +3375,8 @@ class _SettingsPopover extends StatefulWidget {
     required this.onSubtitleFontSizeChanged,
     required this.onAspectRatioChanged,
     required this.getAspectRatioName,
+    this.onOpenSubtitleManager,
+    this.onOpenExternalPlayer,
   });
 
   @override
@@ -3255,10 +3538,22 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
           onTap: () => setState(() => _currentPane = 2),
         ),
         _buildMenuTile(
+          icon: Icons.open_in_new_rounded,
+          label: 'External Player',
+          value: 'VLC / MX',
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onOpenExternalPlayer?.call();
+          },
+        ),
+        _buildMenuTile(
           icon: Icons.subtitles_rounded,
-          label: 'Subtitles',
+          label: 'Subtitles & Online Subs',
           value: subName,
-          onTap: () => setState(() => _currentPane = 3),
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onOpenSubtitleManager?.call();
+          },
         ),
       ],
     );
@@ -3434,6 +3729,38 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Search & Import Online Subtitles Button
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: InkWell(
+            onTap: () {
+              Navigator.of(context).pop();
+              widget.onOpenSubtitleManager?.call();
+            },
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.accentBright.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.accentBright.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.travel_explore_rounded, color: AppColors.accentBright, size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Search Online (OpenSubtitles)',
+                    style: TextStyle(color: AppColors.accentBright, fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const Divider(color: Colors.white10, height: 1),
+
         // Subtitle Size Row
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),

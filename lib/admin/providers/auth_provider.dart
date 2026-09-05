@@ -39,13 +39,34 @@ class AuthState {
 
 class AuthNotifier extends StateNotifier<AuthState> {
   final ApiClient _apiClient;
+  static const int _oneWeekMs = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
   AuthNotifier(this._apiClient) : super(const AuthState(isAuthenticated: false, username: 'admin')) {
     _checkAuthStatus();
   }
 
   Future<void> _checkAuthStatus() async {
-    // ALWAYS require fresh login when opening admin panel
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isLoggedIn = prefs.getBool('is_logged_in') ?? false;
+      final loginTime = prefs.getInt('admin_login_timestamp') ?? 0;
+      final username = prefs.getString('username') ?? 'admin';
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      if (isLoggedIn && loginTime > 0 && (now - loginTime) < _oneWeekMs) {
+        state = state.copyWith(
+          isAuthenticated: true,
+          isLoading: false,
+          username: username,
+          error: null,
+        );
+        return;
+      } else if (isLoggedIn && (now - loginTime) >= _oneWeekMs) {
+        // Expired after 1 week
+        await logout();
+        return;
+      }
+    } catch (_) {}
     state = state.copyWith(isAuthenticated: false, username: 'admin');
   }
 
@@ -64,6 +85,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('username', username);
         await prefs.setBool('is_logged_in', true);
+        await prefs.setInt('admin_login_timestamp', DateTime.now().millisecondsSinceEpoch);
 
         state = state.copyWith(
           isAuthenticated: true,
@@ -99,6 +121,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('username');
     await prefs.remove('token');
+    await prefs.remove('admin_login_timestamp');
     await prefs.setBool('is_logged_in', false);
 
     state = const AuthState();

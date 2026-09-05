@@ -24,6 +24,7 @@ import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
+import 'package:private_cinema_mobile/widgets/ott_badge.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int)? onSwitchTab;
@@ -975,6 +976,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
+                    ),
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: AnimatedPosterBadge(movie: movie, ottSize: 24),
                     ),
                     if (movie.rating > 0)
                       Positioned(

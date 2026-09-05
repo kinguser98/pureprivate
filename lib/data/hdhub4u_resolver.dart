@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/domain_service.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 import '../widgets/special_search_dialog.dart';
 
 class Hdhub4uResolver {
@@ -68,7 +69,6 @@ class Hdhub4uResolver {
         debugPrint('Hdhub4uResolver: Found ${postUrls.length} posts on $domain for "$cleanTitle"');
 
         if (postUrls.isEmpty) {
-          // Try /?s= as fallback
           final fbUrl = '$domain/?s=${Uri.encodeComponent(cleanTitle)}';
           final fbRes = await http.get(Uri.parse(fbUrl), headers: _requestHeaders).timeout(const Duration(seconds: 8));
           if (fbRes.statusCode == 200) {
@@ -103,8 +103,17 @@ class Hdhub4uResolver {
       }
     }
 
-    debugPrint('Hdhub4uResolver: Resolved ${uniqueSources.length} direct streams for "$title"');
-    return uniqueSources;
+    // Quality sorting: 4K -> 1080p -> 720p -> 480p
+    final sortedSources = sortStreamsByQuality<StreamSourceInfo>(
+      uniqueSources,
+      getName: (s) => s.name,
+      getUrl: (s) => s.url,
+      getQuality: (s) => s.quality,
+      getSize: (s) => s.size,
+    );
+
+    debugPrint('Hdhub4uResolver: Resolved ${sortedSources.length} direct streams for "$title"');
+    return sortedSources;
   }
 
   static String _cleanQuery(String query) {
@@ -194,12 +203,12 @@ class Hdhub4uResolver {
     String? referer,
   }) async {
     final streams = <StreamSourceInfo>[];
-    String quality = '1080p';
+    String quality = '1080p Full HD';
     String? size;
 
     if (buttonText != null) {
       final lowerText = buttonText.toLowerCase();
-      if (lowerText.contains('2160p') || lowerText.contains('4k')) {
+      if (lowerText.contains('2160p') || lowerText.contains('4k') || lowerText.contains('uhd')) {
         quality = '4K (2160p)';
       } else if (lowerText.contains('1080p')) {
         quality = '1080p Full HD';
@@ -209,7 +218,8 @@ class Hdhub4uResolver {
         quality = '480p SD';
       }
 
-      final sizeMatch = RegExp(r'\[([0-9.]+\s*[GM]B)\]', caseSensitive: false).firstMatch(buttonText);
+      final sizeMatch = RegExp(r'\[([0-9.]+\s*[GM]B)\]', caseSensitive: false).firstMatch(buttonText) ??
+                        RegExp(r'\b([0-9.]+\s*[GM]B)\b', caseSensitive: false).firstMatch(buttonText);
       if (sizeMatch != null) {
         size = sizeMatch.group(1);
       }
@@ -249,6 +259,9 @@ class Hdhub4uResolver {
         final label = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
         final lowerHref = href.toLowerCase();
 
+        // Skip fuckingfast
+        if (lowerHref.contains('fuckingfast.net')) continue;
+
         if (lowerHref.contains('.r2.cloudflarestorage.com') ||
             lowerHref.contains('cdn.') ||
             lowerHref.endsWith('.mkv') ||
@@ -267,7 +280,7 @@ class Hdhub4uResolver {
             serverName = '10Gbps Dedicated';
           }
 
-          final displayName = '$serverName • $quality';
+          final displayName = '$serverName • $quality${size != null ? " [$size]" : ""}';
           streams.add(StreamSourceInfo(
             name: displayName,
             url: href,
@@ -275,6 +288,20 @@ class Hdhub4uResolver {
             quality: quality,
             size: size,
           ));
+        } else if (lowerHref.contains('pixeldrain.com/u/') || lowerHref.contains('pixeldrain.dev/u/')) {
+          final fileIdMatch = RegExp(r'/u/([a-zA-Z0-9_-]+)').firstMatch(href);
+          if (fileIdMatch != null) {
+            final fileId = fileIdMatch.group(1)!;
+            final streamUrl = 'https://pixeldrain.com/api/file/$fileId';
+            final displayName = 'PixelDrain Direct • $quality${size != null ? " [$size]" : ""}';
+            streams.add(StreamSourceInfo(
+              name: displayName,
+              url: streamUrl,
+              type: StreamSourceType.hdhub4u,
+              quality: quality,
+              size: size,
+            ));
+          }
         }
       }
     } catch (e) {

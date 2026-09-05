@@ -10,6 +10,7 @@ import 'package:dio/dio.dart' as dio_pkg;
 class ApiService {
   static const String apiUrl = 'https://ot.goprivate.fun/api.php';
   static Map<String, String> _langMap = {};
+  static List<Movie> cachedMovies = [];
 
   static String _capitalize(String name) {
     if (name.isEmpty) return '';
@@ -91,7 +92,7 @@ class ApiService {
       if (idVal > maxId) maxId = idVal;
     }
 
-    return jsonList.map((json) {
+    final parsedList = jsonList.map((json) {
       final idStr = json['id']?.toString() ?? '0';
       final idInt = int.tryParse(idStr) ?? 0;
       
@@ -246,6 +247,11 @@ class ApiService {
         logoUrl: json['logo_url']?.toString() ?? json['logoUrl']?.toString(),
       );
     }).toList();
+
+    if (parsedList.isNotEmpty) {
+      cachedMovies = parsedList;
+    }
+    return parsedList;
   }
 
   /// Parses the JSON languages list, adding English and Other fallbacks.

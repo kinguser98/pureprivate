@@ -6,6 +6,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 
 class OneTamilmvConverterScreen extends StatefulWidget {
   const OneTamilmvConverterScreen({super.key});
@@ -225,18 +226,18 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.redAccent.withOpacity(0.15),
+                color: const Color(0xFF06B6D4).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.cloud_upload_rounded, color: Colors.redAccent, size: 24),
+              child: const Icon(Icons.movie_creation_rounded, color: Color(0xFF06B6D4), size: 24),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Convert Source?', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                  Text('Upload to Seedr → Streamtape', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+                  Text('Magnet Source Found', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('Play directly or upload to Streamtape', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
                 ],
               ),
             ),
@@ -310,21 +311,253 @@ class _OneTamilmvConverterScreenState extends State<OneTamilmvConverterScreen> {
           ] else ...[
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF06B6D4),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _startDirectPlayProcess(magnetUrl, name, sizeMb);
+              },
+              icon: const Icon(Icons.play_circle_fill_rounded, size: 18, color: Colors.black),
+              label: Text('PLAY NOW', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.redAccent,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
               onPressed: () {
                 Navigator.of(context).pop();
                 _startConversionProcess(magnetUrl, name, sizeMb);
               },
-              icon: const Icon(Icons.bolt_rounded, size: 18),
-              label: Text('CONFIRM UPLOAD', style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.cloud_upload_rounded, size: 18),
+              label: Text('UPLOAD', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12)),
             ),
           ],
         ],
       ),
     );
+  }
+
+  Future<void> _startDirectPlayProcess(String magnet, String name, double sizeMb) async {
+    if (sizeMb > 4096) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Files > 4GB exceed Seedr cloud limit.', style: GoogleFonts.outfit(color: Colors.white)),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    String currentStatus = 'Connecting to Seedr cloud...';
+    bool isCancelled = false;
+    void Function(void Function())? dialogSetState;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          dialogSetState = setDialogState;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E293B),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF06B6D4).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.play_circle_fill_rounded, color: Color(0xFF06B6D4), size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Preparing Instant Play', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text('Seedr Cloud Direct Stream', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.4),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  ),
+                  child: Text(name, style: GoogleFonts.outfit(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600), maxLines: 2, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(height: 18),
+                const Center(
+                  child: SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF06B6D4)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    currentStatus,
+                    style: GoogleFonts.outfit(color: const Color(0xFF06B6D4), fontSize: 13, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    'Streaming directly via Seedr high-speed edge nodes without Streamtape upload delay.',
+                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 10),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  isCancelled = true;
+                  Navigator.of(dialogCtx).pop();
+                },
+                child: Text('CANCEL', style: GoogleFonts.outfit(color: Colors.white54, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    void updateStatus(String s) {
+      currentStatus = s;
+      if (dialogSetState != null) {
+        dialogSetState!(() {});
+      }
+    }
+
+    try {
+      updateStatus('Clearing old Seedr cloud space...');
+      await _clearSeedrAccount();
+      if (isCancelled) return;
+
+      updateStatus('Adding torrent magnet to Seedr...');
+      final addRes = await http.post(
+        Uri.parse('https://v2.seedr.cc/api/v0.1/p/tasks'),
+        headers: {
+          'Authorization': 'Bearer $_seedrToken',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        },
+        body: {'torrent_magnet': magnet},
+      ).timeout(const Duration(seconds: 15));
+
+      final addJson = json.decode(addRes.body);
+      if (addRes.statusCode != 200 || addJson['success'] != true) {
+        throw Exception(addJson['reason_phrase'] ?? 'Failed to queue torrent in Seedr');
+      }
+
+      if (isCancelled) return;
+      updateStatus('Seedr cloud caching torrent files...');
+
+      String? seedrDirectUrl;
+      for (int i = 0; i < 30; i++) {
+        if (isCancelled) return;
+        await Future.delayed(const Duration(seconds: 3));
+        if (isCancelled) return;
+
+        try {
+          final rootRes = await http.get(
+            Uri.parse('https://v2.seedr.cc/api/v0.1/p/fs/folder/0/contents'),
+            headers: {'Authorization': 'Bearer $_seedrToken', 'Accept': 'application/json'},
+          );
+          if (rootRes.statusCode == 200) {
+            final rootData = json.decode(rootRes.body);
+            final folders = rootData['folders'] as List? ?? [];
+            final files = rootData['files'] as List? ?? [];
+
+            int? targetFileId;
+            if (folders.isNotEmpty) {
+              final fId = folders[0]['id'];
+              final subRes = await http.get(
+                Uri.parse('https://v2.seedr.cc/api/v0.1/p/fs/folder/$fId/contents'),
+                headers: {'Authorization': 'Bearer $_seedrToken', 'Accept': 'application/json'},
+              );
+              if (subRes.statusCode == 200) {
+                final subData = json.decode(subRes.body);
+                final subFiles = subData['files'] as List? ?? [];
+                if (subFiles.isNotEmpty) targetFileId = subFiles[0]['id'];
+              }
+            } else if (files.isNotEmpty) {
+              targetFileId = files[0]['id'];
+            }
+
+            if (targetFileId != null) {
+              final dlRes = await http.get(
+                Uri.parse('https://v2.seedr.cc/api/v0.1/p/download/file/$targetFileId/url'),
+                headers: {'Authorization': 'Bearer $_seedrToken', 'Accept': 'application/json'},
+              );
+              if (dlRes.statusCode == 200) {
+                final dlData = json.decode(dlRes.body);
+                final candidateUrl = dlData['url']?.toString();
+                if (candidateUrl != null && candidateUrl.isNotEmpty) {
+                  seedrDirectUrl = candidateUrl;
+                  updateStatus('Seedr direct stream ready ✓');
+                  break;
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (isCancelled || !mounted) return;
+
+      // Close loading dialog
+      Navigator.of(context, rootNavigator: true).pop();
+
+      if (seedrDirectUrl != null && seedrDirectUrl.isNotEmpty) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => VideoPlayerScreen(
+              videoSource: seedrDirectUrl!,
+              title: name,
+              subtitle: '1TamilMV Direct Seedr Stream',
+              sourceName: 'Seedr Cloud Stream',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not obtain Seedr stream URL. Torrent might have no seeders or took too long.', style: GoogleFonts.outfit(color: Colors.white)),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } catch (e) {
+      if (isCancelled || !mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Direct Play Error: $e', style: GoogleFonts.outfit(color: Colors.white)),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _clearSeedrAccount() async {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -33,6 +34,7 @@ import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
 import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:io';
 
@@ -54,6 +56,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   dynamic _selectedMovie;
   bool _loadingDetails = false;
   String? _imdbId;
+  String? _downloadedLocalPath;
+  bool _isDownloaded = false;
 
   // Stream resolution states
   bool _resolvingStreams = false;
@@ -338,6 +342,18 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _activeGroupType = null;
         _selectedAddonSubGroup = null;
         _selectingEpisode = false;
+        _downloadedLocalPath = null;
+        _isDownloaded = false;
+      });
+
+      // Check if this title is already downloaded locally
+      DownloadManager.getLocalPath(tmdbId).then((localPath) {
+        if (mounted && localPath != null && (kIsWeb || File(localPath).existsSync())) {
+          setState(() {
+            _downloadedLocalPath = localPath;
+            _isDownloaded = true;
+          });
+        }
       });
 
       try {
@@ -574,91 +590,97 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveStalkerVodDatabase(String title) async {
     try {
-      final searchTitle = _cleanSearchTitle(title);
-      final url =
-          '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(searchTitle)}';
-      
-      http.Response? response;
-      for (int attempt = 0; attempt < 2; attempt++) {
+      debugPrint('Stalker VOD resolver (Mobile/iOS): Searching for "$title"...');
+
+      final List<String> searchQueries = [];
+      final cleanSearch = _cleanSearchTitle(title);
+      if (cleanSearch.isNotEmpty) searchQueries.add(cleanSearch);
+
+      final cleanPunct = title.replaceAll(RegExp(r'[\(\)\[\]:_-]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (cleanPunct.isNotEmpty && !searchQueries.contains(cleanPunct)) {
+        searchQueries.add(cleanPunct);
+      }
+
+      if (title.trim().isNotEmpty && !searchQueries.contains(title.trim())) {
+        searchQueries.add(title.trim());
+      }
+
+      final firstWords = cleanPunct.split(' ').take(2).join(' ').trim();
+      if (firstWords.isNotEmpty && !searchQueries.contains(firstWords)) {
+        searchQueries.add(firstWords);
+      }
+
+      List<dynamic> movies = [];
+      for (final query in searchQueries) {
+        final url =
+            '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(query)}';
         try {
-          response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 25));
-          if (response.statusCode == 200) break;
+          final response = await http
+              .get(Uri.parse(url))
+              .timeout(const Duration(seconds: 10));
+          if (response.statusCode == 200) {
+            final dynamic data = json.decode(utf8.decode(response.bodyBytes));
+            List<dynamic> fetched = [];
+            if (data is List) {
+              fetched = data;
+            } else if (data is Map) {
+              fetched = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
+            }
+            if (fetched.isNotEmpty) {
+              movies = fetched;
+              break; // Found matching Stalker movies!
+            }
+          }
         } catch (e) {
-          debugPrint('Stalker VOD search attempt ${attempt + 1} failed: $e');
-          if (attempt == 0) await Future.delayed(const Duration(milliseconds: 800));
+          debugPrint('Stalker VOD query "$query" failed: $e');
         }
       }
 
-      if (response != null && response.statusCode == 200) {
-        final dynamic data = json.decode(utf8.decode(response.bodyBytes));
-        List<dynamic> movies = [];
-        if (data is List) {
-          movies = data;
-        } else if (data is Map) {
-          movies = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
-        }
+      debugPrint('Stalker VOD resolver (Mobile/iOS): Found ${movies.length} matches for "$title"');
 
-        if (movies.isEmpty && title.isNotEmpty) {
-          try {
-            final rawTitleClean = title.replaceAll(RegExp(r'[\(\)\[\]]'), ' ').trim();
-            final firstWords = rawTitleClean.split(' ').take(2).join(' ');
-            if (firstWords.isNotEmpty && firstWords != searchTitle) {
-              final allUrl = '${ApiService.apiUrl}?action=get_stalker_vod_movies&search=${Uri.encodeComponent(firstWords)}';
-              final allRes = await http.get(Uri.parse(allUrl)).timeout(const Duration(seconds: 20));
-              if (allRes.statusCode == 200) {
-                final dynamic allData = json.decode(utf8.decode(allRes.bodyBytes));
-                if (allData is List && allData.isNotEmpty) {
-                  movies = allData;
-                } else if (allData is Map && (allData['movies'] as List<dynamic>? ?? []).isNotEmpty) {
-                  movies = allData['movies'] as List<dynamic>;
-                }
-              }
-            }
-          } catch (_) {}
-        }
+      final List<StreamSourceInfo> sources = [];
 
-        final List<StreamSourceInfo> sources = [];
-
-        for (final item in movies) {
-          final rawPortalId = item['portal_id'];
-          var portalId = rawPortalId != null 
-              ? (int.tryParse(rawPortalId.toString()) ?? 1) 
-              : 1;
-          var cmd = item['cmd']?.toString() ?? '';
-          if (cmd.isEmpty && item['stream_url'] != null) {
-            final streamUrl = item['stream_url'].toString();
-            if (streamUrl.startsWith('stalker://')) {
-              final params = StalkerResolver.parseStalkerUrl(streamUrl);
-              cmd = params.cmd;
-              if (params.portalId > 0) portalId = params.portalId;
-            }
-          }
-          final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
-          final rawPortalName = item['portal_name']?.toString() ?? '';
-          final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
-
-          if (cmd.isNotEmpty) {
-            final isDup =
-                _resolvedSources.any(
-                  (s) => s.url == 'stalker://$portalId$cmd',
-                ) ||
-                sources.any((s) => s.url == 'stalker://$portalId$cmd');
-            if (!isDup) {
-              sources.add(
-                StreamSourceInfo(
-                  name: '$portalName - $name',
-                  url: 'stalker://$portalId$cmd',
-                  type: StreamSourceType.stalker,
-                ),
-              );
-            }
+      for (final item in movies) {
+        if (item is! Map) continue;
+        final rawPortalId = item['portal_id'];
+        var portalId = rawPortalId != null 
+            ? (int.tryParse(rawPortalId.toString()) ?? 1) 
+            : 1;
+        var cmd = item['cmd']?.toString() ?? '';
+        if (cmd.isEmpty && item['stream_url'] != null) {
+          final streamUrl = item['stream_url'].toString();
+          if (streamUrl.startsWith('stalker://')) {
+            final params = StalkerResolver.parseStalkerUrl(streamUrl);
+            cmd = params.cmd;
+            if (params.portalId > 0) portalId = params.portalId;
           }
         }
-        if (mounted && sources.isNotEmpty) {
-          setState(() {
-            _resolvedSources.addAll(sources);
-          });
+        final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
+        final rawPortalName = item['portal_name']?.toString() ?? '';
+        final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
+
+        if (cmd.isNotEmpty) {
+          final targetUrl = 'stalker://$portalId$cmd';
+          final isDup =
+              _resolvedSources.any(
+                (s) => s.url == targetUrl,
+              ) ||
+              sources.any((s) => s.url == targetUrl);
+          if (!isDup) {
+            sources.add(
+              StreamSourceInfo(
+                name: '$portalName - $name',
+                url: targetUrl,
+                type: StreamSourceType.stalker,
+              ),
+            );
+          }
         }
+      }
+      if (mounted && sources.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(sources);
+        });
       }
     } catch (e) {
       debugPrint('Stalker VOD database search failed: $e');
@@ -3067,6 +3089,23 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
 
       final List<Widget> groupCards = [];
+
+      // 0. OFFLINE DOWNLOADED FILE (Always shown first at Index 0 irrespective of cloud server order)
+      if (_isDownloaded && _downloadedLocalPath != null) {
+        groupCards.add(
+          _buildServerGroupCard(
+            title: '[DOWNLOADED] Offline Local Copy',
+            subtitle: 'Play saved offline copy directly from device storage',
+            icon: Icons.offline_pin_rounded,
+            accentColor: const Color(0xFF10B981),
+            isDownloaded: true,
+            onTap: () {
+              _playDownloadedMovie(_downloadedLocalPath!, movieTitle, posterPath ?? '');
+            },
+          ),
+        );
+      }
+
       for (final key in _sourceOrder) {
         if (key == 'stremioAddon') {
           if (sourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
@@ -3409,64 +3448,36 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               }
             }
 
+      final sortedActiveList = sortStreamsByQuality<StreamSourceInfo>(
+        activeList,
+        getName: (s) => s.name,
+        getUrl: (s) => s.url,
+        getQuality: (s) => s.quality,
+        getSize: (s) => s.size,
+      );
+
       return ListView.builder(
-        itemCount: activeList.length,
+        itemCount: sortedActiveList.length,
         itemBuilder: (context, index) {
-          final source = activeList[index];
-          return Card(
-            color: Colors.white.withValues(alpha: 0.04),
-            margin: const EdgeInsets.only(bottom: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: ListTile(
-              leading: _activeGroupType == StreamSourceType.netmirror
-                  ? CircleAvatar(
-                      backgroundColor: Colors.transparent,
-                      child: _getOttLogo(source.name, size: 28),
-                    )
-                  : CircleAvatar(
-                      backgroundColor: accentColor.withValues(alpha: 0.15),
-                      child: Icon(iconData, color: accentColor, size: 20),
-                    ),
-              title: Text(
-                (source.quality != null && source.quality!.isNotEmpty)
-                    ? '${source.name} (${source.quality})'
-                    : source.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w500,
+          final source = sortedActiveList[index];
+          return StreamMetadataTile(
+            name: source.name,
+            url: source.url,
+            headers: source.headers,
+            explicitQuality: source.quality,
+            explicitSize: source.size,
+            explicitLanguages: source.languages,
+            onTap: () => _playStream(source, movieTitle, posterPath),
+            onDownload: () => _handleStreamDownload(source, movieTitle, posterPath),
+            onLongPress: () {
+              Clipboard.setData(ClipboardData(text: source.url));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Copied Link: ${source.url}'),
+                  duration: const Duration(seconds: 2),
                 ),
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.file_download_rounded, size: 20),
-                    color: Colors.white70,
-                    tooltip: 'Download Stream',
-                    onPressed: () => _handleStreamDownload(source, movieTitle, posterPath),
-                  ),
-                  Icon(
-                    Icons.play_arrow_rounded,
-                    color: Colors.white.withValues(alpha: 0.4),
-                  ),
-                ],
-              ),
-              onTap: () => _playStream(source, movieTitle, posterPath),
-              onLongPress: () {
-                Clipboard.setData(ClipboardData(text: source.url));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Copied Link: ${source.url}'),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              },
-            ),
+              );
+            },
           );
         },
       );
@@ -3526,38 +3537,91 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  void _playDownloadedMovie(String localPath, String movieTitle, String posterPath) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VideoPlayerScreen(
+          videoSource: localPath,
+          title: movieTitle,
+          subtitle: 'Offline Download',
+          movieId: _selectedMovie?['id']?.toString() ?? _selectedMovie?['tmdb_id']?.toString() ?? '',
+          resumeDirectly: true,
+          sourceName: 'Offline Download',
+          logoUrl: posterPath,
+        ),
+      ),
+    );
+  }
+
   Widget _buildServerGroupCard({
     required String title,
     required String subtitle,
     required IconData icon,
     required Color accentColor,
     VoidCallback? onTap,
+    bool isDownloaded = false,
   }) {
     final bool disabled = onTap == null;
     return Card(
-      color: Colors.white.withValues(alpha: disabled ? 0.015 : 0.04),
+      color: isDownloaded
+          ? const Color(0xFF059669).withValues(alpha: 0.15)
+          : Colors.white.withValues(alpha: disabled ? 0.015 : 0.04),
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: isDownloaded
+            ? const BorderSide(color: Color(0xFF10B981), width: 1.5)
+            : BorderSide.none,
+      ),
       child: ListTile(
         onTap: onTap,
         enabled: !disabled,
         leading: CircleAvatar(
-          backgroundColor: accentColor.withValues(
-            alpha: disabled ? 0.05 : 0.15,
-          ),
+          backgroundColor: isDownloaded
+              ? const Color(0xFF10B981).withValues(alpha: 0.25)
+              : accentColor.withValues(
+                  alpha: disabled ? 0.05 : 0.15,
+                ),
           child: Icon(
             icon,
-            color: accentColor.withValues(alpha: disabled ? 0.4 : 1.0),
+            color: isDownloaded
+                ? const Color(0xFF34D399)
+                : accentColor.withValues(alpha: disabled ? 0.4 : 1.0),
             size: 22,
           ),
         ),
-        title: Text(
-          title,
-          style: GoogleFonts.outfit(
-            color: disabled ? Colors.white30 : Colors.white,
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.outfit(
+                  color: disabled ? Colors.white30 : Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            if (isDownloaded) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.5), width: 1),
+                ),
+                child: const Text(
+                  'DOWNLOADED',
+                  style: TextStyle(
+                    color: Color(0xFF34D399),
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
         subtitle: Text(
           subtitle,
@@ -3568,7 +3632,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         ),
         trailing: Icon(
           Icons.chevron_right_rounded,
-          color: disabled ? Colors.white12 : Colors.white54,
+          color: isDownloaded
+              ? const Color(0xFF34D399)
+              : (disabled ? Colors.white12 : Colors.white54),
         ),
       ),
     );
