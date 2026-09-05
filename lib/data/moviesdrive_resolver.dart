@@ -11,7 +11,8 @@ class MoviesdriveResolver {
   static const Map<String, String> _requestHeaders = {
     'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/html, */*',
+    'Accept': 'application/json, text/html, application/xhtml+xml, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
   };
 
   static Future<String> getBaseDomain() async {
@@ -46,43 +47,58 @@ class MoviesdriveResolver {
   }) async {
     final domain = await getBaseDomain();
     final cleanTitle = _cleanQuery(title);
-    final wpSearchUrl = '$domain/wp-json/wp/v2/posts?search=${Uri.encodeComponent(cleanTitle)}';
-
-    debugPrint('MoviesdriveResolver: Searching "$cleanTitle" ($year) on $wpSearchUrl');
     final sources = <StreamSourceInfo>[];
 
     try {
-      final res = await http.get(
-        Uri.parse(wpSearchUrl),
-        headers: _requestHeaders,
-      ).timeout(const Duration(seconds: 8));
-
       List<String> postUrls = [];
-      if (res.statusCode == 200) {
-        try {
-          final data = jsonDecode(res.body);
-          if (data is List) {
-            for (final p in data) {
-              if (p is Map && p['link'] != null) {
-                postUrls.add(p['link'].toString());
+
+      // Method 1: Instant Typesense JSON search API (/search.php?q=...)
+      final apiSearchUrl = '$domain/search.php?q=${Uri.encodeComponent(cleanTitle)}&page=1';
+      debugPrint('MoviesdriveResolver: Searching "$cleanTitle" ($year) on $apiSearchUrl');
+
+      try {
+        final apiRes = await http.get(
+          Uri.parse(apiSearchUrl),
+          headers: _requestHeaders,
+        ).timeout(const Duration(seconds: 7));
+
+        if (apiRes.statusCode == 200) {
+          final data = jsonDecode(apiRes.body);
+          if (data is Map && data['hits'] is List) {
+            for (final hit in data['hits']) {
+              if (hit is Map && hit['document'] is Map) {
+                final doc = hit['document'];
+                final permalink = doc['permalink']?.toString() ?? '';
+                final postTitle = doc['post_title']?.toString() ?? '';
+                if (permalink.isNotEmpty && _isTitleMatch(postTitle, cleanTitle, year)) {
+                  postUrls.add(permalink);
+                }
               }
             }
           }
-        } catch (_) {}
+        }
+      } catch (e) {
+        debugPrint('MoviesdriveResolver: /search.php error: $e');
       }
 
-      // Fallback to HTML search if wp-json failed
+      // Method 2: Fallback to standard HTML search (?s=...) if API returned no matching posts
       if (postUrls.isEmpty) {
-        final fbUrl = '$domain/?s=${Uri.encodeComponent(cleanTitle)}';
-        final fbRes = await http.get(Uri.parse(fbUrl), headers: _requestHeaders).timeout(const Duration(seconds: 8));
-        if (fbRes.statusCode == 200) {
-          postUrls = _extractPostUrls(fbRes.body, domain, cleanTitle);
+        try {
+          final fbUrl = '$domain/?s=${Uri.encodeComponent(cleanTitle)}';
+          debugPrint('MoviesdriveResolver: Trying HTML search fallback $fbUrl');
+          final fbRes = await http.get(Uri.parse(fbUrl), headers: _requestHeaders).timeout(const Duration(seconds: 7));
+          if (fbRes.statusCode == 200) {
+            postUrls = _extractPostUrls(fbRes.body, domain, cleanTitle, year);
+          }
+        } catch (e) {
+          debugPrint('MoviesdriveResolver: HTML search error: $e');
         }
       }
 
       debugPrint('MoviesdriveResolver: Found ${postUrls.length} posts for "$cleanTitle"');
 
       if (postUrls.isNotEmpty) {
+        // Inspect top 2 matching post pages
         for (final targetPostUrl in postUrls.take(2)) {
           debugPrint('MoviesdriveResolver: Inspecting post $targetPostUrl');
           final postRes = await http.get(
@@ -94,7 +110,7 @@ class MoviesdriveResolver {
           ).timeout(const Duration(seconds: 8));
 
           if (postRes.statusCode == 200) {
-            final links = await _extractAndUnpackLinks(postRes.body, targetPostUrl);
+            final links = await _extractAndUnpackLinks(postRes.body, targetPostUrl, season: season, episode: episode, isSeries: isSeries);
             sources.addAll(links);
           }
         }
@@ -121,13 +137,37 @@ class MoviesdriveResolver {
     return query
         .replaceAll(RegExp(r'\[.*?\]'), ' ')
         .replaceAll(RegExp(r'\(.*?\)'), ' ')
-        .replaceAll(RegExp(r'\b(dub|dubbed|hd|4k|hindi|tamil|telugu|multi|dual audio)\b', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'\b(dub|dubbed|hd|4k|hindi|tamil|telugu|malayalam|kannada|multi|dual audio)\b', caseSensitive: false), ' ')
         .replaceAll(RegExp(r'[^\w\s]'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
 
-  static List<String> _extractPostUrls(String html, String domain, String cleanTitle) {
+  static bool _isTitleMatch(String postTitle, String cleanTitle, int year) {
+    final lowerPost = postTitle.toLowerCase();
+    final lowerClean = cleanTitle.toLowerCase();
+    final words = lowerClean.split(' ').where((w) => w.length > 2).toList();
+    
+    // Check if main words are contained in post title
+    if (words.isNotEmpty) {
+      int matchCount = 0;
+      for (final w in words) {
+        if (lowerPost.contains(w)) matchCount++;
+      }
+      if (matchCount < (words.length > 1 ? 2 : 1)) {
+        return false;
+      }
+    }
+
+    // Check year if present and title has multiple words
+    if (year > 1900 && lowerPost.contains(year.toString())) {
+      return true;
+    }
+    
+    return true;
+  }
+
+  static List<String> _extractPostUrls(String html, String domain, String cleanTitle, int year) {
     final postUrls = <String>[];
     final words = cleanTitle.toLowerCase().split(' ').where((w) => w.length > 2).toList();
     final linkRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
@@ -135,18 +175,23 @@ class MoviesdriveResolver {
 
     for (final m in matches) {
       var href = m.group(1) ?? '';
+      final text = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
       if (href.startsWith('/')) href = '$domain$href';
 
       final lowerHref = href.toLowerCase();
+      final lowerText = text.toLowerCase();
+
       if (lowerHref.startsWith(domain.toLowerCase()) &&
           !lowerHref.contains('/category/') &&
           !lowerHref.contains('/tag/') &&
           !lowerHref.contains('/page/') &&
+          !lowerHref.contains('/search.php') &&
           href != domain &&
           href != '$domain/') {
+        
         bool match = words.isEmpty;
         for (final w in words) {
-          if (lowerHref.contains(w)) match = true;
+          if (lowerHref.contains(w) || lowerText.contains(w)) match = true;
         }
         if (match && !postUrls.contains(href)) {
           postUrls.add(href);
@@ -156,14 +201,20 @@ class MoviesdriveResolver {
     return postUrls;
   }
 
-  static Future<List<StreamSourceInfo>> _extractAndUnpackLinks(String html, String postUrl) async {
+  static Future<List<StreamSourceInfo>> _extractAndUnpackLinks(
+    String html,
+    String postUrl, {
+    int? season,
+    int? episode,
+    bool isSeries = false,
+  }) async {
     final linkRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
     final matches = linkRegex.allMatches(html);
     final unpackFutures = <Future<List<StreamSourceInfo>>>[];
 
     for (final m in matches) {
       final url = m.group(1)?.trim() ?? '';
-      final text = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '')?.trim() ?? '';
+      final text = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
       final lowerUrl = url.toLowerCase();
       final lowerText = text.toLowerCase();
 
@@ -171,13 +222,15 @@ class MoviesdriveResolver {
           lowerUrl.contains('hubcloud') ||
           lowerUrl.contains('mdrive.') ||
           lowerUrl.contains('drive.') ||
+          lowerUrl.contains('gamerxyt') ||
           lowerText.contains('720p') ||
           lowerText.contains('1080p') ||
           lowerText.contains('2160p') ||
           lowerText.contains('4k') ||
           lowerText.contains('hevc') ||
           lowerText.contains('download') ||
-          lowerText.contains('fast server');
+          lowerText.contains('fast server') ||
+          lowerText.contains('fsl');
 
       if (isDownloadButton && url.startsWith('http') && !url.contains('moviesdrive')) {
         unpackFutures.add(_unpackDirectStreams(url, buttonText: text, referer: postUrl));
@@ -203,7 +256,7 @@ class MoviesdriveResolver {
 
     if (buttonText != null) {
       final lowerText = buttonText.toLowerCase();
-      if (lowerText.contains('2160p') || lowerText.contains('4k')) {
+      if (lowerText.contains('2160p') || lowerText.contains('4k') || lowerText.contains('uhd')) {
         quality = '4K (2160p)';
       } else if (lowerText.contains('1080p')) {
         quality = '1080p Full HD';
@@ -213,7 +266,8 @@ class MoviesdriveResolver {
         quality = '480p SD';
       }
 
-      final sizeMatch = RegExp(r'\[([0-9.]+\s*[GM]B)\]', caseSensitive: false).firstMatch(buttonText);
+      final sizeMatch = RegExp(r'\[([0-9.]+\s*[GM]B)\]', caseSensitive: false).firstMatch(buttonText) ??
+                        RegExp(r'\b([0-9.]+\s*[GM]B)\b', caseSensitive: false).firstMatch(buttonText);
       if (sizeMatch != null) {
         size = sizeMatch.group(1);
       }
@@ -224,9 +278,13 @@ class MoviesdriveResolver {
 
       // Hop 1: mdrive / hubdrive -> HubCloud
       if (currentUrl.contains('hubdrive.') || currentUrl.contains('drive.') || currentUrl.contains('mdrive.')) {
-        final res1 = await http.get(Uri.parse(currentUrl), headers: _requestHeaders).timeout(const Duration(seconds: 5));
-        final hubMatch = RegExp(r'href="(https?://[^"]*hubcloud[^"]*)"').firstMatch(res1.body);
-        if (hubMatch != null) currentUrl = hubMatch.group(1)!;
+        final res1 = await http.get(Uri.parse(currentUrl), headers: _requestHeaders).timeout(const Duration(seconds: 6));
+        final hubMatch = RegExp(r'href="([^"]*hubcloud[^"]*)"', caseSensitive: false).firstMatch(res1.body) ??
+                         RegExp(r'action="([^"]*hubcloud[^"]*)"', caseSensitive: false).firstMatch(res1.body) ??
+                         RegExp(r'["\'](https?://[^"\']*hubcloud[^"\']*)["\']', caseSensitive: false).firstMatch(res1.body);
+        if (hubMatch != null) {
+          currentUrl = hubMatch.group(1)!;
+        }
       }
 
       // Hop 2: HubCloud -> Gateway (gamerxyt / etc.)
@@ -234,48 +292,80 @@ class MoviesdriveResolver {
         final res2 = await http.get(Uri.parse(currentUrl), headers: {
           ..._requestHeaders,
           'Referer': referer ?? initialUrl,
-        }).timeout(const Duration(seconds: 5));
+        }).timeout(const Duration(seconds: 6));
 
-        final targetMatch = RegExp(r"var\s+url\s*=\s*'([^']+)'").firstMatch(res2.body) ??
-                            RegExp(r'id="download"[^>]*href="([^"]+)"').firstMatch(res2.body);
-        if (targetMatch != null) currentUrl = targetMatch.group(1)!;
+        final targetMatch = RegExp(r"var\s+url\s*=\s*'([^']+)'", caseSensitive: false).firstMatch(res2.body) ??
+                            RegExp(r'id="download"[^>]*href="([^"]+)"', caseSensitive: false).firstMatch(res2.body) ??
+                            RegExp(r'href="([^"]*gamerxyt\.com[^"]*)"', caseSensitive: false).firstMatch(res2.body);
+        if (targetMatch != null) {
+          currentUrl = targetMatch.group(1)!;
+        }
       }
 
       // Hop 3: Gateway -> Direct video streams
-      final res3 = await http.get(Uri.parse(currentUrl), headers: {
-        ..._requestHeaders,
-        'Referer': 'https://hubcloud.cx/',
-      }).timeout(const Duration(seconds: 5));
+      if (currentUrl.contains('gamerxyt.com') || currentUrl.contains('hubcloud.php')) {
+        final res3 = await http.get(Uri.parse(currentUrl), headers: {
+          ..._requestHeaders,
+          'Referer': 'https://hubcloud.cx/',
+        }).timeout(const Duration(seconds: 6));
 
-      final btnRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
-      for (final m in btnRegex.allMatches(res3.body)) {
-        final href = m.group(1) ?? '';
-        final label = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
-        final lowerHref = href.toLowerCase();
+        final btnRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
+        for (final m in btnRegex.allMatches(res3.body)) {
+          final href = m.group(1) ?? '';
+          final label = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
+          final lowerHref = href.toLowerCase();
+          final lowerLabel = label.toLowerCase();
 
-        if (lowerHref.contains('.r2.cloudflarestorage.com') ||
-            lowerHref.contains('cdn.') ||
-            lowerHref.endsWith('.mkv') ||
-            lowerHref.endsWith('.mp4') ||
-            lowerHref.contains('.mkv?') ||
-            lowerHref.contains('.mp4?')) {
-          String serverName = 'Fast Server';
-          if (label.contains('FSLv2') || lowerHref.contains('lenin.buzz') || lowerHref.contains('pongala.life')) {
-            serverName = 'FSLv2 CDN';
-          } else if (label.contains('FSL Server') || lowerHref.contains('.r2.')) {
-            serverName = 'Cloudflare R2 Direct';
-          } else if (label.contains('10Gbps')) {
-            serverName = '10Gbps Dedicated';
+          // 1. Cloudflare R2 Direct / CDN Fast Server / Direct MKV / MP4
+          if (lowerHref.contains('.r2.cloudflarestorage.com') ||
+              lowerHref.contains('cdn.') ||
+              lowerHref.endsWith('.mkv') ||
+              lowerHref.endsWith('.mp4') ||
+              lowerHref.contains('.mkv?') ||
+              lowerHref.contains('.mp4?')) {
+            String serverName = 'MoviesDrive Fast Server';
+            if (lowerLabel.contains('fslv2') || lowerHref.contains('lenin.buzz') || lowerHref.contains('pongala.life')) {
+              serverName = 'MoviesDrive FSLv2 CDN';
+            } else if (lowerLabel.contains('fsl') || lowerHref.contains('.r2.')) {
+              serverName = 'MoviesDrive Cloudflare R2';
+            } else if (lowerLabel.contains('10gbps')) {
+              serverName = 'MoviesDrive 10Gbps';
+            }
+
+            final displayName = '$serverName • $quality';
+            streams.add(StreamSourceInfo(
+              name: displayName,
+              url: href,
+              type: StreamSourceType.moviesdrive,
+              quality: quality,
+              size: size,
+            ));
           }
-
-          final displayName = '$serverName • $quality';
-          streams.add(StreamSourceInfo(
-            name: displayName,
-            url: href,
-            type: StreamSourceType.moviesdrive,
-            quality: quality,
-            size: size,
-          ));
+          // 2. PixelDrain direct stream
+          else if (lowerHref.contains('pixeldrain.com/u/') || lowerHref.contains('pixeldrain.dev/u/')) {
+            final fileIdMatch = RegExp(r'/u/([a-zA-Z0-9_-]+)').firstMatch(href);
+            if (fileIdMatch != null) {
+              final fileId = fileIdMatch.group(1)!;
+              final streamUrl = 'https://pixeldrain.com/api/file/$fileId';
+              streams.add(StreamSourceInfo(
+                name: 'MoviesDrive PixelDrain Direct • $quality',
+                url: streamUrl,
+                type: StreamSourceType.moviesdrive,
+                quality: quality,
+                size: size,
+              ));
+            }
+          }
+          // 3. Buzz / FuckingFast direct stream
+          else if (lowerHref.contains('fuckingfast.net/')) {
+            streams.add(StreamSourceInfo(
+              name: 'MoviesDrive Buzz High-Speed • $quality',
+              url: href,
+              type: StreamSourceType.moviesdrive,
+              quality: quality,
+              size: size,
+            ));
+          }
         }
       }
     } catch (e) {
