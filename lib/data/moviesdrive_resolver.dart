@@ -281,7 +281,7 @@ class MoviesdriveResolver {
         final res1 = await http.get(Uri.parse(currentUrl), headers: _requestHeaders).timeout(const Duration(seconds: 6));
         final hubMatch = RegExp(r'href="([^"]*hubcloud[^"]*)"', caseSensitive: false).firstMatch(res1.body) ??
                          RegExp(r'action="([^"]*hubcloud[^"]*)"', caseSensitive: false).firstMatch(res1.body) ??
-                         RegExp(r'["\'](https?://[^"\']*hubcloud[^"\']*)["\']', caseSensitive: false).firstMatch(res1.body);
+                         RegExp(r'''["'](https?://[^"']*hubcloud[^"']*)["']''', caseSensitive: false).firstMatch(res1.body);
         if (hubMatch != null) {
           currentUrl = hubMatch.group(1)!;
         }
