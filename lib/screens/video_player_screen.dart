@@ -302,14 +302,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final delta = bytes - _lastDemuxerBytesRead;
           ProxyStats.addBytes(delta);
           _lastDemuxerBytesRead = bytes;
-        } else if (_playing && !_buffering) {
-          ProxyStats.addBytes(384 * 1024);
         }
-      } catch (_) {
-        if (_playing && !_buffering) {
-          ProxyStats.addBytes(384 * 1024);
-        }
-      }
+      } catch (_) {}
     });
   }
 
@@ -585,11 +579,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
-          await nativePlayer.setProperty('cache-secs', '15');
-          await nativePlayer.setProperty('cache-pause-wait', '0');
+          await nativePlayer.setProperty('demuxer-max-bytes', '134217728'); // 128 MB RAM buffer
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '33554432'); // 32 MB back buffer
+          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // Buffer up to 30 seconds ahead
+          await nativePlayer.setProperty('cache-secs', '30');
+          await nativePlayer.setProperty('cache-pause', 'yes');
+          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer at least 2s before resuming to prevent frame stutter
+          await nativePlayer.setProperty('cache-pause-initial', 'yes');
+          await nativePlayer.setProperty('demuxer-lavf-buffersize', '1048576');
+          await nativePlayer.setProperty('stream-buffer-size', '2097152');
           await nativePlayer.setProperty('stream-live', 'no');
         }
         
