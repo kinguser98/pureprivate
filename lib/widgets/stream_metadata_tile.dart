@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:private_cinema_mobile/theme/app_colors.dart';
+import '../theme/app_colors.dart';
 
 class SpecialBadge {
   final String label;
@@ -49,10 +49,10 @@ class ParsedStreamMeta {
 ParsedStreamMeta parseStreamMeta(String name, String url, {String? explicitQuality, String? explicitSize, List<String>? explicitLanguages}) {
   var raw = name;
 
-  // Clean prefixes like "MoviesDrive • ", "Cinejoy.to • ", "HDHub4u • ", "MKVBase • ", "Vegamovies • ", "Movy.bz • ", etc.
+  // Clean prefixes like "MoviesDrive • ", "Cinejoy.to • ", "HDHub4u • ", "Vegamovies • ", "Movy.bz • ", etc.
   raw = raw.replaceAll(RegExp(r'^(MKV|MP4)\s*Stream\s*[-•:]\s*', caseSensitive: false), '');
-  raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|MKVBase|Movy\.bz|Movy|Cinejoy(\.to)?|Vegamovies(\.se|\.catering)?|StreamPlay|MovieBox|FilmU|CineMM|NetMirror)\s*[-•:]\s*', caseSensitive: false), '');
-  raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|MKVBase|Movy|Cinejoy|Vegamovies)\s+', caseSensitive: false), '');
+  raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|Movy\.bz|Movy|Cinejoy(\.to)?|Vegamovies(\.futbol|\.se|\.catering)?|StreamPlay|MovieBox|FilmU|NetMirror)\s*[-•:]\s*', caseSensitive: false), '');
+  raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|Movy|Cinejoy|Vegamovies)\s+', caseSensitive: false), '');
 
   // Clean up TG tag suffixes/delimiters (e.g. -TG, _TG, [TG])
   raw = raw.replaceAll(RegExp(r'[-_.]?[tT][gG]\b'), '');
@@ -312,6 +312,24 @@ List<T> sortStreamsByQuality<T>(
     // Tertiary: File Size (larger size = higher bitrate = better quality)
     if (metaA.sizeInMb > 0 && metaB.sizeInMb > 0 && (metaA.sizeInMb != metaB.sizeInMb)) {
       return metaB.sizeInMb.compareTo(metaA.sizeInMb);
+    }
+
+    // Language priority: Malayalam (first priority) > Tamil > Telugu > Kannada > Hindi > others
+    int langRank(ParsedStreamMeta meta) {
+      final langs = meta.languages.map((l) => l.toLowerCase()).toList();
+      final title = meta.raw.toLowerCase();
+      if (langs.contains('malayalam') || title.contains('malayalam')) return 0;
+      if (langs.contains('tamil') || title.contains('tamil')) return 1;
+      if (langs.contains('telugu') || title.contains('telugu')) return 2;
+      if (langs.contains('kannada') || title.contains('kannada')) return 3;
+      if (langs.contains('hindi') || title.contains('hindi')) return 4;
+      return 5;
+    }
+
+    final langA = langRank(metaA);
+    final langB = langRank(metaB);
+    if (langA != langB) {
+      return langA.compareTo(langB);
     }
 
     return 0;

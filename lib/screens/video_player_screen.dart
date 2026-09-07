@@ -275,6 +275,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _startPlayerLogoTimer();
   }
 
+  bool _isStreamProxied = false;
   Timer? _proxyStatsTimer;
   int _lastDemuxerBytesRead = 0;
 
@@ -283,7 +284,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _lastDemuxerBytesRead = 0;
     ProxyStats.reset();
     _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!mounted || _player.platform is! NativePlayer) return;
+      if (!mounted) return;
+      // If the stream is routed through the local proxy relay, CustomDnsProxy already
+      // tracks real network socket throughput and byte transfers directly in real time.
+      // Do NOT double-count with mpv demuxer byte counters!
+      if (_isStreamProxied) return;
+
+      if (_player.platform is! NativePlayer) return;
       final nativePlayer = _player.platform as NativePlayer;
       try {
         int bytes = 0;
@@ -293,14 +300,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final res2 = await nativePlayer.getProperty('bytes-read');
           bytes = int.tryParse(res2.toString()) ?? 0;
         }
-        if (bytes == 0) {
-          final res3 = await nativePlayer.getProperty('stream-pos');
-          bytes = int.tryParse(res3.toString()) ?? 0;
-        }
 
         if (bytes > 0 && bytes > _lastDemuxerBytesRead) {
           final delta = bytes - _lastDemuxerBytesRead;
           ProxyStats.addBytes(delta);
+          _lastDemuxerBytesRead = bytes;
+        } else if (bytes < _lastDemuxerBytesRead) {
+          // Stream seeked or demuxer reset
           _lastDemuxerBytesRead = bytes;
         }
       } catch (_) {}
@@ -661,6 +667,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           debugPrint('VideoPlayerScreen error rewriting proxy URL: $e');
         }
       }
+
+      _isStreamProxied = isProxied;
 
       // If we are NOT routing through the local proxy, we must strip the 'headers' query parameter
       // here so the player directly requests the clean URL without corrupting CDN signatures.

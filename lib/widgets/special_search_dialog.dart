@@ -16,7 +16,6 @@ import 'package:private_cinema_mobile/screens/webview_player_screen.dart';
 import 'package:private_cinema_mobile/screens/cast_controller_screen.dart';
 import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
-import 'package:private_cinema_mobile/data/cinemm_resolver.dart';
 import 'package:private_cinema_mobile/data/moviebox_resolver.dart';
 import 'package:private_cinema_mobile/data/streamplay_resolver.dart';
 import 'package:private_cinema_mobile/data/domain_service.dart';
@@ -29,7 +28,6 @@ import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
-import 'package:private_cinema_mobile/data/mkvbase_resolver.dart';
 import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
 import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
@@ -81,7 +79,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showStreamplay = true;
   bool _showStravo = true;
   bool _showStalker = true;
-  bool _showCinemm = true;
   bool _showMoviebox = true;
   bool _showCastle = true;
   bool _showTorrent = true;
@@ -89,7 +86,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showMovy = true;
   bool _showMoviesdrive = true;
   bool _showHdhub4u = true;
-  bool _showMkvbase = true;
   bool _showFilmu = true;
   bool _showVegamovies = true;
   bool _showCinejoy = true;
@@ -104,15 +100,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','mkvbase','cinemm','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','telegram','directLink'];
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
         _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
-        _showMkvbase = cloud.containsKey('source_show_mkvbase') ? cloud['source_show_mkvbase'] == 'true' : (prefs.getBool('source_show_mkvbase') ?? true);
         _showStravo = cloud.containsKey('source_show_stravo') ? cloud['source_show_stravo'] == 'true' : (prefs.getBool('source_show_stravo') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
-        _showCinemm = cloud.containsKey('source_show_cinemm') ? cloud['source_show_cinemm'] == 'true' : (prefs.getBool('source_show_cinemm') ?? true);
         _showMoviebox = cloud.containsKey('source_show_moviebox') ? cloud['source_show_moviebox'] == 'true' : (prefs.getBool('source_show_moviebox') ?? true);
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTorrent = cloud.containsKey('source_show_torrent') ? cloud['source_show_torrent'] == 'true' : (prefs.getBool('source_show_torrent') ?? true);
@@ -466,11 +460,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       final movieYear = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
 
-      // 6. Resolve CineMM - movies only
-      if (_showCinemm && !_isSeriesSearch) {
-        tasks.add(_resolveCinemm(title, movieYear));
-      }
-
       // Resolve StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)
       if (_showStreamplay) {
         tasks.add(
@@ -532,12 +521,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       if (_showHdhub4u && title.isNotEmpty) {
         final yearVal = int.tryParse(movieYear) ?? 2024;
         tasks.add(_resolveHdhub4u(title, yearVal, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
-      }
-
-      // Resolve MKVBase / HubCloud Multi-Audio
-      if (_showMkvbase && title.isNotEmpty) {
-        final yearVal = int.tryParse(movieYear) ?? 2024;
-        tasks.add(_resolveMkvbase(title, yearVal, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
       }
 
       // 8. Add VidSrc.to Auto-Resolving Stream (requires TMDB ID)
@@ -660,7 +643,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
         if (cmd.isNotEmpty) {
-          final targetUrl = 'stalker://$portalId$cmd';
+          final cleanCmd = cmd.startsWith('/') ? cmd : '/$cmd';
+          final targetUrl = 'stalker://$portalId$cleanCmd';
           final isDup =
               _resolvedSources.any(
                 (s) => s.url == targetUrl,
@@ -684,25 +668,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('Stalker VOD database search failed: $e');
-    }
-  }
-
-
-
-  Future<void> _resolveCinemm(String title, String year) async {
-    try {
-      debugPrint('CineMM Scraper: Resolving streams for $title...');
-      final streams = await CinemmResolver.resolveStreams(
-        title: title,
-        year: year.isNotEmpty ? year : null,
-      );
-      if (mounted && streams.isNotEmpty) {
-        setState(() {
-          _resolvedSources.addAll(streams);
-        });
-      }
-    } catch (e) {
-      debugPrint('CineMM resolution failed: $e');
     }
   }
 
@@ -758,6 +723,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         title: title,
         year: parsedYear,
         originalLanguage: originalLanguage,
+        imdbId: _imdbId,
         isSeries: isSeries,
         season: season,
         episode: episode,
@@ -809,28 +775,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('Movy.bz resolution failed: $e');
-    }
-  }
-
-  Future<void> _resolveMkvbase(String title, int year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
-    if (!_showMkvbase) return;
-    try {
-      debugPrint('MKVBase Resolver: Resolving streams for $title ($year)...');
-      final streams = await MkvbaseResolver.resolveStreams(
-        title: title,
-        year: year,
-        originalLanguage: originalLanguage,
-        isSeries: isSeries,
-        season: season,
-        episode: episode,
-      );
-      if (mounted && streams.isNotEmpty) {
-        setState(() {
-          _resolvedSources.addAll(streams);
-        });
-      }
-    } catch (e) {
-      debugPrint('MKVBase resolution failed: $e');
     }
   }
 
@@ -1252,49 +1196,39 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       final uri = Uri.https('rive.filmu.in', '/scrape/rivestream/$mediaType/$tmdbId', queryParams);
       debugPrint('[FilmU API] Scraper Request: $uri');
-
       final client = HttpClient();
       client.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
       
-      final request = await client.getUrl(uri).timeout(const Duration(seconds: 15));
-      final response = await request.close().timeout(const Duration(seconds: 15));
-      
-      if (response.statusCode == 200) {
-        final body = await response.transform(utf8.decoder).join();
-        final Map<String, dynamic> data = jsonDecode(body);
-        final List<dynamic>? sources = data['sources'];
+      try {
+        final request = await client.getUrl(uri).timeout(const Duration(seconds: 8));
+        final response = await request.close().timeout(const Duration(seconds: 8));
         
-        if (sources != null) {
-          final List<StreamSourceInfo> tempSources = [];
-          for (final src in sources) {
-            final name = src['name'] ?? 'FilmU Server';
-            final url = src['workerProxyUrl'] ?? src['url'];
-            final quality = src['quality'] ?? '1080p';
-            final Map<String, dynamic>? headersMap = src['headers'];
-            
-            final String lowerName = name.toString().toLowerCase();
-            if (lowerName.contains('primevid') ||
-                lowerName.contains('hindicast') ||
-                lowerName.contains('vietsub') ||
-                lowerName.contains('thuyet')) {
-              continue;
-            }
-
-            if (url != null && url.toString().isNotEmpty) {
+        if (response.statusCode == 200) {
+          final body = await response.transform(utf8.decoder).join();
+          final Map<String, dynamic> data = jsonDecode(body);
+          final List<dynamic>? sources = data['sources'];
+          
+          if (sources != null) {
+            final List<StreamSourceInfo> tempSources = [];
+            for (final src in sources) {
+              final name = src['name'] ?? 'FilmU Server';
+              final url = src['workerProxyUrl'] ?? src['url'];
+              final quality = src['quality'] ?? '1080p';
+              final Map<String, dynamic>? headersMap = src['headers'];
+              
+              final String lowerName = name.toString().toLowerCase();
+              if (lowerName.contains('hindi') || lowerName.contains('dub') || lowerName.contains('tamil') || lowerName.contains('telugu')) {
+                // Multi-Audio/Regional stream
+              }
+              
               final Map<String, String> resolvedHeaders = {};
               if (headersMap != null) {
-                headersMap.forEach((key, val) {
-                  resolvedHeaders[key] = val.toString();
-                });
+                headersMap.forEach((k, v) => resolvedHeaders[k.toString()] = v.toString());
               }
-              // Force referer if missing
-              if (!resolvedHeaders.containsKey('Referer')) {
-                resolvedHeaders['Referer'] = 'https://www.rivestream.app/';
-              }
-
+              
               tempSources.add(
                 StreamSourceInfo(
-                  name: name.toString(),
+                  name: 'FilmU: $name',
                   url: url.toString(),
                   type: StreamSourceType.filmu,
                   headers: resolvedHeaders,
@@ -1302,15 +1236,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 ),
               );
             }
-          }
-          if (mounted && tempSources.isNotEmpty) {
-            setState(() {
-              _resolvedSources.addAll(tempSources);
-            });
+            if (mounted && tempSources.isNotEmpty) {
+              setState(() {
+                _resolvedSources.addAll(tempSources);
+              });
+            }
           }
         }
+      } finally {
+        client.close();
       }
-      client.close();
     } catch (e) {
       debugPrint('[FilmU API] Scraper Error: $e');
     }
@@ -1347,39 +1282,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       return;
     }
 
-    if (source.type == StreamSourceType.cinemm) {
-      final Map<String, String> headers = {};
-      if (source.headers != null) {
-        headers.addAll(source.headers!);
-      }
-      final uri = Uri.parse(source.url);
-      if (uri.queryParameters.containsKey('headers')) {
-        try {
-          final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
-          if (jsonHeaders is Map) {
-            jsonHeaders.forEach((k, v) {
-              headers[k.toString()] = v.toString();
-            });
-          }
-        } catch (_) {}
-      }
-
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => VideoPlayerScreen(
-            videoSource: source.url,
-            title: movieTitle,
-            subtitle: 'CineMM Server',
-            movieId: 'special_search_${_selectedMovie['id']}',
-            resumeDirectly: false,
-            headers: headers.isNotEmpty ? headers : null,
-          ),
-        ),
-      );
-      return;
-    }
-
-    if (source.type == StreamSourceType.streamplay || source.type == StreamSourceType.moviebox) {
+    if (source.type == StreamSourceType.streamplay ||
+        source.type == StreamSourceType.moviebox ||
+        source.type == StreamSourceType.vegamovies) {
       final Map<String, String> headers = {};
       if (source.headers != null) {
         headers.addAll(source.headers!);
@@ -1389,9 +1294,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           builder: (_) => VideoPlayerScreen(
             videoSource: source.url,
             title: movieTitle,
-            subtitle: source.type == StreamSourceType.streamplay
-                ? 'StreamPlay Server'
-                : 'MovieBox Server',
+            subtitle: source.type == StreamSourceType.vegamovies
+                ? 'Vegamovies Server'
+                : (source.type == StreamSourceType.streamplay
+                    ? 'StreamPlay Server'
+                    : 'MovieBox Server'),
             movieId: 'special_search_${_selectedMovie['id']}',
             resumeDirectly: false,
             headers: headers.isNotEmpty ? headers : null,
@@ -2673,9 +2580,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final hdhub4uStreams = filteredSources
         .where((s) => s.type == StreamSourceType.hdhub4u)
         .toList();
-    final mkvbaseStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.mkvbase)
-        .toList();
     final stravoStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stravo)
         .toList();
@@ -2698,9 +2602,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         .toList();
     final castleStreams = filteredSources
         .where((s) => s.type == StreamSourceType.castle)
-        .toList();
-    final cinemmStreams = filteredSources
-        .where((s) => s.type == StreamSourceType.cinemm)
         .toList();
     final movieboxStreams = filteredSources
         .where((s) => s.type == StreamSourceType.moviebox)
@@ -2809,25 +2710,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
-      // MKVBase / HubCloud
-      if (_showMkvbase && (_resolvingStreams || mkvbaseStreams.isNotEmpty) && enabledKeys.contains('mkvbase')) {
-        sourceWidgets['mkvbase'] = _buildServerGroupCard(
-          title: '${pos('mkvbase')}. MKVBase / HubCloud',
-          subtitle: _resolvingStreams && mkvbaseStreams.isEmpty
-              ? 'Searching Indian Multi-Audio...'
-              : (mkvbaseStreams.isNotEmpty
-                    ? '${mkvbaseStreams.length} Multi-Audio 1080p/4K streams'
-                    : 'Not available'),
-          icon: Icons.video_collection_rounded,
-          accentColor: const Color(0xFFF59E0B),
-          onTap: mkvbaseStreams.isEmpty
-              ? null
-              : () => setState(
-                  () => _activeGroupType = StreamSourceType.mkvbase,
-                ),
-        );
-      }
-
       // Stravo
       if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
         sourceWidgets['stravo'] = _buildServerGroupCard(
@@ -2860,25 +2742,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               ? null
               : () => setState(
                   () => _activeGroupType = StreamSourceType.stalker,
-                ),
-        );
-      }
-
-      // CineMM
-      if (_showCinemm && (_resolvingStreams || cinemmStreams.isNotEmpty) && enabledKeys.contains('cinemm')) {
-        sourceWidgets['cinemm'] = _buildServerGroupCard(
-          title: '${pos('cinemm')}. CineMM Server',
-          subtitle: _resolvingStreams && cinemmStreams.isEmpty
-              ? 'Searching CineMM...'
-              : (cinemmStreams.isNotEmpty
-                    ? '${cinemmStreams.length} links available'
-                    : 'Not available'),
-          icon: Icons.local_movies_rounded,
-          accentColor: Colors.lightBlueAccent,
-          onTap: cinemmStreams.isEmpty
-              ? null
-              : () => setState(
-                  () => _activeGroupType = StreamSourceType.cinemm,
                 ),
         );
       }
@@ -3171,10 +3034,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = hdhub4uStreams;
         accentColor = const Color(0xFF06B6D4);
         iconData = Icons.hd_rounded;
-      } else if (_activeGroupType == StreamSourceType.mkvbase) {
-        activeList = mkvbaseStreams;
-        accentColor = const Color(0xFFF59E0B);
-        iconData = Icons.video_collection_rounded;
       } else if (_activeGroupType == StreamSourceType.stravo) {
         activeList = stravoStreams;
         accentColor = Colors.cyan;
@@ -3204,10 +3063,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = hdhub4uStreams;
         accentColor = Colors.lightGreenAccent;
         iconData = Icons.hd_rounded;
-      } else if (_activeGroupType == StreamSourceType.cinemm) {
-        activeList = cinemmStreams;
-        accentColor = Colors.lightBlueAccent;
-        iconData = Icons.local_movies_rounded;
       } else if (_activeGroupType == StreamSourceType.moviebox) {
         activeList = movieboxStreams;
         accentColor = Colors.tealAccent;
@@ -3646,7 +3501,6 @@ enum StreamSourceType {
   movy,
   moviesdrive,
   hdhub4u,
-  mkvbase,
   vidlink,
   stravo,
   torrent,
@@ -3656,7 +3510,6 @@ enum StreamSourceType {
   mallumv,
   vidnest,
   castle,
-  cinemm,
   moviebox,
   vidsrc,
   stremioAddon,

@@ -17,7 +17,7 @@ class DomainService {
     'hdhub4u': 'https://new5.hdhub4u.cl',
     '4khdhub': 'https://4khdhub.one',
     'moviesdrive': 'https://new3.moviesdrive.christmas',
-    'vegamovies': 'https://vegamovies.catering',
+    'vegamovies': 'https://vegamoviess.xyz',
     'bollyflix': 'https://bollyflix.af',
     'uhdmovies': 'https://uhdmovies.autos',
     'multimovies': 'https://multimovies.makeup',

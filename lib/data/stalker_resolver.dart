@@ -29,16 +29,28 @@ class StalkerResolver {
   static StalkerUrlParams parseStalkerUrl(String rawUrl) {
     if (rawUrl.startsWith('stalker://')) {
       final stripped = rawUrl.substring(10);
-      final match = RegExp(r'^(\d+)(.*)$').firstMatch(stripped);
+      final slashIdx = stripped.indexOf('/');
+      if (slashIdx != -1) {
+        final pidPart = stripped.substring(0, slashIdx);
+        final pid = int.tryParse(pidPart);
+        if (pid != null && pid > 0 && pid < 50) {
+          var cmdPart = stripped.substring(slashIdx);
+          if (cmdPart.startsWith('/http://') || cmdPart.startsWith('/https://')) {
+            cmdPart = cmdPart.substring(1);
+          }
+          return StalkerUrlParams(portalId: pid, cmd: cmdPart);
+        }
+      }
+      final match = RegExp(r'^(\d{1,2})([/].*)$').firstMatch(stripped);
       if (match != null) {
         final pid = int.tryParse(match.group(1)!) ?? 1;
         var cmdPart = match.group(2)!.trim();
         if (cmdPart.startsWith('/http://') || cmdPart.startsWith('/https://')) {
           cmdPart = cmdPart.substring(1);
         }
-        if (cmdPart.isEmpty) cmdPart = stripped;
         return StalkerUrlParams(portalId: pid, cmd: cmdPart);
       }
+      return StalkerUrlParams(portalId: 1, cmd: stripped);
     }
     return StalkerUrlParams(portalId: 1, cmd: rawUrl);
   }
@@ -161,10 +173,6 @@ class StalkerResolver {
 
   static String _appendDeviceParams(String url, String deviceId, {String? serialNumber}) {
     var result = url;
-    if (!result.contains('JsHttpRequest=')) {
-      final sep = result.contains('?') ? '&' : '?';
-      result = '$result${sep}JsHttpRequest=1-xml';
-    }
     if (deviceId.isNotEmpty) {
       final separator = result.contains('?') ? '&' : '?';
       result = '$result${separator}device_id=${Uri.encodeComponent(deviceId)}&device_id2=${Uri.encodeComponent(deviceId)}';
@@ -496,39 +504,19 @@ class StalkerResolver {
       }
     }
 
-    // Fallback: If all variations failed, check if we can play the HTTP link directly
-    final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
-    String hostBase = '';
-    try {
-      final uri = Uri.parse(portalUrl);
-      hostBase = '${uri.scheme}://${uri.host}${uri.hasPort ? ":${uri.port}" : ""}';
-    } catch (_) {}
-
+    // Fallback: If all create_link variations failed, only check if cmd was already a direct HTTP/HTTPS stream
     for (final cmdVar in cmdVariations) {
-      var urlToCheck = cmdVar;
-      if (urlToCheck.startsWith('ffmpeg ')) {
-        urlToCheck = urlToCheck.substring(7);
-      }
-      if (urlToCheck.startsWith('auto ')) {
-        urlToCheck = urlToCheck.substring(5);
-      }
-      urlToCheck = urlToCheck.trim();
-      
-      if (urlToCheck.startsWith('/')) {
-        urlToCheck = '$hostBase$urlToCheck';
-      }
+      var urlToCheck = cmdVar.trim();
+      if (urlToCheck.startsWith('ffmpeg ')) urlToCheck = urlToCheck.substring(7).trim();
+      if (urlToCheck.startsWith('auto ')) urlToCheck = urlToCheck.substring(5).trim();
+      if (urlToCheck.startsWith('ffrt ')) urlToCheck = urlToCheck.substring(5).trim();
 
       if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
-        debugPrint('Stalker VOD resolution failed via create_link, falling back to direct HTTP link: $urlToCheck');
-        var playerCookies = 'mac=$macAddress';
-        if (deviceId.isNotEmpty) {
-          playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
-        }
+        debugPrint('Stalker resolveStream: Falling back to direct HTTP stream: $urlToCheck');
         return StalkerStream(
           url: urlToCheck,
           headers: {
             'User-Agent': userAgent,
-            'Cookie': playerCookies,
           },
         );
       }
@@ -597,9 +585,17 @@ class StalkerResolver {
     }
 
     final typeParam = isLive ? 'itv' : 'vod';
+    var cookiesStr = _cachedCookiesMap[portalId] ?? 'mac=$macAddress; token=$token; Bearer=$token; stb_lang=en; timezone=Asia/Kolkata';
+    if (serialNumber.isNotEmpty && !cookiesStr.contains('sn=')) {
+      cookiesStr += '; sn=$serialNumber';
+    }
+    if (deviceId.isNotEmpty && !cookiesStr.contains('device_id=')) {
+      cookiesStr += '; device_id=$deviceId; device_id2=$deviceId';
+    }
+
     final headers = {
       'User-Agent': userAgent,
-      'Cookie': _cachedCookiesMap[portalId] ?? 'mac=${Uri.encodeComponent(macAddress)}',
+      'Cookie': cookiesStr,
       'Authorization': 'Bearer $token',
       'X-User-Agent': _getXUserAgent(userAgent),
     };
@@ -616,52 +612,58 @@ class StalkerResolver {
       }
     }
 
-    final cmdCandidates = <String>[cmd];
+    final cmdCandidates = <String>[];
+    final trimmed = cmd.trim();
+    cmdCandidates.add(trimmed);
+    if (!isLive) {
+      if (!trimmed.startsWith('/') && !trimmed.startsWith('http')) {
+        cmdCandidates.add('/$trimmed');
+      } else if (trimmed.startsWith('/')) {
+        cmdCandidates.add(trimmed.substring(1));
+      }
+      final numMatch = RegExp(r'/media/(\d+)\.').firstMatch(trimmed);
+      if (numMatch != null) {
+        cmdCandidates.add(numMatch.group(1)!);
+      }
+    }
     if (extractedMovieId != null && !cmdCandidates.contains(extractedMovieId)) {
       cmdCandidates.add(extractedMovieId);
     }
 
-    for (final candidate in cmdCandidates) {
-      // Try variation 1: standard url with extra parameters + JsHttpRequest=1-xml
+    // Try variation 1: standard url with extra parameters (as in 3.5.0)
+    try {
+      var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}&series=0&disable_ad=1&download=0&play_lite=0';
+      linkUrl = _appendDeviceParams(linkUrl, deviceId, serialNumber: serialNumber);
+      debugPrint('Stalker Resolving Single Cmd (V1): $linkUrl');
+      streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
+    } catch (e) {
+      lastErr = e;
+      debugPrint('Stalker resolving V1 failed: $e');
+    }
+
+    // Try variation 2: simple url if variation 1 fails
+    if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
       try {
-        var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(candidate)}&series=0&disable_ad=1&download=0&play_lite=0&JsHttpRequest=1-xml';
+        var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(cmd)}';
         linkUrl = _appendDeviceParams(linkUrl, deviceId, serialNumber: serialNumber);
-        debugPrint('Stalker Resolving Single Cmd (V1): $linkUrl');
+        debugPrint('Stalker Resolving Single Cmd (V2 Fallback): $linkUrl');
         streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
-        if (streamUrl.isNotEmpty && streamUrl != 'nothing_to_play') break;
       } catch (e) {
         lastErr = e;
-        debugPrint('Stalker resolving V1 failed: $e');
+        debugPrint('Stalker resolving V2 fallback failed: $e');
       }
+    }
 
-      // Try variation 2: simple url if variation 1 fails
-      if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
-        try {
-          var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(candidate)}&JsHttpRequest=1-xml';
-          linkUrl = _appendDeviceParams(linkUrl, deviceId, serialNumber: serialNumber);
-          debugPrint('Stalker Resolving Single Cmd (V2 Fallback): $linkUrl');
-          streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
-          if (streamUrl.isNotEmpty && streamUrl != 'nothing_to_play') break;
-        } catch (e) {
-          lastErr = e;
-          debugPrint('Stalker resolving V2 fallback failed: $e');
-        }
-      }
-
-      // Try variation 3: fallback typeParam if VOD fails (try 'stb' or 'itv')
-      if ((streamUrl.isEmpty || streamUrl == 'nothing_to_play') && !isLive) {
-        for (final altType in ['stb', 'itv']) {
-          try {
-            var linkUrl = '$portalUrl?type=$altType&action=create_link&cmd=${Uri.encodeComponent(candidate)}&series=0&disable_ad=1&download=0&play_lite=0&JsHttpRequest=1-xml';
-            linkUrl = _appendDeviceParams(linkUrl, deviceId, serialNumber: serialNumber);
-            debugPrint('Stalker Resolving Single Cmd (Alt Type $altType): $linkUrl');
-            streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
-            if (streamUrl.isNotEmpty && streamUrl != 'nothing_to_play') break;
-          } catch (e) {
-            lastErr = e;
-          }
-        }
-        if (streamUrl.isNotEmpty && streamUrl != 'nothing_to_play') break;
+    // Try variation 3: leading slash toggle if candidate had or didn't have leading slash
+    if (streamUrl.isEmpty || streamUrl == 'nothing_to_play') {
+      final altCmd = cmd.startsWith('/') ? cmd.substring(1) : '/$cmd';
+      try {
+        var linkUrl = '$portalUrl?type=$typeParam&action=create_link&cmd=${Uri.encodeComponent(altCmd)}&series=0&disable_ad=1&download=0&play_lite=0';
+        linkUrl = _appendDeviceParams(linkUrl, deviceId, serialNumber: serialNumber);
+        debugPrint('Stalker Resolving Single Cmd (Alt Slash): $linkUrl');
+        streamUrl = await _performResolveRequest(portalId, linkUrl, headers);
+      } catch (e) {
+        lastErr = e;
       }
     }
 
@@ -706,28 +708,19 @@ class StalkerResolver {
       } catch (_) {}
     }
 
-    var playerCookies = _cachedCookiesMap[portalId] ?? 'mac=${Uri.encodeComponent(macAddress)}';
-    if (!playerCookies.contains('mac=')) {
-      playerCookies = 'mac=${Uri.encodeComponent(macAddress)}; $playerCookies';
-    }
-    if (deviceId.isNotEmpty && !playerCookies.contains('device_id=')) {
+    var playerCookies = 'mac=$macAddress';
+    if (deviceId.isNotEmpty) {
       playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
     }
 
     final playerHeaders = <String, String>{
       'User-Agent': userAgent,
       'Cookie': playerCookies,
+      'Referer': portalUrl,
     };
-    try {
-      final streamUri = Uri.parse(streamUrl);
-      final portalUri = Uri.parse(portalUrl);
-      if (streamUri.host == portalUri.host) {
-        playerHeaders['Referer'] = portalUrl;
-        if (token.isNotEmpty) {
-          playerHeaders['Authorization'] = 'Bearer $token';
-        }
-      }
-    } catch (_) {}
+    if (token.isNotEmpty) {
+      playerHeaders['Authorization'] = 'Bearer $token';
+    }
 
     debugPrint('Stalker Stream Resolved -> URL: $streamUrl, Headers: $playerHeaders');
 
