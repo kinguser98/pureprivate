@@ -16,6 +16,7 @@ import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -277,17 +278,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   bool _isStreamProxied = false;
   Timer? _proxyStatsTimer;
-  int _lastDemuxerBytesRead = 0;
 
   void _startProxyStatsTimer() {
     _proxyStatsTimer?.cancel();
-    _lastDemuxerBytesRead = 0;
     ProxyStats.reset();
+
+    int? maxKnownBytes;
+    try {
+      final meta = parseStreamMeta(
+        '${widget.sourceName ?? ''} ${widget.subtitle ?? ''}',
+        widget.videoSource,
+      );
+      if (meta.sizeInMb > 0) {
+        maxKnownBytes = (meta.sizeInMb * 1024 * 1024).round();
+      }
+    } catch (_) {}
+
     _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!mounted) return;
       // If the stream is routed through the local proxy relay, CustomDnsProxy already
       // tracks real network socket throughput and byte transfers directly in real time.
-      // Do NOT double-count with mpv demuxer byte counters!
       if (_isStreamProxied) return;
 
       if (_player.platform is! NativePlayer) return;
@@ -296,19 +306,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         int bytes = 0;
         final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
         bytes = int.tryParse(res1.toString()) ?? 0;
-        if (bytes == 0) {
+        if (bytes <= 0) {
           final res2 = await nativePlayer.getProperty('bytes-read');
           bytes = int.tryParse(res2.toString()) ?? 0;
         }
 
-        if (bytes > 0 && bytes > _lastDemuxerBytesRead) {
-          final delta = bytes - _lastDemuxerBytesRead;
-          ProxyStats.addBytes(delta);
-          _lastDemuxerBytesRead = bytes;
-        } else if (bytes < _lastDemuxerBytesRead) {
-          // Stream seeked or demuxer reset
-          _lastDemuxerBytesRead = bytes;
+        // Query file-size from mpv headers if not already known from stream metadata
+        if (maxKnownBytes == null || maxKnownBytes! <= 0) {
+          final resSize = await nativePlayer.getProperty('file-size');
+          final fs = int.tryParse(resSize.toString()) ?? 0;
+          if (fs > 0) {
+            maxKnownBytes = fs;
+          }
         }
+
+        // If IPC failed or gave 0, NEVER touch baseline (no phantom byte accumulation)
+        if (bytes <= 0) return;
+
+        ProxyStats.updateDirectStats(bytes, maxKnownBytes: maxKnownBytes);
       } catch (_) {}
     });
   }

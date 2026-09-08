@@ -911,11 +911,15 @@ class ProxyStats {
 
   static int _accumulatedBytes = 0;
   static int _totalBytes = 0;
+  static int _lastDirectBytesRead = 0;
+  static int _baseDirectOffset = 0;
   static Timer? _timer;
 
   static void reset() {
     _accumulatedBytes = 0;
     _totalBytes = 0;
+    _lastDirectBytesRead = 0;
+    _baseDirectOffset = 0;
     speedNotifier.value = 0.0;
     totalDataNotifier.value = 0;
     _timer?.cancel();
@@ -926,8 +930,41 @@ class ProxyStats {
   }
 
   static void addBytes(int bytes) {
+    if (bytes <= 0) return;
     _accumulatedBytes += bytes;
     _totalBytes += bytes;
+    totalDataNotifier.value = _totalBytes;
+  }
+
+  static void updateDirectStats(int currentBytesRead, {int? maxKnownBytes}) {
+    if (currentBytesRead <= 0) return;
+
+    // Detect demuxer restart on seek (e.g. currentBytesRead dropped after a seek/reconnect)
+    if (_lastDirectBytesRead > 0 && currentBytesRead < _lastDirectBytesRead) {
+      _baseDirectOffset += _lastDirectBytesRead;
+      _lastDirectBytesRead = currentBytesRead;
+      return;
+    }
+
+    int delta = 0;
+    if (_lastDirectBytesRead > 0 && currentBytesRead > _lastDirectBytesRead) {
+      delta = currentBytesRead - _lastDirectBytesRead;
+    }
+    _lastDirectBytesRead = currentBytesRead;
+
+    // Guard against crazy spikes (> 35 MB in a single second) from corrupt IPC reads
+    if (delta > 0 && delta < 35 * 1024 * 1024) {
+      _accumulatedBytes += delta;
+    }
+
+    int total = _baseDirectOffset + currentBytesRead;
+    if (maxKnownBytes != null && maxKnownBytes > 0) {
+      final ceiling = (maxKnownBytes * 1.15).round();
+      if (total > ceiling) {
+        total = ceiling;
+      }
+    }
+    _totalBytes = total;
     totalDataNotifier.value = _totalBytes;
   }
 }
