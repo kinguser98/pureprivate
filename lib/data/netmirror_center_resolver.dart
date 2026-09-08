@@ -8,13 +8,29 @@ class NetmirrorCenterStreamInfo {
   final String name;
   final String url;
   final String quality;
+  final String? language;
   final Map<String, String> headers;
 
   const NetmirrorCenterStreamInfo({
     required this.name,
     required this.url,
     required this.quality,
+    this.language,
     required this.headers,
+  });
+}
+
+class _NetmirrorCandidate {
+  final dynamic item;
+  final String rawTitle;
+  final String language;
+  final bool hasExplicitLang;
+
+  const _NetmirrorCandidate({
+    required this.item,
+    required this.rawTitle,
+    required this.language,
+    required this.hasExplicitLang,
   });
 }
 
@@ -54,10 +70,42 @@ class NetmirrorCenterResolver {
         .trim();
   }
 
-  /// Searches and resolves direct video streams for a movie or TV series.
+  static int _getLangRank(String lang, String? origLang) {
+    final l = lang.toLowerCase();
+    final orig = (origLang ?? 'malayalam').toLowerCase();
+
+    // If matches movie's main / original language, it gets Rank 0
+    if (orig.isNotEmpty) {
+      if ((orig.startsWith('ml') || orig.contains('malayalam')) && l.contains('malayalam')) return 0;
+      if ((orig.startsWith('ta') || orig.contains('tamil')) && l.contains('tamil')) return 0;
+      if ((orig.startsWith('te') || orig.contains('telugu')) && l.contains('telugu')) return 0;
+      if ((orig.startsWith('kn') || orig.contains('kannada')) && l.contains('kannada')) return 0;
+      if ((orig.startsWith('hi') || orig.contains('hindi')) && l.contains('hindi')) return 0;
+    }
+
+    if (l.contains('malayalam')) return 1;
+    if (l.contains('tamil')) return 2;
+    if (l.contains('telugu')) return 3;
+    if (l.contains('kannada')) return 4;
+    if (l.contains('hindi')) return 5;
+    if (l.contains('english')) return 6;
+    return 7;
+  }
+
+  static int _getQualityRank(String q) {
+    final u = q.toUpperCase();
+    if (u.contains('4K') || u.contains('2160')) return 4;
+    if (u.contains('1080')) return 3;
+    if (u.contains('720')) return 2;
+    if (u.contains('480')) return 1;
+    return 0;
+  }
+
+  /// Searches and resolves direct video streams for a movie or TV series across all languages.
   static Future<List<NetmirrorCenterStreamInfo>> resolveStreams(
     String title,
     String year, {
+    String? originalLanguage,
     bool isSeries = false,
     int? season,
     int? episode,
@@ -90,35 +138,118 @@ class NetmirrorCenterResolver {
         return results;
       }
 
-      // Find best match: check year or title similarity
-      final titleLower = cleanTitle.toLowerCase();
-      dynamic matchedItem;
+      final cleanTarget = cleanTitle.toLowerCase();
+      final targetWords = cleanTarget.split(' ').where((w) => w.length >= 2).toList();
+      final List<_NetmirrorCandidate> candidates = [];
+
       for (final item in items) {
-        final itemTitle = (item['title'] ?? '').toString().toLowerCase();
-        final itemYear = (item['release_date'] ?? '').toString();
+        final rawTitle = (item['title'] ?? '').toString().replaceAll('\n', '').trim();
+        final baseTitle = rawTitle.replaceAll(RegExp(r'\[.*?\]'), '').trim().toLowerCase();
         final itemType = (item['media_type'] ?? '').toString().toLowerCase();
 
         final matchesType = isSeries ? itemType == 'tv' : itemType != 'tv';
         if (!matchesType && items.length > 1) continue;
 
-        if (titleLower.split(' ').every((w) => w.length < 3 || itemTitle.contains(w))) {
-          matchedItem = item;
-          if (year.isNotEmpty && itemYear.contains(year)) {
-            break; // Ideal match
+        final baseWords = baseTitle.split(' ').where((w) => w.length >= 2).toList();
+        bool isMatch = false;
+        if (targetWords.length <= 1) {
+          isMatch = baseTitle == cleanTarget || (baseWords.isNotEmpty && baseWords.first == cleanTarget);
+        } else {
+          final wordsMatch = targetWords.every((w) => baseTitle.contains(w));
+          isMatch = baseTitle == cleanTarget || (wordsMatch && baseWords.length <= targetWords.length + 1);
+        }
+
+        if (isMatch) {
+          final itemYear = (item['release_date'] ?? '').toString();
+          if (year.isNotEmpty && itemYear.isNotEmpty) {
+            final py = int.tryParse(year);
+            final iy = int.tryParse(itemYear);
+            if (py != null && iy != null && (py - iy).abs() > 1) {
+              continue; // Year mismatch
+            }
           }
+
+          final langMatch = RegExp(r'\[([^\]]+)\]').firstMatch(rawTitle);
+          String lang = langMatch != null ? langMatch.group(1)!.trim() : '';
+          final bool hasExplicit = langMatch != null;
+          if (lang.isEmpty) {
+            lang = (originalLanguage != null && originalLanguage.isNotEmpty)
+                ? originalLanguage
+                : 'Original';
+          }
+
+          candidates.add(_NetmirrorCandidate(
+            item: item,
+            rawTitle: rawTitle,
+            language: lang,
+            hasExplicitLang: hasExplicit,
+          ));
         }
       }
 
-      matchedItem ??= items.first;
-      final String itemId = matchedItem['id']?.toString() ?? '';
-      final String itemType = matchedItem['media_type']?.toString() == 'tv' ? 'tv' : 'movie';
-      final String matchedTitle = matchedItem['title']?.toString().replaceAll('\n', '').trim() ?? cleanTitle;
+      if (candidates.isEmpty) {
+        final first = items.first;
+        final rawTitle = (first['title'] ?? '').toString().replaceAll('\n', '').trim();
+        candidates.add(_NetmirrorCandidate(
+          item: first,
+          rawTitle: rawTitle,
+          language: originalLanguage ?? 'HD',
+          hasExplicitLang: false,
+        ));
+      }
 
-      if (itemId.isEmpty) return results;
+      // Deduplicate by language, keeping candidates with explicit bracket tags when available
+      final Map<String, _NetmirrorCandidate> uniqueByLang = {};
+      for (final c in candidates) {
+        final key = c.language.toLowerCase();
+        if (!uniqueByLang.containsKey(key) || (!uniqueByLang[key]!.hasExplicitLang && c.hasExplicitLang)) {
+          uniqueByLang[key] = c;
+        }
+      }
 
-      debugPrint('NetmirrorCenter: Found candidate "$matchedTitle" (ID: $itemId, Type: $itemType)');
+      final filteredCandidates = uniqueByLang.values.toList();
+      filteredCandidates.sort((a, b) =>
+          _getLangRank(a.language, originalLanguage).compareTo(_getLangRank(b.language, originalLanguage)));
 
-      // Fetch metadata from api3
+      debugPrint('NetmirrorCenter: Found ${filteredCandidates.length} language candidate(s): '
+          '${filteredCandidates.map((c) => c.language).join(", ")}');
+
+      // Fetch streams for all matching candidates concurrently
+      final streamLists = await Future.wait(
+        filteredCandidates.map((c) => _extractStreamsForCandidate(
+          c,
+          cleanTitle,
+          isSeries: isSeries,
+          season: season,
+          episode: episode,
+        )),
+      );
+
+      for (final list in streamLists) {
+        results.addAll(list);
+      }
+
+      debugPrint('NetmirrorCenter: Successfully extracted ${results.length} total stream(s)');
+    } catch (e) {
+      debugPrint('NetmirrorCenter: Resolution error: $e');
+    }
+
+    return results;
+  }
+
+  static Future<List<NetmirrorCenterStreamInfo>> _extractStreamsForCandidate(
+    _NetmirrorCandidate candidate,
+    String cleanTitle, {
+    bool isSeries = false,
+    int? season,
+    int? episode,
+  }) async {
+    final List<NetmirrorCenterStreamInfo> candidateResults = [];
+    final itemId = candidate.item['id']?.toString() ?? '';
+    final itemType = candidate.item['media_type']?.toString() == 'tv' ? 'tv' : 'movie';
+    if (itemId.isEmpty) return candidateResults;
+
+    try {
       final detailUrl = Uri.parse('$api3Domain/api/$itemType/$itemId');
       final detailRes = await http.get(detailUrl, headers: {
         'User-Agent':
@@ -127,28 +258,20 @@ class NetmirrorCenterResolver {
         'Origin': centerDomain,
       }).timeout(const Duration(seconds: 10));
 
-      if (detailRes.statusCode != 200) {
-        debugPrint('NetmirrorCenter: Metadata fetch failed for $itemId: ${detailRes.statusCode}');
-        return results;
-      }
+      if (detailRes.statusCode != 200) return candidateResults;
 
       final detailData = jsonDecode(detailRes.body) as Map<String, dynamic>;
       final detailResults = detailData['results'] as List<dynamic>?;
-      if (detailResults == null || detailResults.isEmpty) return results;
+      if (detailResults == null || detailResults.isEmpty) return candidateResults;
 
       final detail = detailResults.first as Map<String, dynamic>;
       final String subjectId = detail['subjectid']?.toString() ?? '';
       final String dp = detail['dp']?.toString() ?? '';
+      if (subjectId.isEmpty) return candidateResults;
 
-      if (subjectId.isEmpty) {
-        debugPrint('NetmirrorCenter: No subjectid found for $itemId');
-        return results;
-      }
-
-      // Prepare watchbox URL
       final ts = (DateTime.now().millisecondsSinceEpoch / 1000).floor();
       final sig = _generateSignature(itemId, ts);
-      final na = Uri.encodeComponent(base64Encode(utf8.encode(matchedTitle)));
+      final na = Uri.encodeComponent(base64Encode(utf8.encode(candidate.rawTitle)));
 
       final seParam = isSeries ? (season ?? 1).toString() : '0';
       final epParam = isSeries ? (episode ?? 1).toString() : '0';
@@ -157,8 +280,6 @@ class NetmirrorCenterResolver {
         '$watchboxDomain/play/watchbox.php?id=$subjectId&se=$seParam&ep=$epParam&dp=${Uri.encodeComponent(dp)}&na=$na&ts=$ts&sig=$sig&nid=$itemId&exten=1&tv=&token=',
       );
 
-      debugPrint('NetmirrorCenter: Fetching watchbox player from $watchboxUrl');
-
       final playerRes = await http.get(watchboxUrl, headers: {
         'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -166,15 +287,10 @@ class NetmirrorCenterResolver {
         'Origin': centerDomain,
       }).timeout(const Duration(seconds: 10));
 
-      if (playerRes.statusCode != 200) {
-        debugPrint('NetmirrorCenter: Watchbox returned status ${playerRes.statusCode}');
-        return results;
-      }
+      if (playerRes.statusCode != 200) return candidateResults;
 
       final playerHtml = playerRes.body;
 
-      // Parse Artplayer selector qualities:
-      // html: '1080P', url: 'https://...'
       final qualityRegex = RegExp(
         r"""html:\s*['"]([^'"]+)['"],\s*url:\s*['"](https?://[^'"]+\.mp4[^'"]*)['"]""",
         caseSensitive: false,
@@ -188,37 +304,39 @@ class NetmirrorCenterResolver {
         final streamUrl = m.group(2)?.trim() ?? '';
         if (streamUrl.isNotEmpty && !seenUrls.contains(streamUrl)) {
           seenUrls.add(streamUrl);
-          results.add(NetmirrorCenterStreamInfo(
-            name: 'NetMirror Center • $qLabel MP4',
+          candidateResults.add(NetmirrorCenterStreamInfo(
+            name: '${candidate.language} • $qLabel',
             url: streamUrl,
             quality: qLabel.toUpperCase(),
+            language: candidate.language,
             headers: _playerHeaders,
           ));
         }
       }
 
-      // Fallback: extract any MP4 URLs in script if selector blocks were not matched
-      if (results.isEmpty) {
+      if (candidateResults.isEmpty) {
         final rawMp4Regex = RegExp(r"""url:\s*['"](https?://[^'"]+\.mp4[^'"]*)['"]""");
         for (final m in rawMp4Regex.allMatches(playerHtml)) {
           final streamUrl = m.group(1)?.trim() ?? '';
           if (streamUrl.isNotEmpty && !seenUrls.contains(streamUrl)) {
             seenUrls.add(streamUrl);
-            results.add(NetmirrorCenterStreamInfo(
-              name: 'NetMirror Center • Direct Stream',
+            candidateResults.add(NetmirrorCenterStreamInfo(
+              name: '${candidate.language} • HD',
               url: streamUrl,
               quality: 'HD',
+              language: candidate.language,
               headers: _playerHeaders,
             ));
           }
         }
       }
 
-      debugPrint('NetmirrorCenter: Successfully extracted ${results.length} stream(s)');
+      // Sort qualities within candidate: 1080P > 720P > 480P > 360P
+      candidateResults.sort((a, b) => _getQualityRank(b.quality).compareTo(_getQualityRank(a.quality)));
     } catch (e) {
-      debugPrint('NetmirrorCenter: Resolution error: $e');
+      debugPrint('NetmirrorCenter: Candidate extraction error for $itemId: $e');
     }
 
-    return results;
+    return candidateResults;
   }
 }

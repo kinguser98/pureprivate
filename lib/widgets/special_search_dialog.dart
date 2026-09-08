@@ -512,7 +512,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       // Resolve NetMirror Center
       if (_showNetmirrorCenter && title.isNotEmpty) {
-        tasks.add(_resolveNetmirrorCenter(title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
+        tasks.add(_resolveNetmirrorCenter(title, movieYear, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
       }
 
       // Resolve Movy.bz Multi-Source
@@ -770,13 +770,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
-  Future<void> _resolveNetmirrorCenter(String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+  Future<void> _resolveNetmirrorCenter(String title, String year, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
     if (!_showNetmirrorCenter) return;
     try {
       debugPrint('NetMirror Center Scraper: Resolving streams for $title...');
       final streams = await NetmirrorCenterResolver.resolveStreams(
         title,
         year,
+        originalLanguage: originalLanguage,
         isSeries: isSeries,
         season: season,
         episode: episode,
@@ -789,6 +790,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             type: StreamSourceType.netmirrorCenter,
             headers: s.headers,
             quality: s.quality,
+            languages: s.language != null ? [s.language!] : null,
           )));
         });
       }

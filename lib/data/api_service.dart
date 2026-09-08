@@ -80,7 +80,7 @@ class ApiService {
   }
 
   /// Parses the JSON movies list into Movie models with deterministic fallbacks.
-  static List<Movie> parseMovies(List<dynamic> jsonList, [List<dynamic>? rawLanguages]) {
+  static List<Movie> parseMovies(List<dynamic> jsonList, [List<dynamic>? rawLanguages, bool updateCache = true]) {
     if (rawLanguages != null) {
       _langMap = _buildLanguageMap(rawLanguages);
     }
@@ -248,7 +248,7 @@ class ApiService {
       );
     }).toList();
 
-    if (parsedList.isNotEmpty) {
+    if (updateCache && parsedList.length > 20) {
       cachedMovies = parsedList;
     }
     return parsedList;
@@ -446,7 +446,7 @@ class ApiService {
       if (response.statusCode == 200) {
         final jsonString = utf8.decode(response.bodyBytes);
         final rawList = json.decode(jsonString) as List<dynamic>;
-        return parseMovies(rawList);
+        return parseMovies(rawList, null, false);
       }
     } catch (e) {
       print('Cloud fetch favorites failed: $e');
@@ -504,7 +504,7 @@ class ApiService {
         } else if (data is Map && data['movies'] is List) {
           rawList = data['movies'];
         }
-        return parseMovies(rawList);
+        return parseMovies(rawList, null, false);
       }
     } catch (e) {
       debugPrint('Fetch Stalker VOD catalog failed: $e');
@@ -526,7 +526,7 @@ class ApiService {
               final catId = item['category_id']?.toString() ?? '';
               final name = item['name']?.toString() ?? catId;
               final rawMovies = item['movies'] as List<dynamic>? ?? [];
-              final movies = parseMovies(rawMovies);
+              final movies = parseMovies(rawMovies, null, false);
               if (catId.isNotEmpty && movies.isNotEmpty) {
                 result.add({
                   'category_id': catId,

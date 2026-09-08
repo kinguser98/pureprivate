@@ -45,18 +45,25 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
   }
 
   Future<void> _loadMoviesFromApi() async {
-    if (ApiService.cachedMovies.isEmpty) {
+    final currentCount = ApiService.cachedMovies.isNotEmpty
+        ? ApiService.cachedMovies.length
+        : MockCatalog.allMovies.length;
+    if (currentCount == 0) {
       setState(() => _isLoading = true);
     }
     try {
       final rawData = await ApiService.fetchRawData();
       final rawMovies = rawData['movies'] as List<dynamic>? ?? [];
       final rawLanguages = rawData['languages'] as List<dynamic>? ?? [];
-      final parsed = ApiService.parseMovies(rawMovies, rawLanguages);
-      ApiService.cachedMovies = parsed;
-      MockCatalog.allMovies = parsed;
+      final parsed = ApiService.parseMovies(rawMovies, rawLanguages, true);
+      if (parsed.isNotEmpty) {
+        ApiService.cachedMovies = parsed;
+        MockCatalog.allMovies = parsed;
+      }
       if (mounted) {
-        _isLoading = false;
+        setState(() {
+          _isLoading = false;
+        });
         _loadFilters();
         _applyFilters();
       }
@@ -75,10 +82,17 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
   }
 
   void _loadFilters() {
-    final all = ApiService.cachedMovies.isNotEmpty ? ApiService.cachedMovies : MockCatalog.allMovies;
+    final all = (ApiService.cachedMovies.length >= MockCatalog.allMovies.length && ApiService.cachedMovies.isNotEmpty)
+        ? ApiService.cachedMovies
+        : MockCatalog.allMovies;
     
-    // Extract unique non-empty values dynamically from catalog & database
-    final genres = all.map((m) => m.genre).where((g) => g.trim().isNotEmpty).toSet().toList()..sort();
+    // Extract unique non-empty genres dynamically (splitting comma-separated genres)
+    final Set<String> genreSet = {};
+    for (final m in all) {
+      final parts = m.genre.split(',').map((g) => g.trim()).where((g) => g.isNotEmpty);
+      genreSet.addAll(parts);
+    }
+    final genres = genreSet.toList()..sort();
     final languages = all.map((m) => m.language).whereType<String>().where((l) => l.trim().isNotEmpty).toSet().toList()..sort();
     
     // STRICT: Extract ONLY actual OTT providers and actual OTT logos present in database/catalog movies
@@ -107,7 +121,9 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
 
   void _applyFilters() {
     final query = _searchController.text.toLowerCase().trim();
-    final catalog = ApiService.cachedMovies.isNotEmpty ? ApiService.cachedMovies : MockCatalog.allMovies;
+    final catalog = (ApiService.cachedMovies.length >= MockCatalog.allMovies.length && ApiService.cachedMovies.isNotEmpty)
+        ? ApiService.cachedMovies
+        : MockCatalog.allMovies;
     var list = List<Movie>.from(catalog);
 
     if (query.isNotEmpty) {
@@ -121,7 +137,10 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     }
 
     if (_selectedGenres.isNotEmpty) {
-      list = list.where((m) => _selectedGenres.contains(m.genre)).toList();
+      list = list.where((m) {
+        final movieGenres = m.genre.split(',').map((g) => g.trim()).toList();
+        return movieGenres.any((g) => _selectedGenres.contains(g)) || _selectedGenres.contains(m.genre);
+      }).toList();
     }
 
     if (_selectedLanguages.isNotEmpty) {

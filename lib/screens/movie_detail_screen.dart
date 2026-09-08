@@ -435,7 +435,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     if (_showNetmirrorCenter) {
-      _resolveLiveNetmirrorCenter(movie.title, movie.year?.toString() ?? '2026');
+      _resolveLiveNetmirrorCenter(movie.title, movie.year?.toString() ?? '2026', originalLanguage: movie.language);
     }
 
     final tmdbId = movie.tmdbId?.toString() ?? movie.id;
@@ -553,18 +553,20 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  Future<void> _resolveLiveNetmirrorCenter(String title, String yearStr) async {
+  Future<void> _resolveLiveNetmirrorCenter(String title, String yearStr, {String? originalLanguage}) async {
     if (mounted) setState(() => _resolvingNetmirrorCenter = true);
     try {
       final infos = await NetmirrorCenterResolver.resolveStreams(
         title,
         yearStr,
+        originalLanguage: originalLanguage,
       );
       if (mounted) {
         setState(() {
           _liveNetmirrorCenterSources = infos.map((info) => StreamSource(
             name: info.name,
             url: info.url,
+            quality: info.quality,
             headers: info.headers,
           )).toList();
           _resolvingNetmirrorCenter = false;
@@ -3882,6 +3884,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         sources,
                         getName: (s) => s.name,
                         getUrl: (s) => s.url,
+                        preferredLanguage: movie.language,
                       );
                       return ListView.separated(
                         shrinkWrap: true,
@@ -4155,6 +4158,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               siteEntry.value,
                               getName: (s) => s.name,
                               getUrl: (s) => s.url,
+                              preferredLanguage: movie.language,
                             );
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -4195,6 +4199,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       sources,
       getName: (s) => s.name,
       getUrl: (s) => s.url,
+      preferredLanguage: movie.language,
     );
     return ListView.separated(
       shrinkWrap: true,

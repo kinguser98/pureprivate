@@ -136,8 +136,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final rawData = await ApiService.fetchRawData();
       final rawMovies = rawData['movies'] as List<dynamic>? ?? [];
       final rawLanguages = rawData['languages'] as List<dynamic>? ?? [];
-
-      final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages);
+      final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages, true);
+      ApiService.cachedMovies = parsedMovies;
       final parsedLanguages = ApiService.parseLanguages(rawLanguages);
 
       final recentList = parsedMovies.take(15).toList();
@@ -148,7 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final vb = int.tryParse(b['views']?.toString() ?? '0') ?? 0;
           return vb.compareTo(va);
         });
-      final parsedTrending = ApiService.parseMovies(rawTrending);
+      final parsedTrending = ApiService.parseMovies(rawTrending, null, false);
 
       final parsedTopRated = List<Movie>.from(parsedMovies)
         ..sort((a, b) => b.rating.compareTo(a.rating));

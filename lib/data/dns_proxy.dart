@@ -477,6 +477,12 @@ class CustomDnsProxy {
               req.headers.set('Referer', 'https://vidlink.pro/');
               req.headers.set('Origin', 'https://vidlink.pro');
             }
+
+            // Auto-inject NetMirror / Hakunaymatata headers (replicates Chrome extension declarativeNetRequest rule)
+            if (targetHostLower.contains('hakunaymatata.com') || targetHostLower.contains('aoneroom.com')) {
+              req.headers.set('Referer', 'https://fmoviesunblocked.net/');
+              req.headers.set('Origin', 'https://fmoviesunblocked.net');
+            }
             
             if (request.contentLength > 0 || request.headers.value('transfer-encoding') == 'chunked') {
               await req.addStream(request);

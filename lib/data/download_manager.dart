@@ -116,7 +116,7 @@ class DownloadTask {
   }
 
   factory DownloadTask.fromJson(Map<String, dynamic> json) {
-    final parsedMovies = ApiService.parseMovies([json['movie']]);
+    final parsedMovies = ApiService.parseMovies([json['movie']], null, false);
     final movie = parsedMovies.isNotEmpty
         ? parsedMovies.first
         : Movie(id: '0', title: 'Unknown', genre: 'Drama', rating: 7.0, posterUrl: '');
@@ -697,7 +697,7 @@ abstract final class DownloadManager {
     final List<dynamic> decoded = json.decode(rawList);
 
     if (kIsWeb) {
-      return ApiService.parseMovies(decoded);
+      return ApiService.parseMovies(decoded, null, false);
     }
 
     final List<dynamic> validMetadata = [];
@@ -713,7 +713,7 @@ abstract final class DownloadManager {
       await prefs.setString('downloaded_movies_metadata', json.encode(validMetadata));
     }
 
-    return ApiService.parseMovies(validMetadata);
+    return ApiService.parseMovies(validMetadata, null, false);
   }
 
   /// Deletes a download from disk and cleans up its stored metadata.

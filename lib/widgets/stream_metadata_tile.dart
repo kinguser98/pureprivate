@@ -293,43 +293,57 @@ List<T> sortStreamsByQuality<T>(
   required String Function(T) getUrl,
   String? Function(T)? getQuality,
   String? Function(T)? getSize,
+  String? preferredLanguage,
 }) {
   final list = List<T>.from(items);
   list.sort((a, b) {
     final metaA = parseStreamMeta(getName(a), getUrl(a), explicitQuality: getQuality?.call(a), explicitSize: getSize?.call(a));
     final metaB = parseStreamMeta(getName(b), getUrl(b), explicitQuality: getQuality?.call(b), explicitSize: getSize?.call(b));
 
-    // Primary: Quality Rank (4K > 1080p > 720p > 480p)
-    if (metaA.qualityRank != metaB.qualityRank) {
-      return metaB.qualityRank.compareTo(metaA.qualityRank);
-    }
-
-    // Secondary: Special Badges count (HDR / Dolby Vision / Atmos preferred)
-    if (metaA.specialBadges.length != metaB.specialBadges.length) {
-      return metaB.specialBadges.length.compareTo(metaA.specialBadges.length);
-    }
-
-    // Tertiary: File Size (larger size = higher bitrate = better quality)
-    if (metaA.sizeInMb > 0 && metaB.sizeInMb > 0 && (metaA.sizeInMb != metaB.sizeInMb)) {
-      return metaB.sizeInMb.compareTo(metaA.sizeInMb);
-    }
-
-    // Language priority: Malayalam (first priority) > Tamil > Telugu > Kannada > Hindi > others
+    // 1. Primary: Language priority (Preferred / Main language > Malayalam > Tamil > Telugu > Kannada > Hindi > English > others)
     int langRank(ParsedStreamMeta meta) {
       final langs = meta.languages.map((l) => l.toLowerCase()).toList();
       final title = meta.raw.toLowerCase();
-      if (langs.contains('malayalam') || title.contains('malayalam')) return 0;
-      if (langs.contains('tamil') || title.contains('tamil')) return 1;
-      if (langs.contains('telugu') || title.contains('telugu')) return 2;
-      if (langs.contains('kannada') || title.contains('kannada')) return 3;
-      if (langs.contains('hindi') || title.contains('hindi')) return 4;
-      return 5;
+
+      bool hasLang(String name) => langs.contains(name) || title.contains(name);
+
+      final pref = (preferredLanguage ?? 'malayalam').toLowerCase();
+      if (pref.isNotEmpty) {
+        if ((pref.startsWith('ml') || pref.contains('malayalam')) && hasLang('malayalam')) return 0;
+        if ((pref.startsWith('ta') || pref.contains('tamil')) && hasLang('tamil')) return 0;
+        if ((pref.startsWith('te') || pref.contains('telugu')) && hasLang('telugu')) return 0;
+        if ((pref.startsWith('kn') || pref.contains('kannada')) && hasLang('kannada')) return 0;
+        if ((pref.startsWith('hi') || pref.contains('hindi')) && hasLang('hindi')) return 0;
+      }
+
+      if (hasLang('malayalam')) return 1;
+      if (hasLang('tamil')) return 2;
+      if (hasLang('telugu')) return 3;
+      if (hasLang('kannada')) return 4;
+      if (hasLang('hindi')) return 5;
+      if (hasLang('english')) return 6;
+      return 7;
     }
 
     final langA = langRank(metaA);
     final langB = langRank(metaB);
     if (langA != langB) {
       return langA.compareTo(langB);
+    }
+
+    // 2. Secondary: Quality Rank within that language (4K > 1080p > 720p > 480p)
+    if (metaA.qualityRank != metaB.qualityRank) {
+      return metaB.qualityRank.compareTo(metaA.qualityRank);
+    }
+
+    // 3. Tertiary: Special Badges count (HDR / Dolby Vision / Atmos preferred)
+    if (metaA.specialBadges.length != metaB.specialBadges.length) {
+      return metaB.specialBadges.length.compareTo(metaA.specialBadges.length);
+    }
+
+    // 4. Quaternary: File Size (larger size = higher bitrate = better quality)
+    if (metaA.sizeInMb > 0 && metaB.sizeInMb > 0 && (metaA.sizeInMb != metaB.sizeInMb)) {
+      return metaB.sizeInMb.compareTo(metaA.sizeInMb);
     }
 
     return 0;

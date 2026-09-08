@@ -98,27 +98,72 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'];
-      final List<String> enabledSources = [];
+      final allSources = [
+        'streamplay',
+        'moviebox',
+        'movy',
+        'moviesdrive',
+        'hdhub4u',
+        'stalker',
+        'stravo',
+        'castle',
+        'torrent',
+        'stremioAddon',
+        'telegram',
+        'filmu',
+        'vegamovies',
+        'cinejoy',
+        'netmirror_center',
+        'streamtape',
+        'directLink',
+      ];
+      final List<String> orderedSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
           final List<dynamic> parsed = jsonDecode(settingsMap['source_order']!);
           for (final s in parsed) {
-            if (allSources.contains(s)) {
-              enabledSources.add(s.toString());
+            if (allSources.contains(s) && !orderedSources.contains(s)) {
+              orderedSources.add(s.toString());
             }
           }
         } catch (_) {}
       }
-      
-      final List<Map<String, dynamic>> parsedSources = [];
-      for (final s in enabledSources) {
-        parsedSources.add({'key': s, 'name': _getSourceLabel(s), 'enabled': true});
-      }
-      for (final s in allSources) {
-        if (!enabledSources.contains(s)) {
-          parsedSources.add({'key': s, 'name': _getSourceLabel(s), 'enabled': false});
+
+      // If netmirror_center is not in the saved source_order yet, insert it right after cinejoy/vegamovies!
+      if (!orderedSources.contains('netmirror_center')) {
+        final insertIdx = orderedSources.indexOf('cinejoy');
+        if (insertIdx != -1) {
+          orderedSources.insert(insertIdx + 1, 'netmirror_center');
+        } else {
+          final vIdx = orderedSources.indexOf('vegamovies');
+          if (vIdx != -1) {
+            orderedSources.insert(vIdx + 1, 'netmirror_center');
+          } else {
+            orderedSources.add('netmirror_center');
+          }
         }
+      }
+
+      // Append any other missing sources from allSources
+      for (final s in allSources) {
+        if (!orderedSources.contains(s)) {
+          orderedSources.add(s);
+        }
+      }
+
+      final List<Map<String, dynamic>> parsedSources = [];
+      for (final s in orderedSources) {
+        final bool isEnabled;
+        if (settingsMap.containsKey('source_show_$s')) {
+          isEnabled = settingsMap['source_show_$s'] == 'true';
+        } else {
+          isEnabled = true;
+        }
+        parsedSources.add({
+          'key': s,
+          'name': _getSourceLabel(s),
+          'enabled': isEnabled,
+        });
       }
       
       // 4. Parse Max Stream Size

@@ -568,7 +568,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           }
           final headerList = <String>[];
           playHeaders.forEach((key, value) {
-            headerList.add('$key: $value');
+            final kLower = key.toLowerCase();
+            if (kLower != 'user-agent' && kLower != 'referer') {
+              headerList.add('$key: $value');
+            }
           });
           if (headerList.isNotEmpty) {
             await nativePlayer.setProperty('http-header-fields', headerList.join(','));
@@ -649,8 +652,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerSourceName.contains('telegram') ||
               lowerSourceName.contains('streamplay') ||
               lowerSourceName.contains('moviebox') ||
-              lowerUrl.contains('hakunaymatata.com') ||
-              lowerUrl.contains('aoneroom.com') ||
               lowerUrl.contains('vidlink.pro') ||
               lowerUrl.contains('hlowb.com') ||
               lowerUrl.contains('castle') ||
