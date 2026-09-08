@@ -30,6 +30,10 @@ class DomainService {
     'movies4u': 'https://new5.movies4u.clinic',
     'topmovies': 'https://moviesleech.bar',
     'toonstream': 'https://toon-stream.site',
+    'netmirror_center': 'https://netmirror.center',
+    'netmirror_api3': 'https://api2.imdb3.shop',
+    'netmirror_api4': 'https://api2.imdb4.shop',
+    'netmirror_watchbox': 'https://bet.watch21.shop',
   };
 
   static bool _hasInitialized = false;
@@ -119,5 +123,15 @@ class DomainService {
   static Future<String> getDomain(String key, {String? defaultFallback}) async {
     await init();
     return getDomainSync(key, defaultFallback: defaultFallback);
+  }
+
+  /// Sets or overrides a custom domain for a provider and persists to cache.
+  static Future<void> setCustomDomain(String key, String url) async {
+    final cleanUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    _inMemoryDomains[key.toLowerCase().trim()] = cleanUrl;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cacheKey, jsonEncode(_inMemoryDomains));
+    } catch (_) {}
   }
 }

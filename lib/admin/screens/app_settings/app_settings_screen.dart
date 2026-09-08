@@ -41,6 +41,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _torrentioUrlCtrl = TextEditingController();
   final _stravoUrlCtrl = TextEditingController();
   final _vegamoviesUrlCtrl = TextEditingController();
+  final _netmirrorCenterUrlCtrl = TextEditingController();
   final _cinejoyUrlCtrl = TextEditingController();
   final _movieboxUrlCtrl = TextEditingController();
   final _moviesdriveUrlCtrl = TextEditingController();
@@ -71,6 +72,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _torrentioUrlCtrl.dispose();
     _stravoUrlCtrl.dispose();
     _vegamoviesUrlCtrl.dispose();
+    _netmirrorCenterUrlCtrl.dispose();
     _cinejoyUrlCtrl.dispose();
     _movieboxUrlCtrl.dispose();
     _moviesdriveUrlCtrl.dispose();
@@ -96,7 +98,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       final allPortals = await _adminApi.getStalkerSettings();
       
       // 3. Parse Source Priority & Visibility
-      final allSources = ['streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
+      final allSources = ['streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'];
       final List<String> enabledSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
@@ -185,6 +187,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
        _vegamoviesUrlCtrl.text = settingsMap['domain_vegamovies'] ?? 'https://vegamovies.se';
+       _netmirrorCenterUrlCtrl.text = settingsMap['domain_netmirror_center'] ?? 'https://netmirror.center';
       _cinejoyUrlCtrl.text = settingsMap['domain_cinejoy'] ?? 'https://cinejoy.to';
       _movieboxUrlCtrl.text = settingsMap['domain_moviebox'] ?? 'https://api4.aoneroom.com';
       _moviesdriveUrlCtrl.text = settingsMap['domain_moviesdrive'] ?? 'https://new3.moviesdrive.christmas';
@@ -232,6 +235,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'filmu': return 'FilmU Premium Server';
       case 'moviebox': return 'MovieBox Server';
       case 'vegamovies': return 'Vegamovies.se Server';
+      case 'netmirror_center': return 'NetMirror Center Server';
       case 'cinejoy': return 'Cinejoy.to Server';
       case 'streamtape': return 'Streamtape Server';
       case 'directLink': return 'Direct Links';
@@ -351,6 +355,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'torrentio_addon_url': _torrentioUrlCtrl.text.trim(),
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
+        'domain_netmirror_center': _netmirrorCenterUrlCtrl.text.trim(),
         'domain_cinejoy': _cinejoyUrlCtrl.text.trim(),
         'domain_moviebox': _movieboxUrlCtrl.text.trim(),
         'domain_moviesdrive': _moviesdriveUrlCtrl.text.trim(),
@@ -1330,6 +1335,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Vegamovies Domain',
                 controller: _vegamoviesUrlCtrl,
                 hint: 'https://vegamovies.se',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.public_rounded,
+                label: 'NetMirror Center Domain',
+                controller: _netmirrorCenterUrlCtrl,
+                hint: 'https://netmirror.center',
               ),
               const SizedBox(height: 16),
               _buildInputRow(

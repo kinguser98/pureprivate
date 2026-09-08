@@ -16,7 +16,7 @@ import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
-import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import '../widgets/stream_metadata_tile.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({

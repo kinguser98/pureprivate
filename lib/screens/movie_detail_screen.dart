@@ -42,6 +42,7 @@ import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_center_resolver.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/filmu_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
@@ -133,11 +134,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showVegamovies = true;
   bool _showCinejoy = true;
   bool _showFilmu = true;
+  bool _showNetmirrorCenter = true;
+  bool _resolvingNetmirrorCenter = false;
+  List<StreamSource> _liveNetmirrorCenterSources = [];
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [
     'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-    'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'
+    'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'
   ];
   StateSetter? _modalSetState;
 
@@ -346,6 +350,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showVegamovies = cloud.containsKey('source_show_vegamovies') ? cloud['source_show_vegamovies'] == 'true' : (prefs.getBool('source_show_vegamovies') ?? true);
         _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
         _showFilmu = cloud.containsKey('source_show_filmu') ? cloud['source_show_filmu'] == 'true' : (prefs.getBool('source_show_filmu') ?? true);
+        _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
         _blockedAddonGroups = blockedRaw
@@ -361,7 +366,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final List<String> defaultOrder = [
         'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u',
         'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-        'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'
+        'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'
       ];
       final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
       for (final key in defaultOrder) {
@@ -427,6 +432,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         movie.title,
         movie.year?.toString(),
       );
+    }
+
+    if (_showNetmirrorCenter) {
+      _resolveLiveNetmirrorCenter(movie.title, movie.year?.toString() ?? '2026');
     }
 
     final tmdbId = movie.tmdbId?.toString() ?? movie.id;
@@ -541,6 +550,29 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     } catch (e) {
       debugPrint('Vegamovies stream resolution failed: $e');
       if (mounted) setState(() => _resolvingVegamovies = false);
+    }
+  }
+
+  Future<void> _resolveLiveNetmirrorCenter(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingNetmirrorCenter = true);
+    try {
+      final infos = await NetmirrorCenterResolver.resolveStreams(
+        title,
+        yearStr,
+      );
+      if (mounted) {
+        setState(() {
+          _liveNetmirrorCenterSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+          )).toList();
+          _resolvingNetmirrorCenter = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('NetMirror Center stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingNetmirrorCenter = false);
     }
   }
 
@@ -2625,6 +2657,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     // Direct media streams should NEVER be treated as web embeds or run through off-screen webview scrapers
     final isDirectMediaStream = nameLower.contains('moviebox') ||
         nameLower.contains('streamplay') ||
+        nameLower.contains('netmirror') ||
         sLower.contains('hakunaymatata.com') ||
         sLower.contains('aoneroom.com') ||
         sLower.contains('slast') ||
@@ -3410,6 +3443,41 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     }
                   },
                 ),
+              );
+            }
+
+            // NetMirror Center Server
+            if (_showNetmirrorCenter && enabledKeys.contains('netmirror_center')) {
+              final isResolving = _resolvingNetmirrorCenter;
+              final hasLinks = _liveNetmirrorCenterSources.isNotEmpty;
+              sourceWidgets['netmirror_center'] = _buildSourceTile(
+                icon: Icons.public_rounded,
+                title: '${pos('netmirror_center')}. NetMirror Center',
+                subtitle: isResolving
+                    ? 'Searching NetMirror Center...'
+                    : (hasLinks
+                        ? '${_liveNetmirrorCenterSources.length} links available'
+                        : 'No links found on NetMirror Center'),
+                disabled: isResolving || !hasLinks,
+                onTap: () {
+                  if (!hasLinks) return;
+                  Navigator.of(context).pop();
+                  if (_liveNetmirrorCenterSources.length == 1) {
+                    _playWithResolution(
+                      _liveNetmirrorCenterSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveNetmirrorCenterSources.first.name,
+                      headers: _liveNetmirrorCenterSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'NETMIRROR CENTER STREAMS',
+                      _liveNetmirrorCenterSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
               );
             }
  
@@ -4529,6 +4597,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           _showDownloadSubSelector('VEGAMOVIES DOWNLOADS', _liveVegamoviesSources);
                         }
                       },
+              );
+            }
+
+            // NetMirror Center Server Download
+            if (_showNetmirrorCenter && enabledKeys.contains('netmirror_center')) {
+              final isResolving = _resolvingNetmirrorCenter;
+              final hasLinks = _liveNetmirrorCenterSources.isNotEmpty;
+              downloadSourceWidgets['netmirror_center'] = _buildSourceTile(
+                icon: Icons.public_rounded,
+                title: '${pos('netmirror_center')}. NetMirror Center',
+                subtitle: isResolving
+                    ? 'Searching NetMirror Center...'
+                    : (hasLinks
+                        ? '${_liveNetmirrorCenterSources.length} stream link(s) available'
+                        : 'No stream links available'),
+                disabled: isResolving || !hasLinks,
+                onTap: () {
+                  if (!hasLinks) return;
+                  Navigator.of(context).pop();
+                  if (_liveNetmirrorCenterSources.length == 1) {
+                    final s = _liveNetmirrorCenterSources.first;
+                    _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
+                  } else {
+                    _showDownloadSubSelector('NETMIRROR CENTER DOWNLOADS', _liveNetmirrorCenterSources);
+                  }
+                },
               );
             }
 

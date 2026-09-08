@@ -26,6 +26,7 @@ import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_center_resolver.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
 import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
@@ -91,6 +92,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showCinejoy = true;
   bool _showStreamtape = true;
   bool _showTelegram = true;
+  bool _showNetmirrorCenter = true;
   bool _showDirectLink = true;
   String? _selectedStremioResolution;
   List<String> _blockedAddonGroups = [];
@@ -100,7 +102,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final cloud = await SyncService.fetchAppSettings();
     if (mounted) {
       setState(() {
-        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','telegram','directLink'];
+        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','telegram','directLink'];
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
@@ -115,6 +117,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
         _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
         _showDirectLink = cloud.containsKey('source_show_direct_link') ? cloud['source_show_direct_link'] == 'true' : (prefs.getBool('source_show_direct_link') ?? true);
         _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
         
@@ -140,6 +143,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       if (!mergedOrder.contains('vegamovies')) mergedOrder.add('vegamovies');
       if (!mergedOrder.contains('cinejoy')) mergedOrder.add('cinejoy');
       if (!mergedOrder.contains('streamtape')) mergedOrder.add('streamtape');
+      if (!mergedOrder.contains('netmirror_center')) mergedOrder.add('netmirror_center');
       if (!mergedOrder.contains('telegram')) mergedOrder.add('telegram');
       if (!mergedOrder.contains('directLink')) mergedOrder.add('directLink');
       setState(() => _sourceOrder = mergedOrder);
@@ -506,6 +510,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       // Resolve Cinejoy Scraper
       tasks.add(_resolveCinejoy(title, movieYear, tmdbId: tmdbId, isSeries: _isSeriesSearch, season: season, episode: episode));
 
+      // Resolve NetMirror Center
+      if (_showNetmirrorCenter && title.isNotEmpty) {
+        tasks.add(_resolveNetmirrorCenter(title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
       // Resolve Movy.bz Multi-Source
       if (_showMovy && tmdbId.isNotEmpty) {
         tasks.add(_resolveMovy(tmdbId, title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
@@ -758,6 +767,33 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('Cinejoy resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveNetmirrorCenter(String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+    if (!_showNetmirrorCenter) return;
+    try {
+      debugPrint('NetMirror Center Scraper: Resolving streams for $title...');
+      final streams = await NetmirrorCenterResolver.resolveStreams(
+        title,
+        year,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams.map((s) => StreamSourceInfo(
+            name: s.name,
+            url: s.url,
+            type: StreamSourceType.netmirrorCenter,
+            headers: s.headers,
+            quality: s.quality,
+          )));
+        });
+      }
+    } catch (e) {
+      debugPrint('NetMirror Center resolution failed: $e');
     }
   }
 
@@ -1284,7 +1320,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
     if (source.type == StreamSourceType.streamplay ||
         source.type == StreamSourceType.moviebox ||
-        source.type == StreamSourceType.vegamovies) {
+        source.type == StreamSourceType.vegamovies ||
+        source.type == StreamSourceType.netmirrorCenter) {
       final Map<String, String> headers = {};
       if (source.headers != null) {
         headers.addAll(source.headers!);
@@ -1294,11 +1331,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           builder: (_) => VideoPlayerScreen(
             videoSource: source.url,
             title: movieTitle,
-            subtitle: source.type == StreamSourceType.vegamovies
-                ? 'Vegamovies Server'
-                : (source.type == StreamSourceType.streamplay
-                    ? 'StreamPlay Server'
-                    : 'MovieBox Server'),
+            subtitle: source.type == StreamSourceType.netmirrorCenter
+                ? 'NetMirror Center'
+                : (source.type == StreamSourceType.vegamovies
+                    ? 'Vegamovies Server'
+                    : (source.type == StreamSourceType.streamplay
+                        ? 'StreamPlay Server'
+                        : 'MovieBox Server')),
             movieId: 'special_search_${_selectedMovie['id']}',
             resumeDirectly: false,
             headers: headers.isNotEmpty ? headers : null,
@@ -2624,6 +2663,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final streamtapeStreams = filteredSources
         .where((s) => s.type == StreamSourceType.streamtape)
         .toList();
+    final netmirrorCenterStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.netmirrorCenter)
+        .toList();
     final telegramStreams = filteredSources
         .where((s) => s.type == StreamSourceType.telegram)
         .toList();
@@ -2911,6 +2953,25 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
+      // NetMirror Center Card
+      if (_showNetmirrorCenter && (_resolvingStreams || netmirrorCenterStreams.isNotEmpty) && enabledKeys.contains('netmirror_center')) {
+        sourceWidgets['netmirror_center'] = _buildServerGroupCard(
+          title: '${pos('netmirror_center')}. NetMirror Center',
+          subtitle: _resolvingStreams && netmirrorCenterStreams.isEmpty
+              ? 'Searching NetMirror Center...'
+              : (netmirrorCenterStreams.isNotEmpty
+                    ? '${netmirrorCenterStreams.length} links available'
+                    : 'Not available'),
+          icon: Icons.public_rounded,
+          accentColor: Colors.amberAccent,
+          onTap: netmirrorCenterStreams.isEmpty
+              ? null
+              : () => setState(() {
+                    _activeGroupType = StreamSourceType.netmirrorCenter;
+                  }),
+        );
+      }
+
       // Telegram Card
       if (_showTelegram && (_resolvingStreams || telegramStreams.isNotEmpty) && enabledKeys.contains('telegram')) {
         sourceWidgets['telegram'] = _buildServerGroupCard(
@@ -3091,6 +3152,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = streamtapeStreams;
         accentColor = Colors.orange;
         iconData = Icons.video_collection_rounded;
+      } else if (_activeGroupType == StreamSourceType.netmirrorCenter) {
+        activeList = netmirrorCenterStreams;
+        accentColor = Colors.amberAccent;
+        iconData = Icons.public_rounded;
       } else if (_activeGroupType == StreamSourceType.telegram) {
         activeList = telegramStreams;
         accentColor = Colors.lightBlue;
@@ -3518,6 +3583,7 @@ enum StreamSourceType {
   vegamovies,
   cinejoy,
   streamtape,
+  netmirrorCenter,
   telegram,
   directLink,
 }
