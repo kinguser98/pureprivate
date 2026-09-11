@@ -84,6 +84,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       if (response['success'] == true) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('username', username);
+        await prefs.setString('admin_saved_pwd', password);
         await prefs.setBool('is_logged_in', true);
         await prefs.setInt('admin_login_timestamp', DateTime.now().millisecondsSinceEpoch);
 
@@ -120,10 +121,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('username');
+    await prefs.remove('admin_saved_pwd');
     await prefs.remove('token');
     await prefs.remove('admin_login_timestamp');
     await prefs.setBool('is_logged_in', false);
 
-    state = const AuthState();
+    state = state.copyWith(
+      isAuthenticated: false,
+      username: 'admin',
+      error: null,
+    );
   }
 }

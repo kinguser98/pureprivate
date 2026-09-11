@@ -16,6 +16,9 @@ import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
+import 'package:private_cinema_mobile/widgets/marquee_text.dart';
 import '../widgets/stream_metadata_tile.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
@@ -274,6 +277,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
     _startProxyStatsTimer();
     _startPlayerLogoTimer();
+    _initSystemBrightnessAndVolume();
+  }
+
+  Future<void> _initSystemBrightnessAndVolume() async {
+    try {
+      final currentBrightness = await ScreenBrightness().application;
+      if (mounted) {
+        setState(() => _brightness = currentBrightness.clamp(0.05, 1.0));
+      }
+    } catch (_) {}
+    try {
+      await FlutterVolumeController.updateShowSystemUI(false);
+      final currentVol = await FlutterVolumeController.getVolume();
+      if (currentVol != null && mounted) {
+        setState(() => _volume = (currentVol * 100.0).clamp(0.0, 100.0));
+        _player.setVolume(_volume);
+      }
+    } catch (_) {}
   }
 
   bool _isStreamProxied = false;
@@ -330,6 +351,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void dispose() {
+    try {
+      ScreenBrightness().resetApplicationScreenBrightness();
+    } catch (_) {}
     _proxyStatsTimer?.cancel();
     _hideControlsTimer?.cancel();
     _hudTimer?.cancel();
@@ -926,9 +950,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         setState(() {
           _hudType = 'brightness';
           if (_dragStartBrightness != null) {
-            _brightness = (_dragStartBrightness! - deltaY / 150).clamp(0.1, 1.0);
+            _brightness = (_dragStartBrightness! - deltaY / 150).clamp(0.05, 1.0);
           }
         });
+        try {
+          ScreenBrightness().setApplicationScreenBrightness(_brightness);
+        } catch (_) {}
       } else {
         // Right side: Volume
         setState(() {
@@ -938,6 +965,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           }
           _player.setVolume(_volume);
         });
+        try {
+          FlutterVolumeController.setVolume(_volume / 100.0);
+        } catch (_) {}
       }
       _armHideControls();
     }
@@ -2769,8 +2799,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     icon: Icons.light_mode_rounded,
                     onChanged: (val) {
                       setState(() {
-                        _brightness = val.clamp(0.1, 1.0);
+                        _brightness = val.clamp(0.05, 1.0);
                       });
+                      try {
+                        ScreenBrightness().setApplicationScreenBrightness(_brightness);
+                      } catch (_) {}
                     },
                   ),
                 ),
@@ -2795,6 +2828,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         _volume = val * 100.0;
                         _player.setVolume(_volume);
                       });
+                      try {
+                        FlutterVolumeController.setVolume(_volume / 100.0);
+                      } catch (_) {}
                     },
                   ),
                 ),
@@ -3457,10 +3493,10 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
         child: Material(
           color: Colors.transparent,
           child: Container(
-            width: 250,
+            width: _currentPane == 2 ? 310 : 250,
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(16),
+              color: Colors.black.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(18),
               border: Border.all(color: Colors.white12, width: 1.5),
             ),
             child: ClipRRect(
@@ -3667,76 +3703,188 @@ class _SettingsPopoverState extends State<_SettingsPopover> {
         ? '0 ms' 
         : (_audioDelay > 0.0 ? '+${(_audioDelay * 1000).round()} ms' : '${(_audioDelay * 1000).round()} ms');
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'SYNC DELAY',
-                style: TextStyle(color: Colors.white, fontSize: 13),
-              ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline_rounded, color: Colors.white, size: 20),
-                    onPressed: () => _adjustAudioDelay(-0.1),
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    delayText,
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 20),
-                    onPressed: () => _adjustAudioDelay(0.1),
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const Divider(color: Colors.white10, height: 1),
-        ...List.generate(tracks.length, (index) {
-          final track = tracks[index];
-          final isSelected = track.id == current.id;
-          
-          String name = track.title ?? track.language ?? 'Track ${track.id}';
-          if (track.id == 'auto') name = 'Auto';
-          if (track.id == 'no') name = 'Off';
-
-          return ListTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            title: Text(
-              name.toUpperCase(),
-              style: TextStyle(
-                color: isSelected ? AppColors.accentBright : Colors.white,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 13,
-              ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Modern Sync Delay Card
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
             ),
-            trailing: isSelected
-                ? Icon(Icons.check_rounded, color: AppColors.accentBright, size: 16)
-                : null,
-            onTap: () {
-              widget.player.setAudioTrack(track);
-              Navigator.of(context).pop();
-            },
-          );
-        }),
-      ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'AUDIO SYNC',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    if (_audioDelay != 0.0)
+                      GestureDetector(
+                        onTap: () => _adjustAudioDelay(-_audioDelay),
+                        child: Text(
+                          'RESET',
+                          style: GoogleFonts.outfit(
+                            color: const Color(0xFFC084FC),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _adjustAudioDelay(-0.05),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          '-50 ms',
+                          style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0x309333EA),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFC084FC).withValues(alpha: 0.5)),
+                      ),
+                      child: Text(
+                        delayText,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => _adjustAudioDelay(0.05),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          '+50 ms',
+                          style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'SELECT AUDIO TRACK',
+            style: GoogleFonts.outfit(
+              color: Colors.white54,
+              fontSize: 10.5,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ...List.generate(tracks.length, (index) {
+            final track = tracks[index];
+            final isSelected = track.id == current.id;
+            
+            String name = track.title ?? track.language ?? 'Track ${track.id}';
+            if (track.id == 'auto') name = 'Auto';
+            if (track.id == 'no') name = 'Off';
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () {
+                    widget.player.setAudioTrack(track);
+                    Navigator.of(context).pop();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isSelected ? const Color(0x359333EA) : Colors.white.withValues(alpha: 0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected ? const Color(0xFFC084FC) : Colors.white.withValues(alpha: 0.08),
+                        width: isSelected ? 1.4 : 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
+                          color: isSelected ? const Color(0xFFC084FC) : Colors.white38,
+                          size: 17,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: MarqueeText(
+                            text: name.toUpperCase(),
+                            style: TextStyle(
+                              color: isSelected ? Colors.white : Colors.white70,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ),
+                        if (isSelected) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFC084FC).withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'ACTIVE',
+                              style: TextStyle(
+                                color: Color(0xFFC084FC),
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 

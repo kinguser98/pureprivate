@@ -81,14 +81,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startCarouselTimer() {
-    _carouselTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
+    _carouselTimer = Timer.periodic(const Duration(milliseconds: 3500), (timer) {
       final carouselMovies = _getCarouselMovies();
       if (carouselMovies.isNotEmpty && _carouselController.hasClients) {
         final next = _carouselController.page!.round() + 1;
         _carouselController.animateToPage(
           next,
-          duration: const Duration(milliseconds: 650),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeInOutCubic,
         );
       }
     });

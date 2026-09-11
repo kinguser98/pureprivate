@@ -44,11 +44,52 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     _loadMoviesFromApi();
   }
 
+  List<Movie> get _masterCatalog {
+    if (ApiService.cachedMovies.isNotEmpty) return ApiService.cachedMovies;
+    if (MockCatalog.allMovies.isNotEmpty) return MockCatalog.allMovies;
+    return [];
+  }
+
+  static bool matchesOttProvider(String movieOtt, String targetOtt) {
+    final m = movieOtt.toLowerCase().trim();
+    final t = targetOtt.toLowerCase().trim();
+    if (m == t || m.contains(t) || t.contains(m)) return true;
+
+    final mClean = m.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final tClean = t.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (mClean.isNotEmpty && tClean.isNotEmpty) {
+      if (mClean == tClean || mClean.contains(tClean) || tClean.contains(mClean)) return true;
+    }
+
+    bool isNetflix(String s) => s.contains('netflix') || s.contains('(nf)');
+    bool isPrime(String s) => s.contains('prime') || s.contains('amazon') || s.contains('(pv)');
+    bool isHotstar(String s) => s.contains('hotstar') || s.contains('disney') || s.contains('jiohotstar') || s.contains('(hs)');
+    bool isSony(String s) => s.contains('sony') || s.contains('liv');
+    bool isZee(String s) => s.contains('zee');
+    bool isJio(String s) => s.contains('jio');
+    bool isSun(String s) => s.contains('sun');
+    bool isAha(String s) => s.contains('aha');
+    bool isApple(String s) => s.contains('apple');
+    bool isManorama(String s) => s.contains('manorama') || s.contains('max');
+    bool isSaina(String s) => s.contains('saina');
+
+    if (isNetflix(m) && isNetflix(t)) return true;
+    if (isPrime(m) && isPrime(t)) return true;
+    if (isHotstar(m) && isHotstar(t)) return true;
+    if (isSony(m) && isSony(t)) return true;
+    if (isZee(m) && isZee(t)) return true;
+    if (isJio(m) && isJio(t)) return true;
+    if (isSun(m) && isSun(t)) return true;
+    if (isAha(m) && isAha(t)) return true;
+    if (isApple(m) && isApple(t)) return true;
+    if (isManorama(m) && isManorama(t)) return true;
+    if (isSaina(m) && isSaina(t)) return true;
+
+    return false;
+  }
+
   Future<void> _loadMoviesFromApi() async {
-    final currentCount = ApiService.cachedMovies.isNotEmpty
-        ? ApiService.cachedMovies.length
-        : MockCatalog.allMovies.length;
-    if (currentCount == 0) {
+    if (_masterCatalog.isEmpty) {
       setState(() => _isLoading = true);
     }
     try {
@@ -60,17 +101,15 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
         ApiService.cachedMovies = parsed;
         MockCatalog.allMovies = parsed;
       }
+    } catch (e) {
+      debugPrint('AllMoviesScreen _loadMoviesFromApi error: $e');
+    } finally {
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
         _loadFilters();
         _applyFilters();
-      }
-    } catch (e) {
-      debugPrint('AllMoviesScreen _loadMoviesFromApi error: $e');
-      if (mounted) {
-        setState(() => _isLoading = false);
       }
     }
   }
@@ -82,9 +121,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
   }
 
   void _loadFilters() {
-    final all = (ApiService.cachedMovies.length >= MockCatalog.allMovies.length && ApiService.cachedMovies.isNotEmpty)
-        ? ApiService.cachedMovies
-        : MockCatalog.allMovies;
+    final all = _masterCatalog;
     
     // Extract unique non-empty genres dynamically (splitting comma-separated genres)
     final Set<String> genreSet = {};
@@ -121,9 +158,7 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
 
   void _applyFilters() {
     final query = _searchController.text.toLowerCase().trim();
-    final catalog = (ApiService.cachedMovies.length >= MockCatalog.allMovies.length && ApiService.cachedMovies.isNotEmpty)
-        ? ApiService.cachedMovies
-        : MockCatalog.allMovies;
+    final catalog = _masterCatalog;
     var list = List<Movie>.from(catalog);
 
     if (query.isNotEmpty) {
@@ -150,11 +185,8 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
     if (_selectedOtts.isNotEmpty) {
       list = list.where((m) {
         if (m.ottName == null || m.ottName!.trim().isEmpty) return false;
-        final movieOtt = m.ottName!.toLowerCase().trim();
-        return _selectedOtts.any((s) {
-          final target = s.toLowerCase().trim();
-          return movieOtt == target || movieOtt.contains(target) || target.contains(movieOtt);
-        });
+        final movieOtt = m.ottName!.trim();
+        return _selectedOtts.any((s) => matchesOttProvider(movieOtt, s));
       }).toList();
     }
 
@@ -567,6 +599,9 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
           } else {
             _selectedOtts.clear();
             _selectedOtts.add(name);
+            if (_searchController.text.isNotEmpty) {
+              _searchController.clear();
+            }
           }
           _applyFilters();
         });
@@ -782,6 +817,23 @@ class _AllMoviesScreenState extends State<AllMoviesScreen> {
                               Text(
                                 'No movies match your filters',
                                 style: GoogleFonts.outfit(color: Colors.white60, fontSize: 14),
+                              ),
+                              const SizedBox(height: 14),
+                              TextButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _searchController.clear();
+                                    _selectedGenres.clear();
+                                    _selectedLanguages.clear();
+                                    _selectedOtts.clear();
+                                    _applyFilters();
+                                  });
+                                },
+                                icon: const Icon(Icons.clear_all_rounded, color: Color(0xFFC084FC), size: 18),
+                                label: const Text(
+                                  'Clear All Filters',
+                                  style: TextStyle(color: Color(0xFFC084FC), fontWeight: FontWeight.bold),
+                                ),
                               ),
                             ],
                           ),

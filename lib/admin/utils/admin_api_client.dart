@@ -38,11 +38,39 @@ class AdminApiClient {
       },
       onResponse: (response, handler) async {
         _saveCookie(response.headers);
+        if (_isAuthRedirect(response.headers, response.statusCode)) {
+          final reAuthed = await silentReAuth();
+          if (reAuthed) {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              final newSess = prefs.getString('phpsessid');
+              if (newSess != null) {
+                response.requestOptions.headers['Cookie'] = 'PHPSESSID=$newSess';
+              }
+              final retryRes = await d.fetch(response.requestOptions);
+              return handler.resolve(retryRes);
+            } catch (_) {}
+          }
+        }
         return handler.next(response);
       },
       onError: (error, handler) async {
         if (error.response != null) {
           _saveCookie(error.response!.headers);
+          if (_isAuthRedirect(error.response!.headers, error.response!.statusCode)) {
+            final reAuthed = await silentReAuth();
+            if (reAuthed) {
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                final newSess = prefs.getString('phpsessid');
+                if (newSess != null) {
+                  error.requestOptions.headers['Cookie'] = 'PHPSESSID=$newSess';
+                }
+                final retryRes = await d.fetch(error.requestOptions);
+                return handler.resolve(retryRes);
+              } catch (_) {}
+            }
+          }
         }
         return handler.next(error);
       },
@@ -66,12 +94,63 @@ class AdminApiClient {
     }
   }
 
-  bool _isAuthRedirect(Headers headers, int? statusCode) {
+  static bool _isAuthRedirect(Headers headers, int? statusCode) {
     if (statusCode == 302 || statusCode == 301) {
       final location = headers.value('location') ?? '';
       if (location.contains('login.php')) {
         return true;
       }
+    }
+    return false;
+  }
+
+  static bool _isReAuthing = false;
+
+  static Future<bool> silentReAuth() async {
+    if (_isReAuthing) return false;
+    _isReAuthing = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isLoggedIn = prefs.getBool('is_logged_in') ?? false;
+      final loginTime = prefs.getInt('admin_login_timestamp') ?? 0;
+      final username = prefs.getString('username');
+      final pwd = prefs.getString('admin_saved_pwd');
+      final now = DateTime.now().millisecondsSinceEpoch;
+      const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+
+      if (!isLoggedIn || username == null || pwd == null || (now - loginTime) >= oneWeekMs) {
+        return false;
+      }
+
+      final authDio = Dio(BaseOptions(
+        baseUrl: ApiConfig.baseUrl,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+        followRedirects: false,
+        validateStatus: (status) => status != null && (status >= 200 && status < 400),
+      ));
+      try {
+        (authDio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (client) {
+          client.badCertificateCallback = (cert, host, port) => true;
+          return client;
+        };
+      } catch (_) {}
+
+      final res = await authDio.post(
+        ApiConfig.login,
+        data: FormData.fromMap({
+          'username': username,
+          'password': pwd,
+        }),
+      );
+
+      _saveCookie(res.headers);
+      debugPrint('AdminApiClient: Silent auto-reauthentication succeeded for 7-day session');
+      return true;
+    } catch (e) {
+      debugPrint('AdminApiClient silentReAuth error: $e');
+    } finally {
+      _isReAuthing = false;
     }
     return false;
   }
