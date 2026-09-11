@@ -69,7 +69,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     setState(() => _isLoading = true);
 
     _isSimklConnected = SimklService.isAuthenticated.value;
-    _isTmdbConnected = TmdbService.isAuthenticated;
+    _isTmdbConnected = TmdbService.isAuthenticated.value;
 
     final Map<String, Movie> favMap = {};
     final Map<String, Movie> watchMap = {};
