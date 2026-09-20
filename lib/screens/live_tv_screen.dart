@@ -24,13 +24,19 @@ import 'package:cached_network_image/cached_network_image.dart';
 enum ViewMode { list, grid }
 
 class LiveTvScreen extends StatefulWidget {
-  const LiveTvScreen({super.key});
+  final bool isActive;
+  const LiveTvScreen({super.key, this.isActive = true});
+
+  static void stopActivePlayback() {
+    _LiveTvScreenState._activeState?.stopPlayback();
+  }
 
   @override
   State<LiveTvScreen> createState() => _LiveTvScreenState();
 }
 
 class _LiveTvScreenState extends State<LiveTvScreen> {
+  static _LiveTvScreenState? _activeState;
   List<dynamic> _allChannels = [];
   Map<String, List<dynamic>> _groupedChannels = {};
   List<String> _categories = [];
@@ -66,9 +72,26 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
   Timer? _proxyStatsTimer;
   int _lastDemuxerBytesRead = 0;
 
+  void stopPlayback() {
+    _userStoppedMini = true;
+    _stalkerKeepAliveTimer?.cancel();
+    _reconnectDebounce?.cancel();
+    _miniPlayer?.stop();
+    if (mounted) setState(() => _isMiniPlayerPlaying = false);
+  }
+
+  @override
+  void didUpdateWidget(LiveTvScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive && !widget.isActive) {
+      stopPlayback();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _activeState = this;
     _initPrefs();
     _fetchChannels();
     _loadEPGData();
@@ -80,19 +103,19 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       if (mounted) setState(() => _isMiniPlayerPlaying = playing);
       if (playing) {
         _miniPlaybackStarted ??= DateTime.now();
+        _reconnectDebounce?.cancel();
         _startStalkerKeepAliveTimer();
       } else {
         _stalkerKeepAliveTimer?.cancel();
-        // Fallback auto-reconnect ONLY if stream stops unexpectedly (e.g. network drop)
+        // Fallback auto-reconnect ONLY if stream remains stopped/dead for 8 seconds continuously
         if (!_userStoppedMini && _activeMiniChannel != null && _miniPlaybackStarted != null) {
-          final elapsed = DateTime.now().difference(_miniPlaybackStarted!).inSeconds;
-          if (elapsed >= 3) {
-            _reconnectDebounce?.cancel();
-            if (mounted && !_userStoppedMini) {
-              debugPrint('LiveTvScreen: Stream stopped unexpectedly after ${elapsed}s — fallback auto-reconnecting...');
+          _reconnectDebounce?.cancel();
+          _reconnectDebounce = Timer(const Duration(seconds: 8), () {
+            if (mounted && !_userStoppedMini && _activeMiniChannel != null && !_isMiniPlayerPlaying) {
+              debugPrint('LiveTvScreen: Stream stopped for 8s continuously — auto-reconnecting...');
               _autoReconnectMini();
             }
-          }
+          });
         }
       }
     });
@@ -107,9 +130,9 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   @override
   void dispose() {
+    if (_activeState == this) _activeState = null;
+    stopPlayback();
     _proxyStatsTimer?.cancel();
-    _stalkerKeepAliveTimer?.cancel();
-    _reconnectDebounce?.cancel();
     _miniEpgTimer?.cancel();
     _miniPlayer?.dispose();
     _searchController.dispose();
@@ -117,10 +140,12 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     super.dispose();
   }
 
-  void _startProxyStatsTimer() {
+  void _startProxyStatsTimer({bool resetStats = false}) {
     _proxyStatsTimer?.cancel();
     _lastDemuxerBytesRead = 0;
-    ProxyStats.reset();
+    if (resetStats) {
+      ProxyStats.reset();
+    }
     _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       if (!mounted || _miniPlayer == null || _miniPlayer!.platform is! NativePlayer) return;
       final nativePlayer = _miniPlayer!.platform as NativePlayer;
@@ -159,8 +184,8 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
       StalkerResolver.keepAlive(portalId);
     }
-    // Periodically send keep_alive every 8 seconds to prevent Stalker portal from revoking stream token
-    _stalkerKeepAliveTimer = Timer.periodic(const Duration(seconds: 8), (timer) {
+    // Periodically send keep_alive every 30 seconds to prevent Stalker portal from revoking stream token
+    _stalkerKeepAliveTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted && _activeMiniChannel != null && !_userStoppedMini && _isMiniPlayerPlaying) {
         final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
         StalkerResolver.keepAlive(portalId);
@@ -187,7 +212,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       _userStoppedMini = false;
       _miniPlaybackStarted = DateTime.now();
       _startStalkerKeepAliveTimer();
-      _startProxyStatsTimer();
+      _startProxyStatsTimer(resetStats: false);
       debugPrint('LiveTvScreen: Auto-reconnect successful for ${channel["name"]}');
     } catch (e) {
       debugPrint('LiveTvScreen: Auto-reconnect failed: $e');
@@ -569,10 +594,10 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
-          await nativePlayer.setProperty('cache-secs', '15');
-          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '20');
+          await nativePlayer.setProperty('cache-secs', '20');
+          await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
           await nativePlayer.setProperty('cache-pause-wait', '1');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
@@ -587,7 +612,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         _userStoppedMini = false;
         _miniPlaybackStarted = DateTime.now();
         _startStalkerKeepAliveTimer();
-        _startProxyStatsTimer();
+        _startProxyStatsTimer(resetStats: true);
 
         final channelId = channel['stalker_id']?.toString() ?? channel['id']?.toString();
         
@@ -751,39 +776,6 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     }
   }
 
-  void _expandMiniPlayerToFullScreen() async {
-    if (_activeMiniChannel == null || _miniPlayer == null) return;
-
-    final name = _activeMiniChannel!['name']?.toString() ?? 'Live TV';
-    final stalkerId = (_activeMiniChannel!['stalker_id'] ?? _activeMiniChannel!['id']).toString();
-    final cmd = _activeMiniChannel!['cmd']?.toString() ?? '';
-    final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
-
-    await _miniPlayer!.pause();
-
-    final headers = await StalkerResolver.getLogoHeaders(portalId);
-    final streamUrl = await StalkerResolver.resolveStream(cmd, portalId).then((res) => res.url).catchError((_) => '');
-
-    if (!mounted) return;
-
-    final isError = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => VideoPlayerScreen(
-          videoSource: streamUrl,
-          title: name,
-          subtitle: 'Live TV | ${_activeMiniChannel!['category_name']}',
-          movieId: stalkerId,
-          imdbId: stalkerId,
-          isLive: true,
-          headers: headers,
-        ),
-      ),
-    );
-
-    if (isError != true && mounted && _miniPlayer != null) {
-      await _miniPlayer!.play();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

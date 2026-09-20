@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_image.dart';
+import 'package:private_cinema_mobile/widgets/ott_badge.dart';
 
 class MovieCard extends StatelessWidget {
   const MovieCard({
@@ -58,36 +59,11 @@ class MovieCard extends StatelessWidget {
                     fit: BoxFit.cover,
                     fallbackColor: movie.posterColor,
                   ),
-                  if (movie.isNew)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFFEC4899), Color(0xFF8B5CF6)],
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF8B5CF6).withValues(alpha: 0.4),
-                              blurRadius: 6,
-                              spreadRadius: 1,
-                            ),
-                          ],
-                        ),
-                        child: const Text(
-                          'NEW',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 8,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ),
-                    ),
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: AnimatedPosterBadge(movie: movie),
+                  ),
 
                   // Dark Bottom Scrim
                   if (!hideTitle)
@@ -193,8 +169,6 @@ class MovieCard extends StatelessWidget {
       );
     }
 
-    final borderCol = AppColors.accent;
-
     return Container(
       width: width,
       height: height,
@@ -226,36 +200,11 @@ class MovieCard extends StatelessWidget {
                   fallbackColor: movie.posterColor,
                 ),
 
-                if (movie.isNew)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFEC4899), Color(0xFF8B5CF6)],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF8B5CF6).withValues(alpha: 0.4),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                      child: const Text(
-                        'NEW',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 8,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ),
-                  ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: AnimatedPosterBadge(movie: movie),
+                ),
 
                 // Dark Bottom Scrim
                 if (!hideTitle)

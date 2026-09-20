@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class CinejoyResolver {
@@ -22,6 +22,22 @@ class CinejoyResolver {
     int? episode,
     bool isSeries = false,
   }) async {
+    // 1. Try remote module on shared hosting first
+    try {
+      final remoteStreams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'cinejoy',
+        title: title,
+        year: year,
+        tmdbId: tmdbId,
+      );
+      if (remoteStreams.isNotEmpty) {
+        debugPrint('CinejoyResolver: Got ${remoteStreams.length} streams via remote module');
+        return remoteStreams;
+      }
+    } catch (e) {
+      debugPrint('CinejoyResolver: Remote module bypass/failed: $e. Using client engine.');
+    }
+
     final domain = await getBaseDomain();
     final sources = <StreamSourceInfo>[];
 
@@ -35,7 +51,7 @@ class CinejoyResolver {
 
       sources.add(
         StreamSourceInfo(
-          name: 'Cinejoy HD Server (1080p)',
+          name: 'Primary HD Player (1080p)',
           url: streamUrl,
           type: StreamSourceType.cinejoy,
           headers: {
@@ -43,7 +59,7 @@ class CinejoyResolver {
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Referer': '$domain/',
           },
-          quality: '1080p',
+          quality: '1080p Full HD',
         ),
       );
 
@@ -54,7 +70,7 @@ class CinejoyResolver {
 
       sources.add(
         StreamSourceInfo(
-          name: 'Cinejoy VidSrc Mirror (1080p)',
+          name: 'VidSrc Fast Mirror (1080p)',
           url: vidsrcUrl,
           type: StreamSourceType.cinejoy,
           headers: {
@@ -62,12 +78,21 @@ class CinejoyResolver {
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Referer': '$domain/',
           },
-          quality: '1080p',
+          quality: '1080p Full HD',
         ),
       );
     }
 
-    debugPrint('CinejoyResolver: Resolved ${sources.length} sources');
-    return sources;
+    // Quality sort
+    final sorted = sortStreamsByQuality<StreamSourceInfo>(
+      sources,
+      getName: (s) => s.name,
+      getUrl: (s) => s.url,
+      getQuality: (s) => s.quality,
+      getSize: (s) => s.size,
+    );
+
+    debugPrint('CinejoyResolver: Resolved ${sorted.length} sources');
+    return sorted;
   }
 }

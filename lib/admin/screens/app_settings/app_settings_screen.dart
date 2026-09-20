@@ -5,6 +5,8 @@ import '../../utils/admin_api_client.dart';
 import '../../utils/tmdb_service.dart';
 import '../../providers/settings_provider.dart';
 import '../../widgets/common/glass_card.dart';
+import '../../../data/modular_source_service.dart';
+import '../../../data/simkl_service.dart';
 
 class AppSettingsScreen extends ConsumerStatefulWidget {
   const AppSettingsScreen({super.key});
@@ -19,6 +21,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   bool _isSaving = false;
   
   List<Map<String, dynamic>> _sources = [];
+  Map<String, String> _customModuleLabels = {};
   String _maxSourceSize = '0';
   List<Map<String, dynamic>> _portals = [];
   
@@ -41,17 +44,18 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _torrentioUrlCtrl = TextEditingController();
   final _stravoUrlCtrl = TextEditingController();
   final _vegamoviesUrlCtrl = TextEditingController();
+  final _netmirrorCenterUrlCtrl = TextEditingController();
   final _cinejoyUrlCtrl = TextEditingController();
   final _movieboxUrlCtrl = TextEditingController();
   final _moviesdriveUrlCtrl = TextEditingController();
   final _hdhub4uUrlCtrl = TextEditingController();
-  final _mkvbaseUrlCtrl = TextEditingController();
   final _movyUrlCtrl = TextEditingController();
   final _netmirrorDomainsCtrl = TextEditingController();
   final _seedrTokenCtrl = TextEditingController();
   final _epgUrlsCtrl = TextEditingController();
   final _tmdbApiKeyCtrl = TextEditingController();
   final _fanartApiKeyCtrl = TextEditingController();
+  final _simklClientIdCtrl = TextEditingController();
   
   // Track expanded addon states
   final Set<String> _expandedAddons = {};
@@ -72,17 +76,18 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _torrentioUrlCtrl.dispose();
     _stravoUrlCtrl.dispose();
     _vegamoviesUrlCtrl.dispose();
+    _netmirrorCenterUrlCtrl.dispose();
     _cinejoyUrlCtrl.dispose();
     _movieboxUrlCtrl.dispose();
     _moviesdriveUrlCtrl.dispose();
     _hdhub4uUrlCtrl.dispose();
-    _mkvbaseUrlCtrl.dispose();
     _movyUrlCtrl.dispose();
     _netmirrorDomainsCtrl.dispose();
     _seedrTokenCtrl.dispose();
     _epgUrlsCtrl.dispose();
     _tmdbApiKeyCtrl.dispose();
     _fanartApiKeyCtrl.dispose();
+    _simklClientIdCtrl.dispose();
     super.dispose();
   }
 
@@ -97,28 +102,120 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       // 2. Fetch Stalker Portals configured in admin panel
       final allPortals = await _adminApi.getStalkerSettings();
       
-      // 3. Parse Source Priority & Visibility
-      final allSources = ['streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'mkvbase', 'cinemm', 'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon', 'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'directLink'];
-      final List<String> enabledSources = [];
-      if (settingsMap.containsKey('source_order')) {
+      // 3. Parse Dynamic Modules & Source Priority & Visibility
+      _customModuleLabels.clear();
+      final List<String> dynamicModuleKeys = [];
+      if (settingsMap.containsKey('source_modules_json') && settingsMap['source_modules_json']!.isNotEmpty) {
         try {
-          final List<dynamic> parsed = jsonDecode(settingsMap['source_order']!);
-          for (final s in parsed) {
-            if (allSources.contains(s)) {
-              enabledSources.add(s.toString());
+          final decoded = jsonDecode(settingsMap['source_modules_json']!);
+          if (decoded is Map && decoded['modules'] is List) {
+            for (final m in decoded['modules']) {
+              if (m is Map && m['id'] != null) {
+                final k = m['id'].toString();
+                dynamicModuleKeys.add(k);
+                _customModuleLabels[k] = m['name']?.toString() ?? ModularSourceService.getModuleName(k);
+              }
             }
           }
         } catch (_) {}
       }
-      
-      final List<Map<String, dynamic>> parsedSources = [];
-      for (final s in enabledSources) {
-        parsedSources.add({'key': s, 'name': _getSourceLabel(s), 'enabled': true});
+      if (dynamicModuleKeys.isEmpty) {
+        try {
+          final mods = await ModularSourceService.fetchActiveModules();
+          for (final m in mods) {
+            final k = m['id'].toString();
+            dynamicModuleKeys.add(k);
+            _customModuleLabels[k] = m['name']?.toString() ?? ModularSourceService.getModuleName(k);
+          }
+        } catch (_) {}
       }
-      for (final s in allSources) {
-        if (!enabledSources.contains(s)) {
-          parsedSources.add({'key': s, 'name': _getSourceLabel(s), 'enabled': false});
+
+      final allSources = [
+        'streamplay',
+        'moviebox',
+        'movy',
+        'moviesdrive',
+        'hdhub4u',
+        'stalker',
+        'stravo',
+        'castle',
+        'torrent',
+        'stremioAddon',
+        'telegram',
+        'filmu',
+        'vegamovies',
+        'cinejoy',
+        'netmirror_center',
+        'netmirror_ott',
+        'streamtape',
+        'directLink',
+      ];
+      // Append any dynamic modules (like istreamflare) to allSources
+      for (final k in dynamicModuleKeys) {
+        if (!allSources.contains(k)) {
+          allSources.add(k);
         }
+      }
+
+      final List<String> orderedSources = [];
+      if (settingsMap.containsKey('source_order')) {
+        try {
+          final List<dynamic> parsed = jsonDecode(settingsMap['source_order']!);
+          for (final s in parsed) {
+            final strKey = s.toString();
+            // Only keep if currently valid in allSources (removes deleted modules automatically)
+            if (allSources.contains(strKey) && !orderedSources.contains(strKey)) {
+              orderedSources.add(strKey);
+            }
+          }
+        } catch (_) {}
+      }
+
+      // If netmirror_center is not in the saved source_order yet, insert it right after cinejoy/vegamovies!
+      if (!orderedSources.contains('netmirror_center')) {
+        final insertIdx = orderedSources.indexOf('cinejoy');
+        if (insertIdx != -1) {
+          orderedSources.insert(insertIdx + 1, 'netmirror_center');
+        } else {
+          final vIdx = orderedSources.indexOf('vegamovies');
+          if (vIdx != -1) {
+            orderedSources.insert(vIdx + 1, 'netmirror_center');
+          } else {
+            orderedSources.add('netmirror_center');
+          }
+        }
+      }
+
+      // If netmirror_ott is not in the saved source_order yet, insert it right after netmirror_center!
+      if (!orderedSources.contains('netmirror_ott')) {
+        final insertIdx = orderedSources.indexOf('netmirror_center');
+        if (insertIdx != -1) {
+          orderedSources.insert(insertIdx + 1, 'netmirror_ott');
+        } else {
+          orderedSources.add('netmirror_ott');
+        }
+      }
+
+      // Append any other missing sources from allSources
+      for (final s in allSources) {
+        if (!orderedSources.contains(s)) {
+          orderedSources.add(s);
+        }
+      }
+
+      final List<Map<String, dynamic>> parsedSources = [];
+      for (final s in orderedSources) {
+        final bool isEnabled;
+        if (settingsMap.containsKey('source_show_$s')) {
+          isEnabled = settingsMap['source_show_$s'] == 'true';
+        } else {
+          isEnabled = true;
+        }
+        parsedSources.add({
+          'key': s,
+          'name': _getSourceLabel(s),
+          'enabled': isEnabled,
+        });
       }
       
       // 4. Parse Max Stream Size
@@ -187,17 +284,18 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
        _vegamoviesUrlCtrl.text = settingsMap['domain_vegamovies'] ?? 'https://vegamovies.se';
+       _netmirrorCenterUrlCtrl.text = settingsMap['domain_netmirror_center'] ?? 'https://netmirror.center';
       _cinejoyUrlCtrl.text = settingsMap['domain_cinejoy'] ?? 'https://cinejoy.to';
       _movieboxUrlCtrl.text = settingsMap['domain_moviebox'] ?? 'https://api4.aoneroom.com';
       _moviesdriveUrlCtrl.text = settingsMap['domain_moviesdrive'] ?? 'https://new3.moviesdrive.christmas';
       _hdhub4uUrlCtrl.text = settingsMap['domain_hdhub4u'] ?? 'https://new5.hdhub4u.cl';
-      _mkvbaseUrlCtrl.text = settingsMap['domain_mkvbase'] ?? 'https://mkvbase.site';
       _movyUrlCtrl.text = settingsMap['domain_movy'] ?? 'https://movy.bz';
       _netmirrorDomainsCtrl.text = settingsMap['netmirror_domains'] ?? '';
       _seedrTokenCtrl.text = settingsMap['seedr_token'] ?? '';
       _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
       _tmdbApiKeyCtrl.text = settingsMap['tmdb_api_key'] ?? '';
       _fanartApiKeyCtrl.text = settingsMap['fanart_api_key'] ?? '';
+      _simklClientIdCtrl.text = settingsMap['simkl_client_id'] ?? SimklService.clientId;
 
       if (mounted) {
         setState(() {
@@ -219,15 +317,16 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   }
 
   String _getSourceLabel(String key) {
+    if (_customModuleLabels.containsKey(key)) {
+      return _customModuleLabels[key]!;
+    }
     switch (key) {
       case 'streamplay': return 'StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)';
       case 'movy': return 'Movy.bz Multi-Source (Multi-Audio & Multi-Quality)';
       case 'moviesdrive': return 'MoviesDrive FSL (Fast Server, R2 & S3 Multi-Audio)';
       case 'hdhub4u': return 'HDHub4u (4K UHD & Dolby Atmos Multi-Audio)';
-      case 'mkvbase': return 'MKVBase / HubCloud (Indian Multi-Audio 1080p/4K)';
       case 'vidlink': return 'VidLink Server';
       case 'netmirror': return 'NetMirror Server';
-      case 'cinemm': return 'CineMM Server';
       case 'stalker': return 'Stalker VOD Server';
       case 'stravo': return 'Stravo Server';
       case 'castle': return 'Castle TV';
@@ -237,10 +336,12 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'filmu': return 'FilmU Premium Server';
       case 'moviebox': return 'MovieBox Server';
       case 'vegamovies': return 'Vegamovies.se Server';
+      case 'netmirror_center': return 'NetMirror Center Server';
+      case 'netmirror_ott': return 'NetMirror OTT Server (Netflix/Prime/Hotstar)';
       case 'cinejoy': return 'Cinejoy.to Server';
       case 'streamtape': return 'Streamtape Server';
       case 'directLink': return 'Direct Links';
-      default: return key;
+      default: return ModularSourceService.getModuleName(key);
     }
   }
 
@@ -356,21 +457,26 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'torrentio_addon_url': _torrentioUrlCtrl.text.trim(),
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
+        'domain_netmirror_center': _netmirrorCenterUrlCtrl.text.trim(),
         'domain_cinejoy': _cinejoyUrlCtrl.text.trim(),
         'domain_moviebox': _movieboxUrlCtrl.text.trim(),
         'domain_moviesdrive': _moviesdriveUrlCtrl.text.trim(),
         'domain_hdhub4u': _hdhub4uUrlCtrl.text.trim(),
-        'domain_mkvbase': _mkvbaseUrlCtrl.text.trim(),
         'domain_movy': _movyUrlCtrl.text.trim(),
         'netmirror_domains': _netmirrorDomainsCtrl.text.trim(),
         'seedr_token': _seedrTokenCtrl.text.trim(),
         'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
         'tmdb_api_key': _tmdbApiKeyCtrl.text.trim(),
         'fanart_api_key': _fanartApiKeyCtrl.text.trim(),
+        'simkl_client_id': _simklClientIdCtrl.text.trim(),
       };
       
       TmdbService.customApiKey = _tmdbApiKeyCtrl.text.trim();
       TmdbService.customFanartApiKey = _fanartApiKeyCtrl.text.trim();
+      final simklKey = _simklClientIdCtrl.text.trim();
+      if (simklKey.isNotEmpty) {
+        await SimklService.saveClientId(simklKey);
+      }
       
       for (final s in _sources) {
         newSettings['source_show_${s['key']}'] = s['enabled'] == true ? 'true' : 'false';
@@ -1339,6 +1445,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
               ),
               const SizedBox(height: 16),
               _buildInputRow(
+                icon: Icons.public_rounded,
+                label: 'NetMirror Center Domain',
+                controller: _netmirrorCenterUrlCtrl,
+                hint: 'https://netmirror.center',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
                 icon: Icons.play_circle_fill_rounded,
                 label: 'Cinejoy Domain',
                 controller: _cinejoyUrlCtrl,
@@ -1367,13 +1480,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
               ),
               const SizedBox(height: 16),
               _buildInputRow(
-                icon: Icons.layers_rounded,
-                label: 'MKVBase Domain',
-                controller: _mkvbaseUrlCtrl,
-                hint: 'https://mkvbase.site',
-              ),
-              const SizedBox(height: 16),
-              _buildInputRow(
                 icon: Icons.auto_awesome_motion_rounded,
                 label: 'Movy.bz Domain',
                 controller: _movyUrlCtrl,
@@ -1385,6 +1491,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Seedr.cc Auth Token (shared)',
                 controller: _seedrTokenCtrl,
                 hint: 'Paste Seedr.cc auth token',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.movie_filter_rounded,
+                label: 'SIMKL Client ID (Secret API Key)',
+                controller: _simklClientIdCtrl,
+                hint: 'Paste SIMKL Developer Client ID (64-char key)',
               ),
             ],
           ),

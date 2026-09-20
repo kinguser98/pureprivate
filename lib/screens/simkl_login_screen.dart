@@ -26,6 +26,7 @@ class _SimklLoginScreenState extends State<SimklLoginScreen> {
   @override
   void initState() {
     super.initState();
+    _clientIdController.text = SimklService.clientId;
     _startPinAuth();
   }
 

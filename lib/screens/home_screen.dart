@@ -24,6 +24,7 @@ import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
+import 'package:private_cinema_mobile/widgets/ott_badge.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(int)? onSwitchTab;
@@ -80,14 +81,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startCarouselTimer() {
-    _carouselTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
+    _carouselTimer = Timer.periodic(const Duration(milliseconds: 3500), (timer) {
       final carouselMovies = _getCarouselMovies();
       if (carouselMovies.isNotEmpty && _carouselController.hasClients) {
         final next = _carouselController.page!.round() + 1;
         _carouselController.animateToPage(
           next,
-          duration: const Duration(milliseconds: 650),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeInOutCubic,
         );
       }
     });
@@ -136,7 +137,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final rawMovies = rawData['movies'] as List<dynamic>? ?? [];
       final rawLanguages = rawData['languages'] as List<dynamic>? ?? [];
 
-      final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages);
+      final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages, true);
+      ApiService.cachedMovies = parsedMovies;
       final parsedLanguages = ApiService.parseLanguages(rawLanguages);
 
       final recentList = parsedMovies.take(15).toList();
@@ -147,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final vb = int.tryParse(b['views']?.toString() ?? '0') ?? 0;
           return vb.compareTo(va);
         });
-      final parsedTrending = ApiService.parseMovies(rawTrending);
+      final parsedTrending = ApiService.parseMovies(rawTrending, null, false);
 
       final parsedTopRated = List<Movie>.from(parsedMovies)
         ..sort((a, b) => b.rating.compareTo(a.rating));
@@ -975,6 +977,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
+                    ),
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: AnimatedPosterBadge(movie: movie, ottSize: 24),
                     ),
                     if (movie.rating > 0)
                       Positioned(

@@ -104,7 +104,7 @@ abstract final class PlaybackTracker {
         final jsonString = utf8.decode(response.bodyBytes);
         final rawList = json.decode(jsonString) as List<dynamic>;
         
-        final parsed = ApiService.parseMovies(rawList);
+        final parsed = ApiService.parseMovies(rawList, null, false);
         for (var i = 0; i < parsed.length; i++) {
           final rawItem = rawList[i];
           final pos = int.tryParse(rawItem['position_ms']?.toString() ?? '0') ?? 0;
@@ -162,6 +162,7 @@ abstract final class PlaybackTracker {
       tags: movie.tags,
       cast: movie.cast,
       director: movie.director,
+      directorPhoto: movie.directorPhoto,
       videoSource: movie.videoSource,
       trailerUrl: movie.trailerUrl,
       castMembers: movie.castMembers,
@@ -169,6 +170,12 @@ abstract final class PlaybackTracker {
       tmdbId: movie.tmdbId,
       imdbId: movie.imdbId,
       streamSources: movie.streamSources,
+      collection: movie.collection,
+      isNew: movie.isNew,
+      ottName: movie.ottName,
+      ottLogo: movie.ottLogo,
+      ottId: movie.ottId,
+      logoUrl: movie.logoUrl,
     );
   }
 }

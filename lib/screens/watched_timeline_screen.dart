@@ -7,11 +7,35 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
-import '../theme/app_colors.dart';
 import '../data/simkl_service.dart';
 import '../data/tmdb_service.dart';
 import '../widgets/quick_movie_rater_dialog.dart';
 import 'movie_detail_screen.dart';
+
+class MonthTimelineGroup {
+  final String key; // e.g. "2026-08"
+  final String displayTitle; // e.g. "August 2026"
+  final String shortMonth; // e.g. "AUG"
+  final int year;
+  final int month;
+  final List<SimklHistoryItem> items;
+
+  MonthTimelineGroup({
+    required this.key,
+    required this.displayTitle,
+    required this.shortMonth,
+    required this.year,
+    required this.month,
+    required this.items,
+  });
+
+  double get avgRating {
+    final rated = items.where((i) => i.userRating != null && i.userRating! > 0).toList();
+    if (rated.isEmpty) return 0.0;
+    final sum = rated.map((i) => i.userRating!).reduce((a, b) => a + b);
+    return sum / rated.length;
+  }
+}
 
 class WatchedTimelineScreen extends StatefulWidget {
   const WatchedTimelineScreen({super.key});
@@ -25,6 +49,12 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
   bool _isLoading = true;
   final Map<String, Map<String, dynamic>> _manualOverrides = {};
   final ScrollController _scrollController = ScrollController();
+
+  // Timeline Mode: 'watched_date' vs 'release_date'
+  String _dateMode = 'watched_date';
+
+  // Selected Month Key for Drilldown (null = Month Stacks Overview)
+  String? _selectedMonthKey;
 
   // Live Ambience & Wallpaper Settings
   String _bgWallpaperUrl = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1280&auto=format&fit=crop';
@@ -72,6 +102,7 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
         _bgBlur = prefs.getDouble('timeline_bg_blur') ?? _bgBlur;
         _bgVignette = prefs.getDouble('timeline_bg_vignette') ?? _bgVignette;
         _bgDarkness = prefs.getDouble('timeline_bg_darkness') ?? _bgDarkness;
+        _dateMode = prefs.getString('timeline_date_mode') ?? 'watched_date';
       });
     } catch (_) {}
   }
@@ -82,6 +113,25 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
     await prefs.setDouble('timeline_bg_blur', _bgBlur);
     await prefs.setDouble('timeline_bg_vignette', _bgVignette);
     await prefs.setDouble('timeline_bg_darkness', _bgDarkness);
+    await prefs.setString('timeline_date_mode', _dateMode);
+  }
+
+  DateTime _getEffectiveDate(SimklHistoryItem item) {
+    if (_dateMode == 'release_date') {
+      if (item.releaseDate != null) return item.releaseDate!;
+      if (item.movie.year != null && item.movie.year! > 1800) {
+        return DateTime(item.movie.year!, 1, 1);
+      }
+    }
+    return item.watchedAt;
+  }
+
+  void _sortItems() {
+    _historyItems.sort((a, b) {
+      final aDate = _getEffectiveDate(a);
+      final bDate = _getEffectiveDate(b);
+      return bDate.compareTo(aDate);
+    });
   }
 
   Future<void> _loadTimeline() async {
@@ -89,14 +139,19 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
     await _loadLocalOverrides();
     final items = await SimklService.fetchWatchedTimeline();
 
-    // Apply any local manual overrides (Custom release date, custom rating, etc.)
+    // Apply any local manual overrides (Custom release date, watched date, rating, etc.)
     for (int i = 0; i < items.length; i++) {
       final key = items[i].movie.tmdbId ?? items[i].movie.id;
       if (_manualOverrides.containsKey(key)) {
         final override = _manualOverrides[key]!;
-        DateTime customDate = items[i].watchedAt;
-        if (override['release_date'] != null) {
-          customDate = DateTime.tryParse(override['release_date']) ?? items[i].watchedAt;
+        DateTime customWatched = items[i].watchedAt;
+        // Only override watched date if explicitly modified by the user in the timeline editor
+        if (override['is_manual_date'] == true && override['watched_date'] != null) {
+          customWatched = DateTime.tryParse(override['watched_date'].toString()) ?? items[i].watchedAt;
+        }
+        DateTime? customRelease = items[i].releaseDate;
+        if (override['is_manual_release'] == true && override['release_date'] != null) {
+          customRelease = DateTime.tryParse(override['release_date'].toString()) ?? items[i].releaseDate;
         }
         double? customRating = items[i].userRating;
         if (override['rating'] != null) {
@@ -104,23 +159,45 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
         }
         items[i] = SimklHistoryItem(
           movie: items[i].movie,
-          watchedAt: customDate,
+          watchedAt: customWatched,
+          releaseDate: customRelease,
           userRating: customRating,
         );
       }
     }
 
-    // Sort chronologically by Release Date (Newest to Oldest)
-    items.sort((a, b) {
-      final aYear = a.movie.year ?? a.watchedAt.year;
-      final bYear = b.movie.year ?? b.watchedAt.year;
-      if (aYear != bYear) return bYear.compareTo(aYear);
-      return b.watchedAt.compareTo(a.watchedAt);
+    // Include locally rated movies from Quick Movie Rater that might still be syncing
+    final existingKeys = items.map((i) => i.movie.tmdbId ?? i.movie.id).toSet();
+    _manualOverrides.forEach((key, data) {
+      if (!existingKeys.contains(key) && data['title'] != null) {
+        final relDate = data['release_date'] != null ? DateTime.tryParse(data['release_date'].toString()) : null;
+        final watchDate = data['watched_date'] != null
+            ? (DateTime.tryParse(data['watched_date'].toString()) ?? DateTime.now())
+            : (relDate ?? DateTime.now());
+        final rating = data['rating'] != null ? (data['rating'] as num).toDouble() : null;
+        items.add(SimklHistoryItem(
+          movie: Movie(
+            id: key,
+            title: data['title']?.toString() ?? 'Movie',
+            year: data['year'] as int? ?? relDate?.year ?? watchDate.year,
+            description: data['notes']?.toString() ?? '',
+            tmdbId: key,
+            genre: 'Rated',
+            posterUrl: data['poster_url']?.toString() ?? '',
+            rating: (rating ?? 0.0) * 2,
+          ),
+          watchedAt: watchDate,
+          releaseDate: relDate ?? watchDate,
+          userRating: rating,
+        ));
+      }
     });
+
+    _historyItems = items;
+    _sortItems();
 
     if (mounted) {
       setState(() {
-        _historyItems = items;
         _isLoading = false;
       });
     }
@@ -149,6 +226,30 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
     _loadTimeline();
   }
 
+  List<MonthTimelineGroup> _getMonthGroups() {
+    final Map<String, List<SimklHistoryItem>> map = {};
+    for (final item in _historyItems) {
+      final d = _getEffectiveDate(item);
+      final key = DateFormat('yyyy-MM').format(d);
+      map.putIfAbsent(key, () => []).add(item);
+    }
+
+    final keys = map.keys.toList()..sort((a, b) => b.compareTo(a));
+
+    return keys.map((key) {
+      final list = map[key]!;
+      final firstDate = _getEffectiveDate(list.first);
+      return MonthTimelineGroup(
+        key: key,
+        displayTitle: DateFormat('MMMM yyyy').format(firstDate),
+        shortMonth: DateFormat('MMM').format(firstDate).toUpperCase(),
+        year: firstDate.year,
+        month: firstDate.month,
+        items: list,
+      );
+    }).toList();
+  }
+
   void _showLiveAmbienceSettings() {
     HapticFeedback.mediumImpact();
     showModalBottomSheet<void>(
@@ -160,125 +261,236 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
           builder: (ctx, setModalState) {
             return Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.palette_rounded, color: Colors.amberAccent, size: 22),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Live Ambience & Wallpaper',
+                              style: GoogleFonts.outfit(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.check_circle_rounded, color: Colors.amberAccent),
+                          onPressed: () {
+                            _saveSettings();
+                            Navigator.of(ctx).pop();
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Date Mode Toggle
+                    Text(
+                      'Timeline Date Grouping Mode',
+                      style: GoogleFonts.outfit(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      padding: const EdgeInsets.all(4),
+                      child: Row(
                         children: [
-                          const Icon(Icons.palette_rounded, color: Colors.amberAccent, size: 22),
-                          const SizedBox(width: 10),
-                          Text(
-                            'Live Ambience & Wallpaper',
-                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _dateMode = 'watched_date';
+                                  _sortItems();
+                                });
+                                setModalState(() {});
+                                _saveSettings();
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: _dateMode == 'watched_date' ? Colors.amberAccent : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.visibility_rounded,
+                                        size: 15,
+                                        color: _dateMode == 'watched_date' ? Colors.black : Colors.white70,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Watched Date',
+                                        style: GoogleFonts.outfit(
+                                          color: _dateMode == 'watched_date' ? Colors.black : Colors.white70,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _dateMode = 'release_date';
+                                  _sortItems();
+                                });
+                                setModalState(() {});
+                                _saveSettings();
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: _dateMode == 'release_date' ? Colors.amberAccent : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.theaters_rounded,
+                                        size: 15,
+                                        color: _dateMode == 'release_date' ? Colors.black : Colors.white70,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Release Date',
+                                        style: GoogleFonts.outfit(
+                                          color: _dateMode == 'release_date' ? Colors.black : Colors.white70,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.check_circle_rounded, color: Colors.amberAccent),
-                        onPressed: () {
-                          _saveSettings();
-                          Navigator.of(ctx).pop();
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _dateMode == 'watched_date'
+                          ? '• Showing timeline based on exact date watched/rated.'
+                          : '• Showing timeline based on theatrical movie release date.',
+                      style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Wallpaper Presets
+                    Text('Backdrop Theme', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 40,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _presetWallpapers.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (context, i) {
+                          final preset = _presetWallpapers[i];
+                          final isSel = _bgWallpaperUrl == preset['url'];
+                          return ChoiceChip(
+                            label: Text(preset['name']!),
+                            selected: isSel,
+                            selectedColor: Colors.amberAccent,
+                            labelStyle: TextStyle(
+                              color: isSel ? Colors.black : Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                            backgroundColor: Colors.white10,
+                            onSelected: (_) {
+                              setState(() => _bgWallpaperUrl = preset['url']!);
+                              setModalState(() {});
+                              _saveSettings();
+                            },
+                          );
                         },
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                    ),
 
-                  // Wallpaper Presets
-                  Text('Backdrop Theme', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 40,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _presetWallpapers.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, i) {
-                        final preset = _presetWallpapers[i];
-                        final isSel = _bgWallpaperUrl == preset['url'];
-                        return ChoiceChip(
-                          label: Text(preset['name']!),
-                          selected: isSel,
-                          selectedColor: Colors.amberAccent,
-                          labelStyle: TextStyle(
-                            color: isSel ? Colors.black : Colors.white70,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                          backgroundColor: Colors.white10,
-                          onSelected: (_) {
-                            setState(() => _bgWallpaperUrl = preset['url']!);
-                            setModalState(() {});
-                            _saveSettings();
-                          },
-                        );
+                    const SizedBox(height: 16),
+
+                    // Blur Slider
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Glass Blur Intensity', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
+                        Text('${_bgBlur.toStringAsFixed(0)} px', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    Slider(
+                      value: _bgBlur,
+                      min: 0.0,
+                      max: 25.0,
+                      activeColor: Colors.amberAccent,
+                      onChanged: (v) {
+                        setState(() => _bgBlur = v);
+                        setModalState(() {});
                       },
                     ),
-                  ),
 
-                  const SizedBox(height: 16),
+                    // Vignette Edge Darkening Slider
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Edge Vignette Darkness', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
+                        Text('${(_bgVignette * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    Slider(
+                      value: _bgVignette,
+                      min: 0.0,
+                      max: 1.0,
+                      activeColor: Colors.amberAccent,
+                      onChanged: (v) {
+                        setState(() => _bgVignette = v);
+                        setModalState(() {});
+                      },
+                    ),
 
-                  // Blur Slider
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Glass Blur Intensity', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
-                      Text('${_bgBlur.toStringAsFixed(0)} px', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  Slider(
-                    value: _bgBlur,
-                    min: 0.0,
-                    max: 25.0,
-                    activeColor: Colors.amberAccent,
-                    onChanged: (v) {
-                      setState(() => _bgBlur = v);
-                      setModalState(() {});
-                    },
-                  ),
-
-                  // Vignette Edge Darkening Slider
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Edge Vignette Darkness', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
-                      Text('${(_bgVignette * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  Slider(
-                    value: _bgVignette,
-                    min: 0.0,
-                    max: 1.0,
-                    activeColor: Colors.amberAccent,
-                    onChanged: (v) {
-                      setState(() => _bgVignette = v);
-                      setModalState(() {});
-                    },
-                  ),
-
-                  // Background Dimming Slider
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Background Dimming', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
-                      Text('${(_bgDarkness * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  Slider(
-                    value: _bgDarkness,
-                    min: 0.1,
-                    max: 0.95,
-                    activeColor: Colors.amberAccent,
-                    onChanged: (v) {
-                      setState(() => _bgDarkness = v);
-                      setModalState(() {});
-                    },
-                  ),
-                ],
+                    // Background Dimming Slider
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Background Dimming', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13)),
+                        Text('${(_bgDarkness * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    Slider(
+                      value: _bgDarkness,
+                      min: 0.1,
+                      max: 0.95,
+                      activeColor: Colors.amberAccent,
+                      onChanged: (v) {
+                        setState(() => _bgDarkness = v);
+                        setModalState(() {});
+                      },
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -290,7 +502,8 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
   void _showEditItemSheet(SimklHistoryItem item) {
     HapticFeedback.mediumImpact();
     final movieId = item.movie.tmdbId ?? item.movie.id;
-    DateTime selectedDate = item.watchedAt;
+    DateTime selectedWatchedDate = item.watchedAt;
+    DateTime selectedReleaseDate = item.releaseDate ?? item.watchedAt;
     double selectedRating = item.userRating ?? 4.0;
     final noteController = TextEditingController(
       text: _manualOverrides[movieId]?['notes']?.toString() ?? '',
@@ -306,152 +519,219 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
           builder: (ctx, setSheetState) {
             return Padding(
               padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(ctx).viewInsets.bottom + 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.amberAccent.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(12),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.amberAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.edit_calendar_rounded, color: Colors.amberAccent, size: 22),
                         ),
-                        child: const Icon(Icons.edit_calendar_rounded, color: Colors.amberAccent, size: 22),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Edit Timeline Entry',
+                                style: GoogleFonts.outfit(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                item.movie.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+
+                    // 1. Watched Date Picker
+                    Text('Watched / Rating Date', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedWatchedDate,
+                          firstDate: DateTime(1900),
+                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                          builder: (context, child) {
+                            return Theme(
+                              data: ThemeData.dark().copyWith(
+                                colorScheme: const ColorScheme.dark(
+                                  primary: Colors.amberAccent,
+                                  onPrimary: Colors.black,
+                                  surface: Color(0xFF1E293B),
+                                  onSurface: Colors.white,
+                                ),
+                              ),
+                              child: child!,
+                            );
+                          },
+                        );
+                        if (picked != null) {
+                          setSheetState(() => selectedWatchedDate = picked);
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Row(
                           children: [
+                            const Icon(Icons.visibility_rounded, color: Colors.amberAccent, size: 18),
+                            const SizedBox(width: 10),
                             Text(
-                              'Edit Timeline Entry',
-                              style: GoogleFonts.outfit(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
-                            ),
-                            Text(
-                              item.movie.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              DateFormat('dd MMMM yyyy').format(selectedWatchedDate),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
+                    ),
+                    const SizedBox(height: 14),
 
-                  // 1. Release / Timeline Date Picker
-                  Text('Release / Timeline Date', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  InkWell(
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: selectedDate,
-                        firstDate: DateTime(1900),
-                        lastDate: DateTime.now().add(const Duration(days: 365)),
-                        builder: (context, child) {
-                          return Theme(
-                            data: ThemeData.dark().copyWith(
-                              colorScheme: const ColorScheme.dark(
-                                primary: Colors.amberAccent,
-                                onPrimary: Colors.black,
-                                surface: Color(0xFF1E293B),
-                                onSurface: Colors.white,
+                    // 2. Theatrical Release Date Picker
+                    Text('Theatrical Release Date', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedReleaseDate,
+                          firstDate: DateTime(1900),
+                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                          builder: (context, child) {
+                            return Theme(
+                              data: ThemeData.dark().copyWith(
+                                colorScheme: const ColorScheme.dark(
+                                  primary: Colors.amberAccent,
+                                  onPrimary: Colors.black,
+                                  surface: Color(0xFF1E293B),
+                                  onSurface: Colors.white,
+                                ),
                               ),
+                              child: child!,
+                            );
+                          },
+                        );
+                        if (picked != null) {
+                          setSheetState(() => selectedReleaseDate = picked);
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.theaters_rounded, color: Colors.amberAccent, size: 18),
+                            const SizedBox(width: 10),
+                            Text(
+                              DateFormat('dd MMMM yyyy').format(selectedReleaseDate),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                             ),
-                            child: child!,
-                          );
-                        },
-                      );
-                      if (picked != null) {
-                        setSheetState(() => selectedDate = picked);
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.calendar_month_rounded, color: Colors.amberAccent, size: 20),
-                          const SizedBox(width: 10),
-                          Text(
-                            DateFormat('dd MMMM yyyy').format(selectedDate),
-                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                          ),
-                          const Spacer(),
-                          const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 14),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 16),
 
-                  const SizedBox(height: 18),
-
-                  // 2. Personal Star Rating
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Your Rating', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                      Text(
-                        '${selectedRating.toStringAsFixed(selectedRating % 1 == 0 ? 0 : 1)} / 5 ★',
-                        style: GoogleFonts.outfit(color: Colors.amberAccent, fontSize: 14, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  SliderTheme(
-                    data: SliderTheme.of(ctx).copyWith(
-                      activeTrackColor: Colors.amberAccent,
-                      thumbColor: Colors.amberAccent,
-                      inactiveTrackColor: Colors.white24,
+                    // 3. User Rating Slider
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Your Rating', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                        Row(
+                          children: [
+                            const Icon(Icons.star_rounded, color: Colors.amberAccent, size: 18),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${selectedRating.toStringAsFixed(1)} / 5.0',
+                              style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                    child: Slider(
+                    Slider(
                       value: selectedRating,
                       min: 0.5,
                       max: 5.0,
                       divisions: 9,
+                      activeColor: Colors.amberAccent,
+                      label: selectedRating.toStringAsFixed(1),
                       onChanged: (v) => setSheetState(() => selectedRating = v),
                     ),
-                  ),
+                    const SizedBox(height: 12),
 
-                  const SizedBox(height: 16),
-
-                  // Save Action Button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amberAccent,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    // 4. Personal Memory / Note
+                    Text('Memory / Note', style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: noteController,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'e.g. Watched in theater with friends...',
+                        hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       ),
-                      onPressed: () async {
-                        Navigator.of(ctx).pop();
-                        await _saveLocalOverride(movieId, {
-                          'release_date': selectedDate.toIso8601String(),
-                          'rating': selectedRating,
-                          'notes': noteController.text.trim(),
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Updated "${item.movie.title}" in Timeline!'),
-                            backgroundColor: const Color(0xFF10B981),
-                          ),
-                        );
-                      },
-                      child: const Text('Save Timeline Changes', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 20),
+
+                    // Save Button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.amberAccent,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          elevation: 4,
+                        ),
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _saveLocalOverride(movieId, {
+                            'release_date': selectedReleaseDate.toIso8601String(),
+                            'watched_date': selectedWatchedDate.toIso8601String(),
+                            'rating': selectedRating,
+                            'notes': noteController.text.trim(),
+                            'is_manual_date': true,
+                            'is_manual_release': true,
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Updated "${item.movie.title}" in Timeline!'),
+                              backgroundColor: const Color(0xFF10B981),
+                            ),
+                          );
+                        },
+                        child: const Text('Save Timeline Changes', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -498,126 +778,199 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF090D16),
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F172A).withOpacity(0.85),
-        elevation: 0,
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(color: Colors.transparent),
-          ),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFD97706)]),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.movie_filter_rounded, color: Colors.black, size: 17),
+    return PopScope(
+      canPop: _selectedMonthKey == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectedMonthKey != null) {
+          setState(() => _selectedMonthKey = null);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF090D16),
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0F172A).withOpacity(0.85),
+          elevation: 0,
+          flexibleSpace: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: Container(color: Colors.transparent),
             ),
-            const SizedBox(width: 10),
-            Text(
-              'My Watch Timeline',
-              style: GoogleFonts.outfit(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.3,
+          ),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+            onPressed: () {
+              if (_selectedMonthKey != null) {
+                setState(() => _selectedMonthKey = null);
+              } else {
+                Navigator.of(context).pop();
+              }
+            },
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFFF59E0B), Color(0xFFD97706)]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.movie_filter_rounded, color: Colors.black, size: 17),
               ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _selectedMonthKey != null ? 'Month Timeline' : 'My Watch Timeline',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    Text(
+                      _dateMode == 'watched_date' ? 'By Watched Date' : 'By Release Date',
+                      style: const TextStyle(color: Colors.amberAccent, fontSize: 10.5, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            // Quick Date Mode Toggle Pill
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _dateMode = _dateMode == 'watched_date' ? 'release_date' : 'watched_date';
+                  _sortItems();
+                });
+                _saveSettings();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    duration: const Duration(seconds: 1),
+                    content: Text(
+                      _dateMode == 'watched_date'
+                          ? 'Timeline Mode: Watched / Rating Date'
+                          : 'Timeline Mode: Theatrical Release Date',
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amberAccent.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.amberAccent.withOpacity(0.6), width: 1),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _dateMode == 'watched_date' ? Icons.visibility_rounded : Icons.theaters_rounded,
+                      size: 13,
+                      color: Colors.amberAccent,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _dateMode == 'watched_date' ? 'Watched' : 'Release',
+                      style: GoogleFonts.outfit(
+                        color: Colors.amberAccent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.auto_awesome_rounded, color: Colors.amberAccent),
+              tooltip: 'Quick Movie Rater',
+              onPressed: () {
+                final existingIds = _historyItems
+                    .map((item) => item.movie.tmdbId ?? item.movie.id)
+                    .where((id) => id.isNotEmpty)
+                    .toList();
+                QuickMovieRaterDialog.show(
+                  context,
+                  existingRatedTmdbIds: existingIds,
+                  onDataChanged: _loadTimeline,
+                );
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.palette_rounded, color: Colors.amberAccent),
+              tooltip: 'Live Ambience & Wallpaper',
+              onPressed: _showLiveAmbienceSettings,
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+              tooltip: 'Refresh Timeline',
+              onPressed: _loadTimeline,
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.auto_awesome_rounded, color: Colors.amberAccent),
-            tooltip: 'Quick Movie Rater',
-            onPressed: () {
-              final existingIds = _historyItems
-                  .map((item) => item.movie.tmdbId ?? item.movie.id)
-                  .where((id) => id.isNotEmpty)
-                  .toList();
-              QuickMovieRaterDialog.show(
-                context,
-                existingRatedTmdbIds: existingIds,
-                onDataChanged: _loadTimeline,
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.palette_rounded, color: Colors.amberAccent),
-            tooltip: 'Live Ambience & Wallpaper',
-            onPressed: _showLiveAmbienceSettings,
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            tooltip: 'Refresh Timeline',
-            onPressed: _loadTimeline,
-          ),
-        ],
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. Live Wallpaper Background
-          if (_bgWallpaperUrl.isNotEmpty)
-            CachedNetworkImage(
-              imageUrl: _bgWallpaperUrl,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => Container(color: const Color(0xFF090D16)),
-              errorWidget: (_, __, ___) => Container(color: const Color(0xFF090D16)),
-            ),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            // 1. Live Wallpaper Background
+            if (_bgWallpaperUrl.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: _bgWallpaperUrl,
+                fit: BoxFit.cover,
+                placeholder: (_, __) => Container(color: const Color(0xFF090D16)),
+                errorWidget: (_, __, ___) => Container(color: const Color(0xFF090D16)),
+              ),
 
-          // 2. Live Glass Blur Filter
-          ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: _bgBlur, sigmaY: _bgBlur),
-              child: Container(color: Colors.black.withOpacity(_bgDarkness)),
-            ),
-          ),
-
-          // 3. Live Edge Vignette Radial Overlay
-          Container(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment.center,
-                radius: 1.1,
-                colors: [
-                  Colors.transparent,
-                  Colors.black.withOpacity(_bgVignette * 0.4),
-                  Colors.black.withOpacity(_bgVignette),
-                ],
-                stops: const [0.35, 0.75, 1.0],
+            // 2. Live Glass Blur Filter
+            ClipRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: _bgBlur, sigmaY: _bgBlur),
+                child: Container(color: Colors.black.withOpacity(_bgDarkness)),
               ),
             ),
-          ),
 
-          // 4. Main Timeline Content
-          SafeArea(
-            child: _isLoading
-                ? const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(color: Colors.amberAccent),
-                        SizedBox(height: 16),
-                        Text('Loading your watch timeline...', style: TextStyle(color: Colors.white70)),
-                      ],
-                    ),
-                  )
-                : _historyItems.isEmpty
-                    ? _buildEmptyState()
-                    : _buildTimelineContent(),
-          ),
-        ],
+            // 3. Live Edge Vignette Radial Overlay
+            Container(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.center,
+                  radius: 1.1,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withOpacity(_bgVignette * 0.4),
+                    Colors.black.withOpacity(_bgVignette),
+                  ],
+                  stops: const [0.35, 0.75, 1.0],
+                ),
+              ),
+            ),
+
+            // 4. Main Timeline Content
+            SafeArea(
+              child: _isLoading
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(color: Colors.amberAccent),
+                          SizedBox(height: 16),
+                          Text('Loading your watch timeline...', style: TextStyle(color: Colors.white70)),
+                        ],
+                      ),
+                    )
+                  : _historyItems.isEmpty
+                      ? _buildEmptyState()
+                      : _buildTimelineContent(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -669,16 +1022,33 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
   }
 
   Widget _buildTimelineContent() {
-    // Group movie counts per month for dynamic proportional sizing
-    final Map<String, int> monthCounts = {};
-    for (final item in _historyItems) {
-      final key = DateFormat('MMM yyyy').format(item.watchedAt);
-      monthCounts[key] = (monthCounts[key] ?? 0) + 1;
+    final groups = _getMonthGroups();
+
+    if (_selectedMonthKey != null) {
+      final selectedGroup = groups.firstWhere(
+        (g) => g.key == _selectedMonthKey,
+        orElse: () => groups.isNotEmpty ? groups.first : MonthTimelineGroup(
+          key: '',
+          displayTitle: '',
+          shortMonth: '',
+          year: 0,
+          month: 0,
+          items: [],
+        ),
+      );
+
+      return _buildSingleMonthDetailedView(selectedGroup);
     }
 
+    // Default: Month Stacks Overview View
+    return _buildMonthStacksOverview(groups);
+  }
+
+  /// Primary Month Stacks Overview (Fanned decks per month with live wave zoom)
+  Widget _buildMonthStacksOverview(List<MonthTimelineGroup> groups) {
     return Column(
       children: [
-        // Top Glass Stats Bar (Completed • Avg Score • Total Watch Hours)
+        // Top Glass Stats Bar (Completed • Months • Avg Score • Watch Time)
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -692,6 +1062,8 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
             children: [
               _buildStatMetric(Icons.movie_creation_rounded, '${_historyItems.length}', 'Completed'),
               Container(width: 1, height: 24, color: Colors.white12),
+              _buildStatMetric(Icons.date_range_rounded, '${groups.length}', 'Months', color: const Color(0xFF10B981)),
+              Container(width: 1, height: 24, color: Colors.white12),
               _buildStatMetric(Icons.star_rounded, _calculateAvgRating(), 'Avg Score', color: Colors.amberAccent),
               Container(width: 1, height: 24, color: Colors.white12),
               _buildStatMetric(Icons.schedule_rounded, _calculateTotalWatchHours(), 'Watch Time', color: const Color(0xFF38BDF8)),
@@ -699,92 +1071,48 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
           ),
         ),
 
-        // Glowing Cinema Reel Track with Continuous Wave Zoom & Proportional Checkpoints
+        // Glowing Cinema Reel Track with Month Stacks
         Expanded(
           child: Stack(
             children: [
               // Central Glowing Film Rope Spine
-              Positioned(
-                top: 0,
-                bottom: 0,
-                left: MediaQuery.of(context).size.width / 2 - 2,
-                child: Container(
-                  width: 4,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0xFFFFD54F),
-                        Color(0xFFF59E0B),
-                        Color(0xFFD97706),
-                        Color(0xFFFFD54F),
-                      ],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.amberAccent.withOpacity(0.6),
-                        blurRadius: 16,
-                        spreadRadius: 3,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              _buildSpine(),
 
-              // Animated Timeline Items with Wave Zoom Controller
+              // Animated Month Stacks with Wave Scaling
               AnimatedBuilder(
                 animation: _scrollController,
                 builder: (context, _) {
                   return ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
-                    itemCount: _historyItems.length,
+                    itemCount: groups.length,
                     itemBuilder: (context, index) {
-                      final item = _historyItems[index];
+                      final group = groups[index];
                       final isLeft = index % 2 == 0;
 
-                      // Check year and month transitions
-                      final currentYear = item.movie.year ?? item.watchedAt.year;
-                      final currentMonthKey = DateFormat('MMM yyyy').format(item.watchedAt);
-
+                      // Year Transition Checkpoint
                       bool showYearCheckpoint = false;
-                      bool showMonthCheckpoint = false;
-
                       if (index == 0) {
                         showYearCheckpoint = true;
-                        showMonthCheckpoint = true;
                       } else {
-                        final prevItem = _historyItems[index - 1];
-                        final prevYear = prevItem.movie.year ?? prevItem.watchedAt.year;
-                        final prevMonthKey = DateFormat('MMM yyyy').format(prevItem.watchedAt);
-
-                        if (currentYear != prevYear) {
+                        final prevGroup = groups[index - 1];
+                        if (group.year != prevGroup.year) {
                           showYearCheckpoint = true;
                         }
-                        if (currentMonthKey != prevMonthKey) {
-                          showMonthCheckpoint = true;
-                        }
                       }
-
-                      final int countInMonth = monthCounts[currentMonthKey] ?? 1;
 
                       return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // 1. Prominent Year Checkpoint
-                          if (showYearCheckpoint) _buildYearCheckpoint(currentYear),
-
-                          // 2. Dynamic Sized Month Checkpoint (Scales with movie count)
-                          if (showMonthCheckpoint) _buildMonthCheckpoint(DateFormat('MMMM').format(item.watchedAt).toUpperCase(), countInMonth),
-
-                          // 3. Wave Animated Movie Poster Card
-                          _LiveWaveCard(
-                            item: item,
+                          if (showYearCheckpoint) _buildYearCheckpoint(group.year),
+                          _LiveMonthStackCard(
+                            group: group,
                             isLeft: isLeft,
                             scrollController: _scrollController,
-                            onTap: () => _openFullMovieDetails(item),
-                            onLongPress: () => _showEditItemSheet(item),
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              setState(() => _selectedMonthKey = group.key);
+                            },
                           ),
                         ],
                       );
@@ -799,10 +1127,136 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
     );
   }
 
+  /// Single Month Detailed View (All movies for selected month)
+  Widget _buildSingleMonthDetailedView(MonthTimelineGroup group) {
+    return Column(
+      children: [
+        // Month Breadcrumb & Navigation Bar
+        Container(
+          margin: const EdgeInsets.fromLTRB(14, 4, 14, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF131D31).withOpacity(0.85),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.amberAccent.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              InkWell(
+                onTap: () => setState(() => _selectedMonthKey = null),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.amberAccent.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.arrow_back_rounded, color: Colors.amberAccent, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'All Months',
+                        style: GoogleFonts.outfit(
+                          color: Colors.amberAccent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      group.displayTitle,
+                      style: GoogleFonts.outfit(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '${group.items.length} ${group.items.length == 1 ? "Movie" : "Movies"}${group.avgRating > 0 ? " • ★ ${group.avgRating.toStringAsFixed(1)} Avg Score" : ""}',
+                      style: const TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Glowing Cinema Reel Track with individual movies for that month
+        Expanded(
+          child: Stack(
+            children: [
+              _buildSpine(),
+              AnimatedBuilder(
+                animation: _scrollController,
+                builder: (context, _) {
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                    itemCount: group.items.length,
+                    itemBuilder: (context, index) {
+                      final item = group.items[index];
+                      final isLeft = index % 2 == 0;
+                      return _LiveWaveCard(
+                        item: item,
+                        isLeft: isLeft,
+                        dateMode: _dateMode,
+                        scrollController: _scrollController,
+                        onTap: () => _openFullMovieDetails(item),
+                        onLongPress: () => _showEditItemSheet(item),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSpine() {
+    return Positioned(
+      top: 0,
+      bottom: 0,
+      left: MediaQuery.of(context).size.width / 2 - 2,
+      child: Container(
+        width: 4,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFFFD54F),
+              Color(0xFFF59E0B),
+              Color(0xFFD97706),
+              Color(0xFFFFD54F),
+            ],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.amberAccent.withOpacity(0.6),
+              blurRadius: 16,
+              spreadRadius: 3,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Big Prominent Year Checkpoint
   Widget _buildYearCheckpoint(int year) {
     return Container(
-      margin: const EdgeInsets.only(top: 24, bottom: 12),
+      margin: const EdgeInsets.only(top: 18, bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -830,44 +1284,6 @@ class _WatchedTimelineScreenState extends State<WatchedTimelineScreen> {
               fontSize: 14,
               fontWeight: FontWeight.w900,
               letterSpacing: 1.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Month Checkpoint with Dynamic Size based on Watched Movie Count
-  Widget _buildMonthCheckpoint(String monthName, int count) {
-    // Dynamic proportional sizing
-    final double extraPadding = (count.clamp(1, 8) * 1.2);
-    final double fontSize = 9.5 + (count.clamp(1, 6) * 0.4);
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      padding: EdgeInsets.symmetric(horizontal: 10 + extraPadding, vertical: 3.5 + (extraPadding * 0.3)),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.amberAccent.withOpacity(0.8), width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.amberAccent.withOpacity(0.25 + (count * 0.05).clamp(0.0, 0.4)),
-            blurRadius: 8 + (count * 1.5).clamp(0.0, 10.0),
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$monthName • $count ${count == 1 ? "Movie" : "Movies"}',
-            style: GoogleFonts.outfit(
-              color: Colors.amberAccent,
-              fontSize: fontSize,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.8,
             ),
           ),
         ],
@@ -1026,10 +1442,452 @@ class _MarqueeTextState extends State<_MarqueeText> {
   }
 }
 
+/// Live Month Stack Card (Overlapping Poster Deck + Stats + Continuous Wave Scaling)
+class _LiveMonthStackCard extends StatefulWidget {
+  const _LiveMonthStackCard({
+    required this.group,
+    required this.isLeft,
+    required this.scrollController,
+    required this.onTap,
+  });
+
+  final MonthTimelineGroup group;
+  final bool isLeft;
+  final ScrollController scrollController;
+  final VoidCallback onTap;
+
+  @override
+  State<_LiveMonthStackCard> createState() => _LiveMonthStackCardState();
+}
+
+class _LiveMonthStackCardState extends State<_LiveMonthStackCard> {
+  final GlobalKey _cardKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final cardWidth = (width / 2) - 28;
+
+    // Live RenderBox viewport coordinates calculation for wave scaling
+    double scale = 0.85;
+    double opacity = 0.80;
+
+    final renderBox = _cardKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize && renderBox.attached) {
+      final cardCenterY = renderBox.localToGlobal(Offset.zero).dy + (renderBox.size.height / 2);
+      final screenHeight = MediaQuery.of(context).size.height;
+      final screenCenterY = screenHeight / 2;
+
+      final distance = (cardCenterY - screenCenterY).abs().clamp(0.0, screenCenterY);
+      final normalized = distance / screenCenterY;
+      final waveProgress = (1.0 - normalized).clamp(0.0, 1.0);
+
+      scale = 0.68 + (waveProgress * 0.32);
+      opacity = 0.55 + (waveProgress * 0.45);
+    }
+
+    final posters = widget.group.items
+        .map((i) => i.movie.posterUrl)
+        .where((p) => p.isNotEmpty)
+        .take(4)
+        .toList();
+
+    return KeyedSubtree(
+      key: _cardKey,
+      child: Container(
+        width: width,
+        padding: const EdgeInsets.only(bottom: 14.0),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // 1. Curved Golden Connector Bridge
+            Positioned(
+              left: widget.isLeft ? (width / 2) - 26 : (width / 2),
+              width: 26,
+              height: 24,
+              child: CustomPaint(
+                painter: _RopeConnectorPainter(
+                  isLeft: widget.isLeft,
+                  color: Colors.amberAccent,
+                ),
+              ),
+            ),
+
+            // 2. Center Dot on rope
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF090D16),
+                border: Border.all(color: Colors.amberAccent, width: 2.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.amberAccent.withOpacity(0.9),
+                    blurRadius: 10,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Container(
+                  width: 5,
+                  height: 5,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+
+            // 3. Month Stack Card
+            Row(
+              mainAxisAlignment: widget.isLeft ? MainAxisAlignment.start : MainAxisAlignment.end,
+              children: [
+                if (!widget.isLeft) SizedBox(width: (width / 2) + 12),
+                Transform.scale(
+                  scale: scale,
+                  alignment: widget.isLeft ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Opacity(
+                    opacity: opacity.clamp(0.50, 1.0),
+                    child: SizedBox(
+                      width: cardWidth,
+                      child: GestureDetector(
+                        onTap: widget.onTap,
+                        child: Transform.rotate(
+                          angle: widget.isLeft ? -0.03 : 0.03,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF141C2B).withOpacity(0.95),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.amberAccent.withOpacity(0.6),
+                                width: 1.4,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.7),
+                                  blurRadius: 14,
+                                  offset: const Offset(0, 5),
+                                ),
+                                BoxShadow(
+                                  color: Colors.amberAccent.withOpacity(0.2),
+                                  blurRadius: 10,
+                                  spreadRadius: -2,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Month Header
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.amberAccent.withOpacity(0.18),
+                                        borderRadius: BorderRadius.circular(7),
+                                      ),
+                                      child: const Icon(Icons.calendar_month_rounded, color: Colors.amberAccent, size: 14),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        widget.group.displayTitle,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+
+                                // Fanned / Stacked Poster Deck
+                                _buildPosterDeck(posters, cardWidth - 20),
+                                const SizedBox(height: 8),
+
+                                // Footer: Movie Count & Avg Rating & Action
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF0F172A),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: Colors.white12),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.movie_rounded, color: Colors.amberAccent, size: 11),
+                                          const SizedBox(width: 3.5),
+                                          Text(
+                                            '${widget.group.items.length}',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (widget.group.avgRating > 0)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF0F172A),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.star_rounded, color: Colors.amberAccent, size: 11),
+                                            const SizedBox(width: 2.5),
+                                            Text(
+                                              widget.group.avgRating.toStringAsFixed(1),
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.amberAccent,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          'Open',
+                                          style: GoogleFonts.outfit(
+                                            color: Colors.amberAccent,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 2),
+                                        const Icon(Icons.arrow_forward_ios_rounded, color: Colors.amberAccent, size: 9),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (widget.isLeft) SizedBox(width: (width / 2) + 12),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPosterDeck(List<String> posters, double availableWidth) {
+    if (posters.isEmpty) {
+      return Container(
+        height: 110,
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Center(
+          child: Icon(Icons.movie_filter_rounded, color: Colors.white24, size: 32),
+        ),
+      );
+    }
+
+    final double posterW = (availableWidth * 0.44).clamp(52.0, 68.0);
+    final double posterH = posterW * 1.45;
+
+    if (posters.length == 1) {
+      return Center(
+        child: _buildSinglePoster(posters[0], posterW * 1.15, posterH * 1.15, 0.0, isFront: true),
+      );
+    }
+
+    if (posters.length == 2) {
+      return SizedBox(
+        width: double.infinity,
+        height: posterH + 16,
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            // Background poster peeking to the left & slightly higher
+            Transform.translate(
+              offset: const Offset(-18, -4),
+              child: _buildSinglePoster(posters[1], posterW * 0.90, posterH * 0.90, -0.14, opacity: 0.88),
+            ),
+            // Front poster centered
+            _buildSinglePoster(posters[0], posterW * 1.05, posterH * 1.05, 0.0, isFront: true),
+            if (widget.group.items.length > 1)
+              Positioned(
+                bottom: 0,
+                right: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.90),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.amberAccent, width: 1.0),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.6),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    '+${widget.group.items.length - 1}',
+                    style: const TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    // 3 or more posters: Fanned Deck with last rated movie front & center, and min 2 back posters clearly peeking out
+    return SizedBox(
+      width: double.infinity,
+      height: posterH + 18,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          // 4th movie (if available) peeking from top-center
+          if (posters.length >= 4)
+            Transform.translate(
+              offset: const Offset(0, -8),
+              child: _buildSinglePoster(posters[3], posterW * 0.78, posterH * 0.78, 0.0, opacity: 0.60),
+            ),
+          // Left card peeking out from back
+          Transform.translate(
+            offset: const Offset(-22, -2),
+            child: _buildSinglePoster(posters[1], posterW * 0.88, posterH * 0.88, -0.16, opacity: 0.88),
+          ),
+          // Right card peeking out from back
+          Transform.translate(
+            offset: const Offset(22, -2),
+            child: _buildSinglePoster(posters[2], posterW * 0.88, posterH * 0.88, 0.16, opacity: 0.88),
+          ),
+          // Front & Center Poster
+          _buildSinglePoster(posters[0], posterW * 1.05, posterH * 1.05, 0.0, isFront: true),
+
+          // Badge on bottom right of the deck
+          if (widget.group.items.length > 1)
+            Positioned(
+              bottom: 0,
+              right: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.90),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.amberAccent, width: 1.0),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.6),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: Text(
+                  '+${widget.group.items.length - 1}',
+                  style: const TextStyle(
+                    color: Colors.amberAccent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSinglePoster(
+    String url,
+    double w,
+    double h,
+    double angle, {
+    bool isFront = false,
+    double opacity = 1.0,
+  }) {
+    return Transform.rotate(
+      angle: angle,
+      child: Opacity(
+        opacity: opacity,
+        child: Container(
+          width: w,
+          height: h,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isFront ? Colors.amberAccent.withOpacity(0.85) : Colors.white24,
+              width: isFront ? 1.4 : 0.8,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(isFront ? 0.85 : 0.50),
+                blurRadius: isFront ? 12 : 6,
+                offset: Offset(0, isFront ? 5 : 3),
+              ),
+              if (isFront)
+                BoxShadow(
+                  color: Colors.amberAccent.withOpacity(0.20),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(7),
+            child: CachedNetworkImage(
+              imageUrl: url,
+              fit: BoxFit.cover,
+              placeholder: (_, __) => Container(color: const Color(0xFF0F172A)),
+              errorWidget: (_, __, ___) => Container(
+                color: const Color(0xFF0F172A),
+                child: const Icon(Icons.movie_creation_rounded, color: Colors.white24, size: 20),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Wave Animated Movie Poster Card
 class _LiveWaveCard extends StatefulWidget {
   const _LiveWaveCard({
     required this.item,
     required this.isLeft,
+    required this.dateMode,
     required this.scrollController,
     required this.onTap,
     required this.onLongPress,
@@ -1037,6 +1895,7 @@ class _LiveWaveCard extends StatefulWidget {
 
   final SimklHistoryItem item;
   final bool isLeft;
+  final String dateMode;
   final ScrollController scrollController;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -1052,8 +1911,13 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final cardWidth = (width / 2) - 34;
-    final releaseYear = widget.item.movie.year ?? widget.item.watchedAt.year;
-    final dateFormatted = DateFormat('dd MMM yyyy').format(widget.item.watchedAt);
+
+    final effectiveDate = widget.dateMode == 'release_date'
+        ? (widget.item.releaseDate ?? widget.item.watchedAt)
+        : widget.item.watchedAt;
+
+    final releaseYear = widget.item.movie.year ?? widget.item.releaseDate?.year ?? widget.item.watchedAt.year;
+    final dateFormatted = DateFormat('dd MMM yyyy').format(effectiveDate);
 
     // Live RenderBox viewport coordinates calculation
     double scale = 0.85;
@@ -1065,12 +1929,10 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
       final screenHeight = MediaQuery.of(context).size.height;
       final screenCenterY = screenHeight / 2;
 
-      // Distance from screen center (0 at middle, screenCenterY at top/bottom edges)
       final distance = (cardCenterY - screenCenterY).abs().clamp(0.0, screenCenterY);
-      final normalized = distance / screenCenterY; // 0.0 (middle) to 1.0 (edges)
-      final waveProgress = (1.0 - normalized).clamp(0.0, 1.0); // 1.0 (middle) to 0.0 (edges)
+      final normalized = distance / screenCenterY;
+      final waveProgress = (1.0 - normalized).clamp(0.0, 1.0);
 
-      // Continuous wave formula: 0.65x at bottom/top, 1.00x at exact center!
       scale = 0.65 + (waveProgress * 0.35);
       opacity = 0.50 + (waveProgress * 0.50);
     }
@@ -1079,11 +1941,11 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
       key: _cardKey,
       child: Container(
         width: width,
-        padding: const EdgeInsets.only(bottom: 10.0), // Reduced tight vertical gap
+        padding: const EdgeInsets.only(bottom: 10.0),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // 1. Curved Golden Connector Bridge (Anchored from center dot to card)
+            // 1. Curved Golden Connector Bridge
             Positioned(
               left: widget.isLeft ? (width / 2) - 26 : (width / 2),
               width: 26,
@@ -1096,7 +1958,7 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
               ),
             ),
 
-            // 2. Center Dot - LOCKED 100% on the central yellow rope line
+            // 2. Center Dot - LOCKED on the central yellow rope line
             Container(
               width: 18,
               height: 18,
@@ -1140,7 +2002,7 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                         onTap: widget.onTap,
                         onLongPress: widget.onLongPress,
                         child: Transform.rotate(
-                          angle: widget.isLeft ? -0.035 : 0.035, // organic curve angle
+                          angle: widget.isLeft ? -0.035 : 0.035,
                           child: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFF141C2B).withOpacity(0.95),
@@ -1165,7 +2027,7 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Compact Portrait Poster
+                                // Portrait Poster
                                 Stack(
                                   children: [
                                     ClipRRect(
@@ -1189,7 +2051,7 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                                       ),
                                     ),
 
-                                    // Prominent Release Date Stamp
+                                    // Year / Mode Pill
                                     Positioned(
                                       top: 6,
                                       left: 6,
@@ -1209,10 +2071,18 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            const Icon(Icons.calendar_today_rounded, color: Colors.amberAccent, size: 10),
+                                            Icon(
+                                              widget.dateMode == 'release_date'
+                                                  ? Icons.theaters_rounded
+                                                  : Icons.visibility_rounded,
+                                              color: Colors.amberAccent,
+                                              size: 10,
+                                            ),
                                             const SizedBox(width: 3.5),
                                             Text(
-                                              '$releaseYear',
+                                              widget.dateMode == 'release_date'
+                                                  ? '$releaseYear'
+                                                  : DateFormat('MMM yy').format(effectiveDate),
                                               style: GoogleFonts.outfit(
                                                 color: Colors.white,
                                                 fontSize: 10.5,
@@ -1225,7 +2095,7 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                                       ),
                                     ),
 
-                                    // Prominent Rating Pill on Poster
+                                    // Rating Pill
                                     if (widget.item.userRating != null)
                                       Positioned(
                                         bottom: 6,
@@ -1283,7 +2153,6 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      // Auto-Scrolling Title for Long Names
                                       _MarqueeText(
                                         text: widget.item.movie.title,
                                         style: GoogleFonts.outfit(
@@ -1295,7 +2164,13 @@ class _LiveWaveCardState extends State<_LiveWaveCard> {
                                       const SizedBox(height: 3),
                                       Row(
                                         children: [
-                                          const Icon(Icons.event_available_rounded, color: Colors.amberAccent, size: 10),
+                                          Icon(
+                                            widget.dateMode == 'release_date'
+                                                ? Icons.calendar_today_rounded
+                                                : Icons.event_available_rounded,
+                                            color: Colors.amberAccent,
+                                            size: 10,
+                                          ),
                                           const SizedBox(width: 4),
                                           Expanded(
                                             child: Text(

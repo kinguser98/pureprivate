@@ -63,6 +63,7 @@ class AppDrawer extends ConsumerWidget {
                   _navItem(context, ref, Icons.cloud_sync_rounded, 'Cloud Storages', '/cloud-accounts', currentRoute == '/cloud-accounts', color: const Color(0xFFF59E0B)),
                   _divider(),
                   _sectionHeader('Tools'),
+                  _navItem(context, ref, Icons.layers_rounded, 'Source Modules', '/modules', currentRoute == '/modules', color: const Color(0xFF06B6D4)),
                   _navItem(context, ref, Icons.flash_on_rounded, '1TamilMV Converter', '/1tamilmv-converter', currentRoute == '/1tamilmv-converter'),
                   _navItem(context, ref, Icons.find_replace, 'Bulk Updater', '/bulk-updater', false),
                   _navItem(context, ref, Icons.link, 'Link Checker', '/link-checker', false),

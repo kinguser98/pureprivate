@@ -205,6 +205,42 @@ class TmdbService {
     }
   }
 
+  /// Fetch user favorites from TMDb
+  static Future<List<Map<String, dynamic>>> fetchFavorites() async {
+    if (_sessionId == null) return [];
+    try {
+      final accountId = _accountId ?? 'account_id';
+      final url = '$_baseUrl/account/$accountId/favorite/movies?api_key=$apiKey&session_id=$_sessionId&sort_by=created_at.desc';
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final results = data['results'] as List<dynamic>? ?? [];
+        return results.map((e) => e as Map<String, dynamic>).toList();
+      }
+    } catch (e) {
+      debugPrint('TMDB fetchFavorites error: $e');
+    }
+    return [];
+  }
+
+  /// Fetch user watchlist from TMDb
+  static Future<List<Map<String, dynamic>>> fetchWatchlist() async {
+    if (_sessionId == null) return [];
+    try {
+      final accountId = _accountId ?? 'account_id';
+      final url = '$_baseUrl/account/$accountId/watchlist/movies?api_key=$apiKey&session_id=$_sessionId&sort_by=created_at.desc';
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final results = data['results'] as List<dynamic>? ?? [];
+        return results.map((e) => e as Map<String, dynamic>).toList();
+      }
+    } catch (e) {
+      debugPrint('TMDB fetchWatchlist error: $e');
+    }
+    return [];
+  }
+
   /// Fetch full movie details from TMDb
   static Future<Map<String, dynamic>?> getMovieDetails(String tmdbId) async {
     try {

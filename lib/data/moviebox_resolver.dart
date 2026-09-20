@@ -30,8 +30,8 @@ class MovieboxResolver {
     final r = Random();
     const hex = '0123456789abcdef';
     _deviceId = List.generate(32, (_) => hex[r.nextInt(16)]).join();
-    _brand = 'samsung';
-    _model = 'SM-S918B';
+    _brand = 'Google';
+    _model = 'Pixel 8';
   }
 
   static String _md5(String s) => md5.convert(utf8.encode(s)).toString();
@@ -105,17 +105,17 @@ class MovieboxResolver {
     final sig = _buildSig(method, accept, ct, url, body, ts);
 
     final clientInfo = jsonEncode({
-      'package_name': 'com.community.oneroom',
-      'version_name': '3.0.13.0325.03',
-      'version_code': 50020088,
+      'package_name': 'com.community.mbox.in',
+      'version_name': '4.0.02.0831.03',
+      'version_code': 50020126,
       'os': 'android',
-      'os_version': '13',
+      'os_version': '14',
       'install_ch': 'ps',
       'device_id': _deviceId,
       'install_store': 'ps',
       'gaid': 'd7578036d13336cc',
-      'brand': _brand,
-      'model': _model,
+      'brand': _brand ?? 'Google',
+      'model': _model ?? 'Pixel 8',
       'system_language': 'en',
       'net': 'NETWORK_WIFI',
       'region': 'IN',
@@ -136,9 +136,9 @@ class MovieboxResolver {
       req.headers.set('x-client-token', _xClientToken(ts));
       req.headers.set('x-tr-signature', sig);
       req.headers.set(HttpHeaders.userAgentHeader,
-          'com.community.oneroom/50020088 (Linux; U; Android 13; en_IN; $_model; Build/TP1A.220624.014; Cronet/133.0.6876.3)');
+          'com.community.mbox.in/50020126 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)');
       req.headers.set('x-client-info', clientInfo);
-      req.headers.set('x-client-status', '1');
+      req.headers.set('x-client-status', '0');
       if (token != null && token.isNotEmpty) {
         req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       }
@@ -323,12 +323,25 @@ class MovieboxResolver {
       }
 
       final allSources = <StreamSourceInfo>[];
+      final seenUrls = <String>{};
+      final seenSubjectIds = <String>{};
       final limitedSubjects = matchedSubjects.take(2).toList();
-      final subjectFutures = limitedSubjects.map((subject) =>
-          _extractStreamsForSubject(subject, token, isSeries, season, episode));
-      final subjectStreamLists = await Future.wait(subjectFutures);
-      for (final streams in subjectStreamLists) {
-        allSources.addAll(streams);
+      for (final subject in limitedSubjects) {
+        final sid = subject['subjectId']?.toString() ?? '';
+        if (sid.isNotEmpty && seenSubjectIds.contains(sid)) continue;
+        final streams = await _extractStreamsForSubject(
+          subject,
+          token,
+          isSeries,
+          season,
+          episode,
+          seenSubjectIds: seenSubjectIds,
+        );
+        for (final s in streams) {
+          if (seenUrls.add(s.url)) {
+            allSources.add(s);
+          }
+        }
       }
 
       return allSources;
@@ -341,7 +354,9 @@ class MovieboxResolver {
   static bool _isUpdateVideo(String url) {
     if (url.isEmpty) return false;
     final u = url.toLowerCase();
-    return u.contains('update') ||
+    return u.contains('b164fbfb4347792950bdfbfb563d39d9') ||
+        u.contains('/other/') ||
+        u.contains('update') ||
         u.contains('upgrade') ||
         u.contains('notice') ||
         u.contains('force_up') ||
@@ -357,16 +372,29 @@ class MovieboxResolver {
     String token,
     bool isSeries,
     int? season,
-    int? episode,
-  ) async {
+    int? episode, {
+    Set<String>? seenSubjectIds,
+  }) async {
     final sid = subject['subjectId']?.toString() ?? '';
     if (sid.isEmpty) return [];
+    if (seenSubjectIds != null && sid.isNotEmpty) {
+      seenSubjectIds.add(sid);
+    }
     final se = isSeries ? (season ?? 1) : 0;
     final ep = isSeries ? (episode ?? 1) : 0;
     final title = subject['title']?.toString() ?? 'MovieBox';
 
+    final sources = <StreamSourceInfo>[];
+    Map<String, String> baseHeaders() => {
+          'User-Agent':
+              'com.community.mbox.in/50020126 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)',
+        };
+
     // 1. Fetch subject details to extract all multi-language dubs
     final subjectIds = <Map<String, String>>[];
+    final localSeenIds = <String>{};
+    if (sid.isNotEmpty) localSeenIds.add(sid);
+
     try {
       final (detailRes, _) = await _requestWithFailover(
         method: 'GET',
@@ -374,13 +402,20 @@ class MovieboxResolver {
         token: token,
       );
       if (detailRes != null && detailRes['data'] is Map) {
-        final dubs = detailRes['data']['dubs'] as List? ?? [];
+        final dataMap = detailRes['data'] as Map;
+        final dubs = dataMap['dubs'] as List? ?? [];
         for (final dub in dubs) {
           if (dub is Map) {
             final dubSid = dub['subjectId']?.toString() ?? '';
             final lang = dub['lanName']?.toString() ?? 'Dub';
             if (dubSid.isNotEmpty && !lang.toLowerCase().contains('sub')) {
-              subjectIds.add({'id': dubSid, 'lang': lang});
+              if (localSeenIds.add(dubSid)) {
+                if (seenSubjectIds != null && seenSubjectIds.contains(dubSid)) {
+                  continue;
+                }
+                seenSubjectIds?.add(dubSid);
+                subjectIds.add({'id': dubSid, 'lang': lang});
+              }
             }
           }
         }
@@ -391,13 +426,7 @@ class MovieboxResolver {
       subjectIds.add({'id': sid, 'lang': 'Original'});
     }
 
-    final sources = <StreamSourceInfo>[];
-    Map<String, String> baseHeaders() => {
-          'User-Agent':
-              'com.community.oneroom/50020088 (Linux; U; Android 13; en_IN; SM-S918B; Build/TP1A.220624.014; Cronet/133.0.6876.3)',
-        };
-
-    // 2. Fetch play-info for all dubs in PARALLEL for near-instant results
+    // 2. Fetch play-info for all dubs in PARALLEL
     final dubFutures = subjectIds.map((dubItem) async {
       final currentSid = dubItem['id']!;
       final lang = dubItem['lang']!;
@@ -416,7 +445,31 @@ class MovieboxResolver {
           if (data['needUpdate'] != true && data['forceUpdate'] != true) {
             for (final item in (data['streams'] as List? ?? [])) {
               if (item is! Map) continue;
-              final url = item['url']?.toString() ?? '';
+              var url = item['url']?.toString() ?? '';
+              final cookie = item['signCookie']?.toString() ?? '';
+
+              // Extract CloudFront Policy Resource if URL is dummy/update video
+              if (url.isEmpty || _isUpdateVideo(url)) {
+                if (cookie.isNotEmpty) {
+                  final polMatch = RegExp(r'CloudFront-Policy=([^;]+)').firstMatch(cookie);
+                  if (polMatch != null) {
+                    try {
+                      var b64Pol = polMatch.group(1)!;
+                      while (b64Pol.length % 4 != 0) {
+                        b64Pol += '=';
+                      }
+                      final decoded = utf8.decode(base64.decode(b64Pol.replaceAll('-', '+').replaceAll('_', '/')));
+                      final polJson = jsonDecode(decoded);
+                      final resource = polJson['Statement']?[0]?['Resource']?.toString() ?? '';
+                      if (resource.isNotEmpty) {
+                        url = resource.replaceAll(RegExp(r'/\*$'), '/index.mpd');
+                      }
+                    } catch (_) {}
+                  }
+                }
+              }
+
+              // Drop dummy update video completely
               if (url.isEmpty || _isUpdateVideo(url)) continue;
 
               final resStr = item['resolutions']?.toString() ?? '';
@@ -430,8 +483,7 @@ class MovieboxResolver {
                   '$lang • $res • $fmt${codec.isNotEmpty ? " ($codec)" : ""}${size != null ? " ($size)" : ""}';
 
               final h = baseHeaders();
-              final cookie = item['signCookie']?.toString();
-              if (cookie != null && cookie.isNotEmpty) {
+              if (cookie.isNotEmpty) {
                 h['Cookie'] = cookie;
               }
 
@@ -441,6 +493,7 @@ class MovieboxResolver {
                 type: StreamSourceType.moviebox,
                 quality: res,
                 size: size,
+                languages: [lang],
                 headers: h.isNotEmpty ? h : null,
               ));
             }

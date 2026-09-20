@@ -33,6 +33,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
   String _searchQuery = '';
   String? _selectedCategory;
   bool _isGlobalSaving = false;
+  bool _autoOrderOnToggle = true;
 
   final Map<String, bool> _isReorderingChannels = {};
   final Map<String, List<IptvChannel>> _tempCategoryChannels = {};
@@ -63,7 +64,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
   Future<void> _toggleChannel(IptvChannel channel) async {
     final newStatus = channel.enabled ? 0 : 1;
     try {
-      await _adminApi.toggleChannel(channel.id, newStatus);
+      await _adminApi.toggleChannel(channel.id, newStatus, autoOrder: _autoOrderOnToggle);
       if (mounted) {
         ref.read(iptvProvider.notifier).fetchChannels();
       }
@@ -242,6 +243,27 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
             IconButton(
               icon: const Icon(Icons.select_all_rounded, color: Colors.white70),
               onPressed: () => _selectAllChannels(filteredChannels),
+            ),
+            IconButton(
+              tooltip: _autoOrderOnToggle
+                  ? 'Auto-Priority: ON (Toggled ON channels move to 1st position)'
+                  : 'Auto-Priority: OFF',
+              icon: Icon(
+                Icons.low_priority_rounded,
+                color: _autoOrderOnToggle ? const Color(0xFF10B981) : Colors.white38,
+              ),
+              onPressed: () {
+                setState(() => _autoOrderOnToggle = !_autoOrderOnToggle);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_autoOrderOnToggle
+                        ? 'Auto-Priority ON: Enabled channels automatically move to 1st position'
+                        : 'Auto-Priority OFF'),
+                    duration: const Duration(seconds: 2),
+                    backgroundColor: _autoOrderOnToggle ? const Color(0xFF10B981) : Colors.white24,
+                  ),
+                );
+              },
             ),
             IconButton(
               tooltip: 'Master Channel Registry',
@@ -1345,6 +1367,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
     final logoCtrl = TextEditingController(text: channel.logoUrl);
     final epgCtrl = TextEditingController(text: channel.stalkerId ?? channel.name);
     String selectedLanguage = 'Malayalam';
+    MasterChannel? selectedMaster;
 
     showDialog(
       context: context,
@@ -1409,6 +1432,7 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                           final pickedMaster = await MasterChannelPickerDialog.show(ctx);
                           if (pickedMaster != null) {
                             setDialogState(() {
+                              selectedMaster = pickedMaster;
                               nameCtrl.text = pickedMaster.displayName;
                               if (pickedMaster.logoUrl.isNotEmpty) logoCtrl.text = pickedMaster.logoUrl;
                               if (pickedMaster.epgId.isNotEmpty) epgCtrl.text = pickedMaster.epgId;
@@ -1421,19 +1445,38 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [const Color(0xFF8B5CF6).withOpacity(0.2), const Color(0xFF6366F1).withOpacity(0.1)],
+                              colors: selectedMaster != null
+                                  ? [const Color(0xFF10B981).withOpacity(0.25), const Color(0xFF059669).withOpacity(0.15)]
+                                  : [const Color(0xFF8B5CF6).withOpacity(0.2), const Color(0xFF6366F1).withOpacity(0.1)],
                             ),
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.4)),
+                            border: Border.all(
+                              color: selectedMaster != null
+                                  ? const Color(0xFF10B981).withOpacity(0.6)
+                                  : const Color(0xFF8B5CF6).withOpacity(0.4),
+                            ),
                           ),
-                          child: const Row(
+                          child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.playlist_add_check_rounded, color: Color(0xFFA855F7), size: 20),
-                              SizedBox(width: 8),
-                              Text(
-                                'Link to Master Channel Catalog',
-                                style: TextStyle(color: Color(0xFFA855F7), fontSize: 13, fontWeight: FontWeight.bold),
+                              Icon(
+                                selectedMaster != null ? Icons.check_circle_rounded : Icons.playlist_add_check_rounded,
+                                color: selectedMaster != null ? const Color(0xFF10B981) : const Color(0xFFA855F7),
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  selectedMaster != null
+                                      ? 'Linked: ${selectedMaster!.displayName}'
+                                      : 'Link to Master Channel Catalog',
+                                  style: TextStyle(
+                                    color: selectedMaster != null ? const Color(0xFF10B981) : const Color(0xFFA855F7),
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ],
                           ),
@@ -1579,17 +1622,25 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                                 logoCtrl.text.trim(),
                               );
                               
-                              // Sync to Master Registry MySQL database
-                              final master = MasterChannel(
-                                id: 'master_${channel.id}',
-                                displayName: nameCtrl.text.trim().isNotEmpty ? nameCtrl.text.trim() : channel.name,
-                                logoUrl: logoCtrl.text.trim().isNotEmpty ? logoCtrl.text.trim() : channel.logoUrl,
-                                epgId: epgCtrl.text.trim(),
-                                categoryName: channel.categoryName,
-                                language: selectedLanguage,
-                                aliases: [channel.name.toLowerCase().trim()],
-                              );
-                              await MasterChannelRepository.save(master);
+                              // Sync to Master Registry ONLY if a master channel was linked
+                              // (Preserves selectedMaster.id so NO duplicate entry is created!)
+                              if (selectedMaster != null) {
+                                final cleanAlias = channel.name.toLowerCase().trim();
+                                final updatedAliases = List<String>.from(selectedMaster!.aliases);
+                                if (cleanAlias.isNotEmpty && !updatedAliases.contains(cleanAlias)) {
+                                  updatedAliases.add(cleanAlias);
+                                }
+                                final master = MasterChannel(
+                                  id: selectedMaster!.id,
+                                  displayName: selectedMaster!.displayName,
+                                  logoUrl: logoCtrl.text.trim().isNotEmpty ? logoCtrl.text.trim() : selectedMaster!.logoUrl,
+                                  epgId: epgCtrl.text.trim().isNotEmpty ? epgCtrl.text.trim() : selectedMaster!.epgId,
+                                  categoryName: selectedMaster!.categoryName,
+                                  language: selectedLanguage,
+                                  aliases: updatedAliases,
+                                );
+                                await MasterChannelRepository.save(master);
+                              }
 
                               _hideLoadingOverlay();
                               

@@ -1,7 +1,7 @@
 name: private_cinema_mobile
 description: "GoXio - Mobile streaming app."
 publish_to: 'none'
-version: 1.0.0+5008
+version: 1.0.0+10005
 
 environment:
   sdk: ^3.12.1
@@ -34,6 +34,8 @@ dependencies:
   crypto: ^3.0.6
   url_launcher: ^6.3.0
   webview_flutter: ^4.10.0
+  screen_brightness: ^2.1.11
+  flutter_volume_controller: ^2.0.2
   freebuff_core:
     path: ../freebuff_core
 
