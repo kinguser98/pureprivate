@@ -27,10 +27,13 @@ import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_center_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_ott_resolver.dart';
+import 'package:private_cinema_mobile/screens/netmirror_ott_verify_screen.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
 import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
 import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
+import 'package:private_cinema_mobile/data/modular_source_service.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
@@ -62,6 +65,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _resolvingStreams = false;
   List<StreamSourceInfo> _resolvedSources = [];
   StreamSourceType? _activeGroupType; // server grouping selection
+  String? _activeDynamicModuleKey;
+  List<Map<String, dynamic>> _dynamicModules = [];
+  Map<String, bool> _dynamicModuleVisibility = {};
   String? _selectedAddonSubGroup;
   int _maxSourceSizeMb = 0;
   List<String> _sourceOrder = [];
@@ -93,6 +99,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showStreamtape = true;
   bool _showTelegram = true;
   bool _showNetmirrorCenter = true;
+  bool _showNetmirrorOtt = true;
   bool _showDirectLink = true;
   String? _selectedStremioResolution;
   List<String> _blockedAddonGroups = [];
@@ -100,9 +107,27 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   Future<void> _loadSourceVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
     final cloud = await SyncService.fetchAppSettings();
+    final activeModules = await ModularSourceService.fetchActiveModules();
+    final Map<String, bool> dynamicVis = {};
+    for (final mod in activeModules) {
+      final key = mod['id'].toString();
+      final prefKey = 'source_show_$key';
+      final isVis = cloud.containsKey(prefKey) ? cloud[prefKey] == 'true' : (prefs.getBool(prefKey) ?? true);
+      dynamicVis[key] = isVis;
+    }
+
     if (mounted) {
       setState(() {
-        _sourceOrder = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','telegram','directLink'];
+        _dynamicModules = activeModules;
+        _dynamicModuleVisibility = dynamicVis;
+        _sourceOrder = [
+          'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
+          'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
+        ];
+        for (final m in activeModules) {
+          final id = m['id'].toString();
+          if (!_sourceOrder.contains(id)) _sourceOrder.add(id);
+        }
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
@@ -118,6 +143,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
         _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
+        _showNetmirrorOtt = cloud.containsKey('source_show_netmirror_ott') ? cloud['source_show_netmirror_ott'] == 'true' : (prefs.getBool('source_show_netmirror_ott') ?? true);
         _showDirectLink = cloud.containsKey('source_show_direct_link') ? cloud['source_show_direct_link'] == 'true' : (prefs.getBool('source_show_direct_link') ?? true);
         _maxSourceSizeMb = int.tryParse(cloud['max_source_size_mb'] ?? '') ?? (prefs.getInt('max_source_size_mb') ?? 0);
         
@@ -131,21 +157,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
-    if (order.isNotEmpty && mounted) {
-      final List<String> mergedOrder = List<String>.from(order);
-      if (!mergedOrder.contains('streamplay')) mergedOrder.add('streamplay');
-      if (!mergedOrder.contains('movy')) mergedOrder.add('movy');
-      if (!mergedOrder.contains('moviesdrive')) mergedOrder.add('moviesdrive');
-      if (!mergedOrder.contains('hdhub4u')) mergedOrder.add('hdhub4u');
-      if (!mergedOrder.contains('mkvbase')) mergedOrder.add('mkvbase');
-      if (!mergedOrder.contains('filmu')) mergedOrder.add('filmu');
-      if (!mergedOrder.contains('moviebox')) mergedOrder.add('moviebox');
-      if (!mergedOrder.contains('vegamovies')) mergedOrder.add('vegamovies');
-      if (!mergedOrder.contains('cinejoy')) mergedOrder.add('cinejoy');
-      if (!mergedOrder.contains('streamtape')) mergedOrder.add('streamtape');
-      if (!mergedOrder.contains('netmirror_center')) mergedOrder.add('netmirror_center');
-      if (!mergedOrder.contains('telegram')) mergedOrder.add('telegram');
-      if (!mergedOrder.contains('directLink')) mergedOrder.add('directLink');
+    final List<String> defaultOrder = [
+      'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
+      'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
+    ];
+    final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
+    for (final key in defaultOrder) {
+      if (!mergedOrder.contains(key)) mergedOrder.add(key);
+    }
+    for (final mod in activeModules) {
+      final key = mod['id'].toString();
+      if (!mergedOrder.contains(key)) mergedOrder.add(key);
+    }
+    mergedOrder.remove('mkvbase');
+    if (mounted) {
       setState(() => _sourceOrder = mergedOrder);
     }
   }
@@ -515,6 +540,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         tasks.add(_resolveNetmirrorCenter(title, movieYear, originalLanguage: origLang, isSeries: _isSeriesSearch, season: season, episode: episode));
       }
 
+      // Resolve NetMirror OTT (Netflix / Prime / Hotstar / Disney+)
+      if (_showNetmirrorOtt && title.isNotEmpty) {
+        tasks.add(_resolveNetmirrorOtt(title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
+
       // Resolve Movy.bz Multi-Source
       if (_showMovy && tmdbId.isNotEmpty) {
         tasks.add(_resolveMovy(tmdbId, title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
@@ -544,6 +574,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             type: StreamSourceType.vidsrc,
           ),
         );
+      }
+
+      // Resolve Dynamic Modular Sources (custom modules not already covered by built-in resolvers)
+      final builtInScrapers = {'filmu', 'vegamovies', 'cinejoy', 'moviesdrive', 'hdhub4u', 'movieshunt'};
+      for (final mod in _dynamicModules) {
+        final modId = mod['id'].toString();
+        if (builtInScrapers.contains(modId)) continue;
+        final isVis = _dynamicModuleVisibility[modId] ?? true;
+        if (isVis && title.isNotEmpty) {
+          tasks.add(_resolveDynamicModuleStream(
+            moduleKey: modId,
+            title: title,
+            year: movieYear,
+            tmdbId: tmdbId,
+            imdbId: imdbId,
+            isSeries: _isSeriesSearch,
+            season: season,
+            episode: episode,
+          ));
+        }
       }
 
       // No Superembed and FilmU
@@ -799,6 +849,37 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
   }
 
+  Future<void> _resolveNetmirrorOtt(String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+    if (!_showNetmirrorOtt) return;
+    try {
+      debugPrint('NetMirror OTT: Resolving streams for $title...');
+      final result = await NetmirrorOttResolver.resolveStreams(
+        title: title,
+        year: year,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted) {
+        if (result.streams.isNotEmpty) {
+          setState(() => _resolvedSources.addAll(result.streams));
+        } else if (result.needsOtp) {
+          setState(() {
+            _resolvedSources.add(StreamSourceInfo(
+              name: 'NetMirror OTT • [Tap to Verify Session]',
+              url: 'netmirror_verify_action',
+              type: StreamSourceType.netmirrorOtt,
+              quality: 'Verification Required',
+              headers: {},
+            ));
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('NetMirror OTT resolution failed: $e');
+    }
+  }
+
   Future<void> _resolveMovy(String tmdbId, String title, String year, {bool isSeries = false, int? season, int? episode}) async {
     if (!_showMovy) return;
     try {
@@ -857,6 +938,49 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('HDHub4u resolution failed: $e');
+    }
+  }
+
+  Future<void> _resolveDynamicModuleStream({
+    required String moduleKey,
+    required String title,
+    dynamic year,
+    String? tmdbId,
+    String? imdbId,
+    bool isSeries = false,
+    int? season,
+    int? episode,
+  }) async {
+    try {
+      final parsedYear = (year is int) ? year : (int.tryParse(year?.toString() ?? '') ?? 0);
+      final streams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: moduleKey,
+        title: title,
+        year: parsedYear,
+        tmdbId: tmdbId,
+        imdbId: imdbId,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          for (final s in streams) {
+            _resolvedSources.add(
+              StreamSourceInfo(
+                name: s.name,
+                url: s.url,
+                type: StreamSourceType.modular,
+                headers: s.headers,
+                quality: s.quality,
+                moduleKey: moduleKey,
+              ),
+            );
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Dynamic module $moduleKey resolution failed: $e');
     }
   }
 
@@ -1300,6 +1424,59 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         source.type == StreamSourceType.stremioAddon ||
         source.type == StreamSourceType.nuveoAddon;
 
+    if (source.type == StreamSourceType.netmirrorOtt) {
+      if (source.url == 'netmirror_verify_action' || (source.headers?['Usertoken'] ?? '').isEmpty) {
+        final verified = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => const NetmirrorOttVerifyScreen()),
+        );
+        if (verified == true && mounted) {
+          setState(() {
+            _resolvedSources.removeWhere((s) => s.type == StreamSourceType.netmirrorOtt);
+          });
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.redAccent)),
+          );
+          final newResult = await NetmirrorOttResolver.resolveStreams(
+            title: movieTitle,
+            year: _selectedMovie?['year']?.toString() ?? '',
+            isSeries: _isSeriesSearch,
+          );
+          if (mounted) Navigator.of(context).pop();
+          if (mounted && newResult.streams.isNotEmpty) {
+            setState(() => _resolvedSources.addAll(newResult.streams));
+            _playStream(newResult.streams.first, movieTitle, posterPath);
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Session verified! Please tap the stream link again.')),
+            );
+          }
+        }
+        return;
+      }
+
+      final Map<String, String> headers = {};
+      if (source.headers != null) {
+        headers.addAll(source.headers!);
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: source.name.split('•')[0].trim(),
+            movieId: 'special_search_',
+            resumeDirectly: false,
+            headers: headers.isNotEmpty ? headers : null,
+            sourceName: source.name,
+          ),
+        ),
+      );
+      return;
+    }
+
     if (source.type == StreamSourceType.filmu) {
       final Map<String, String> headers = {};
       if (source.headers != null) {
@@ -1323,23 +1500,27 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     if (source.type == StreamSourceType.streamplay ||
         source.type == StreamSourceType.moviebox ||
         source.type == StreamSourceType.vegamovies ||
-        source.type == StreamSourceType.netmirrorCenter) {
+        source.type == StreamSourceType.netmirrorCenter ||
+        source.type == StreamSourceType.modular) {
       final Map<String, String> headers = {};
       if (source.headers != null) {
         headers.addAll(source.headers!);
       }
+      final modName = source.moduleKey != null ? ModularSourceService.getModuleName(source.moduleKey!) : null;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => VideoPlayerScreen(
             videoSource: source.url,
             title: movieTitle,
-            subtitle: source.type == StreamSourceType.netmirrorCenter
-                ? 'NetMirror Center'
-                : (source.type == StreamSourceType.vegamovies
-                    ? 'Vegamovies Server'
-                    : (source.type == StreamSourceType.streamplay
-                        ? 'StreamPlay Server'
-                        : 'MovieBox Server')),
+            subtitle: source.type == StreamSourceType.modular
+                ? (modName != null ? '$modName Server' : 'Modular Source')
+                : (source.type == StreamSourceType.netmirrorCenter
+                    ? 'NetMirror Center'
+                    : (source.type == StreamSourceType.vegamovies
+                        ? 'Vegamovies Server'
+                        : (source.type == StreamSourceType.streamplay
+                            ? 'StreamPlay Server'
+                            : 'MovieBox Server'))),
             movieId: 'special_search_${_selectedMovie['id']}',
             resumeDirectly: false,
             headers: headers.isNotEmpty ? headers : null,
@@ -2444,7 +2625,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           Text(
             _selectedAddonSubGroup != null
                 ? _selectedAddonSubGroup!.toUpperCase()
-                : (_activeGroupType == null
+                : (_activeGroupType == null && _activeDynamicModuleKey == null
                     ? 'SELECT STREAM SERVER'
                     : 'SERVER LINKS'),
             style: GoogleFonts.outfit(
@@ -2490,8 +2671,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 setState(() {
                   if (_selectedAddonSubGroup != null) {
                     _selectedAddonSubGroup = null;
-                  } else if (_activeGroupType != null) {
+                  } else if (_activeGroupType != null || _activeDynamicModuleKey != null) {
                     _activeGroupType = null;
+                    _activeDynamicModuleKey = null;
                   } else {
                     if (_isSeriesSearch) {
                       _selectingEpisode = true;
@@ -2505,7 +2687,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               label: Text(
                 _selectedAddonSubGroup != null
                     ? 'BACK TO ADDONS'
-                    : (_activeGroupType != null
+                    : (_activeGroupType != null || _activeDynamicModuleKey != null
                         ? 'BACK TO SERVERS'
                         : (_isSeriesSearch ? 'BACK TO EPISODES' : 'BACK TO SEARCH')),
               ),
@@ -2668,6 +2850,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final netmirrorCenterStreams = filteredSources
         .where((s) => s.type == StreamSourceType.netmirrorCenter)
         .toList();
+    final netmirrorOttStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.netmirrorOtt)
+        .toList();
     final telegramStreams = filteredSources
         .where((s) => s.type == StreamSourceType.telegram)
         .toList();
@@ -2675,7 +2860,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         .where((s) => s.type == StreamSourceType.directLink)
         .toList();
 
-    if (_activeGroupType == null) {
+    if (_activeGroupType == null && _activeDynamicModuleKey == null) {
       final Map<String, Widget> sourceWidgets = {};
 
       // StreamPlay Multi-API
@@ -2974,6 +3159,49 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
+      // NetMirror OTT Card (Netflix, Prime Video, Hotstar, Disney+)
+      final hasOttAction = netmirrorOttStreams.any((s) => s.url == 'netmirror_verify_action');
+      final validOttCount = netmirrorOttStreams.where((s) => s.url != 'netmirror_verify_action').length;
+
+      if (_showNetmirrorOtt && (_resolvingStreams || netmirrorOttStreams.isNotEmpty) && enabledKeys.contains('netmirror_ott')) {
+        sourceWidgets['netmirror_ott'] = _buildServerGroupCard(
+          title: '${pos('netmirror_ott')}. NetMirror OTT',
+          subtitle: _resolvingStreams && netmirrorOttStreams.isEmpty
+              ? 'Searching Netflix, Prime, Hotstar...'
+              : (hasOttAction
+                    ? '⚠️ Tap to verify session'
+                    : (validOttCount > 0
+                          ? '$validOttCount OTT streams available'
+                          : 'Not available')),
+          icon: Icons.live_tv_rounded,
+          accentColor: const Color(0xFFE50914),
+          onTap: netmirrorOttStreams.isEmpty
+              ? null
+              : () async {
+                  if (hasOttAction) {
+                    final verified = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const NetmirrorOttVerifyScreen()),
+                    );
+                    if (verified == true && mounted) {
+                      setState(() {
+                        _resolvedSources.removeWhere((s) => s.type == StreamSourceType.netmirrorOtt);
+                      });
+                      _resolveNetmirrorOtt(
+                        movieTitle,
+                        _selectedMovie?['year']?.toString() ?? '',
+                        isSeries: _isSeriesSearch,
+                      );
+                    }
+                  } else {
+                    setState(() {
+                      _activeGroupType = StreamSourceType.netmirrorOtt;
+                    });
+                  }
+                },
+        );
+      }
+
       // Telegram Card
       if (_showTelegram && (_resolvingStreams || telegramStreams.isNotEmpty) && enabledKeys.contains('telegram')) {
         sourceWidgets['telegram'] = _buildServerGroupCard(
@@ -3012,7 +3240,33 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
-
+      // Dynamic Custom Modules (e.g. istreamflare, etc.)
+      final builtInModuleKeys = {'movieshunt', 'hdhub4u', 'moviesdrive', 'vegamovies', 'cinejoy', 'filmu'};
+      for (final mod in _dynamicModules) {
+        final key = mod['id'].toString();
+        if (builtInModuleKeys.contains(key)) continue;
+        final name = mod['name']?.toString() ?? key;
+        final isVis = _dynamicModuleVisibility[key] ?? true;
+        final modStreams = filteredSources.where((s) => s.moduleKey == key).toList();
+        if (isVis && (_resolvingStreams || modStreams.isNotEmpty) && enabledKeys.contains(key)) {
+          sourceWidgets[key] = _buildServerGroupCard(
+            title: '${pos(key)}. $name',
+            subtitle: _resolvingStreams && modStreams.isEmpty
+                ? 'Searching $name servers...'
+                : (modStreams.isNotEmpty
+                    ? '${modStreams.length} links available'
+                    : 'Not available'),
+            icon: Icons.layers_rounded,
+            accentColor: const Color(0xFF06B6D4),
+            onTap: modStreams.isEmpty
+                ? null
+                : () => setState(() {
+                    _activeGroupType = null;
+                    _activeDynamicModuleKey = key;
+                  }),
+          );
+        }
+      }
 
       final List<Widget> groupCards = [];
 
@@ -3078,98 +3332,55 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     } else {
       // 2. Expanded group sub-links list
       final List<StreamSourceInfo> activeList;
-      final Color accentColor;
-      final IconData iconData;
 
-      if (_activeGroupType == StreamSourceType.streamplay) {
+      if (_activeDynamicModuleKey != null) {
+        activeList = filteredSources.where((s) => s.moduleKey == _activeDynamicModuleKey).toList();
+      } else if (_activeGroupType == StreamSourceType.streamplay) {
         activeList = streamplayStreams;
-        accentColor = const Color(0xFF00E676);
-        iconData = Icons.flash_on_rounded;
       } else if (_activeGroupType == StreamSourceType.movy) {
         activeList = movyStreams;
-        accentColor = const Color(0xFFE50914);
-        iconData = Icons.auto_awesome_motion_rounded;
       } else if (_activeGroupType == StreamSourceType.moviesdrive) {
         activeList = moviesdriveStreams;
-        accentColor = const Color(0xFF10B981);
-        iconData = Icons.flash_on_rounded;
       } else if (_activeGroupType == StreamSourceType.hdhub4u) {
         activeList = hdhub4uStreams;
-        accentColor = const Color(0xFF06B6D4);
-        iconData = Icons.hd_rounded;
       } else if (_activeGroupType == StreamSourceType.stravo) {
         activeList = stravoStreams;
-        accentColor = Colors.cyan;
-        iconData = Icons.rocket_launch_rounded;
       } else if (_activeGroupType == StreamSourceType.torrent) {
         activeList = torrentStreams;
-        accentColor = Colors.amber;
-        iconData = Icons.cloud_circle_rounded;
       } else if (_activeGroupType == StreamSourceType.stalker) {
         activeList = stalkerStreams;
-        accentColor = Colors.purpleAccent;
-        iconData = Icons.movie_filter_rounded;
-
       } else if (_activeGroupType == StreamSourceType.dvdplay) {
         activeList = dvdplayStreams;
-        accentColor = Colors.deepOrangeAccent;
-        iconData = Icons.disc_full_rounded;
       } else if (_activeGroupType == StreamSourceType.mallumv) {
         activeList = mallumvStreams;
-        accentColor = Colors.pinkAccent;
-        iconData = Icons.music_video_rounded;
       } else if (_activeGroupType == StreamSourceType.vidnest) {
         activeList = vidnestStreams;
-        accentColor = Colors.indigoAccent;
-        iconData = Icons.video_library_rounded;
       } else if (_activeGroupType == StreamSourceType.hdhub4u) {
         activeList = hdhub4uStreams;
-        accentColor = Colors.lightGreenAccent;
-        iconData = Icons.hd_rounded;
       } else if (_activeGroupType == StreamSourceType.moviebox) {
         activeList = movieboxStreams;
-        accentColor = Colors.tealAccent;
-        iconData = Icons.movie_filter_rounded;
       } else if (_activeGroupType == StreamSourceType.stremioAddon) {
         activeList = stremioStreams;
-        accentColor = Colors.pinkAccent;
-        iconData = Icons.extension_rounded;
       } else if (_activeGroupType == StreamSourceType.nuveoAddon) {
         activeList = nuveoStreams;
-        accentColor = Colors.pinkAccent;
-        iconData = Icons.settings_input_component_rounded;
       } else if (_activeGroupType == StreamSourceType.filmu) {
         activeList = filmuStreams;
-        accentColor = Colors.orangeAccent;
-        iconData = Icons.hd_rounded;
       } else if (_activeGroupType == StreamSourceType.vegamovies) {
         activeList = vegamoviesStreams;
-        accentColor = Colors.greenAccent;
-        iconData = Icons.movie_creation_rounded;
       } else if (_activeGroupType == StreamSourceType.cinejoy) {
         activeList = cinejoyStreams;
-        accentColor = Colors.deepPurpleAccent;
-        iconData = Icons.play_circle_fill_rounded;
       } else if (_activeGroupType == StreamSourceType.streamtape) {
         activeList = streamtapeStreams;
-        accentColor = Colors.orange;
-        iconData = Icons.video_collection_rounded;
       } else if (_activeGroupType == StreamSourceType.netmirrorCenter) {
         activeList = netmirrorCenterStreams;
-        accentColor = Colors.amberAccent;
-        iconData = Icons.public_rounded;
+      } else if (_activeGroupType == StreamSourceType.netmirrorOtt) {
+        activeList = netmirrorOttStreams;
       } else if (_activeGroupType == StreamSourceType.telegram) {
         activeList = telegramStreams;
-        accentColor = Colors.lightBlue;
-        iconData = Icons.send_rounded;
       } else if (_activeGroupType == StreamSourceType.directLink) {
         activeList = directLinkStreams;
-        accentColor = Colors.teal;
-        iconData = Icons.link_rounded;
       } else {
         activeList = castleStreams;
-        accentColor = Colors.amberAccent;
-        iconData = Icons.castle_rounded;
       }
 
       if (activeList.isEmpty && _activeGroupType != StreamSourceType.stremioAddon && _activeGroupType != StreamSourceType.nuveoAddon) {
@@ -3312,7 +3523,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
-                        '${filtered.length} link${filtered.length != 1 ? "s" : ""} from ${_selectedAddonSubGroup}',
+                        '${filtered.length} link${filtered.length != 1 ? "s" : ""} from $_selectedAddonSubGroup',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.5),
                           fontSize: 11,
@@ -3329,24 +3540,20 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                           side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
                         ),
                         child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          leading: Icon(
-                            isNuv ? Icons.settings_input_component_rounded : Icons.extension_rounded,
-                            color: Colors.pinkAccent,
-                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                           title: Text(
-                            (s.quality?.isNotEmpty ?? false) ? s.quality! : 'Stream',
-                            style: GoogleFonts.outfit(
+                            s.name,
+                            style: const TextStyle(
                               color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                           subtitle: Text(
-                            (s.languages?.isNotEmpty ?? false) ? s.languages!.join(', ') : 'Unknown',
+                            (s.quality != null && s.quality!.isNotEmpty) ? s.quality! : (s.addonName ?? 'Direct Stream'),
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.5),
-                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.4),
+                              fontSize: 11,
                             ),
                           ),
                           trailing: const Icon(
@@ -3380,8 +3587,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       return ListView.builder(
         itemCount: sortedActiveList.length,
-        itemBuilder: (context, index) {
-          final source = sortedActiveList[index];
+        itemBuilder: (context, idx) {
+          final source = sortedActiveList[idx];
           return StreamMetadataTile(
             name: source.name,
             url: source.url,
@@ -3449,7 +3656,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         return;
       }
 
-      await DownloadManager.downloadMovie(movie, url);
+      final Map<String, String>? dlHeaders = (source.headers != null && source.headers!.isNotEmpty) ? source.headers : null;
+      await DownloadManager.downloadMovie(movie, url, headers: dlHeaders);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3586,8 +3794,11 @@ enum StreamSourceType {
   cinejoy,
   streamtape,
   netmirrorCenter,
+  netmirrorOtt,
   telegram,
+  movieshunt,
   directLink,
+  modular,
 }
 
 class StreamSourceInfo {
@@ -3602,6 +3813,7 @@ class StreamSourceInfo {
   final String? quality;
   final List<String>? languages;
   final String? size;
+  final String? moduleKey;
 
   StreamSourceInfo({
     required this.name,
@@ -3613,5 +3825,6 @@ class StreamSourceInfo {
     this.quality,
     this.languages,
     this.size,
+    this.moduleKey,
   });
 }

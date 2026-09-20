@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
@@ -18,7 +17,6 @@ import 'package:private_cinema_mobile/data/stalker_resolver.dart';
 import 'package:private_cinema_mobile/data/simkl_service.dart';
 import 'package:private_cinema_mobile/data/tmdb_service.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
 
 import 'package:private_cinema_mobile/screens/telegram_login_screen.dart';
 import 'package:private_cinema_mobile/screens/simkl_login_screen.dart';
@@ -40,6 +38,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _deviceId = 'Loading...';
+  bool _isExternalConfigExpanded = false;
   late final TextEditingController _torrentioUrlController;
   late final TextEditingController _stravoUrlController;
   late final TextEditingController _netmirrorDomainsController;
@@ -198,57 +197,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _clearCache() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          'Wipe App Data?',
-          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: const Text(
-          'This will clear all watch history, progress tracking, downloads, and favorites stored locally. Proceed?',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Wipe All', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
 
-    if (confirm == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-      await _loadDeviceId();
-      await _loadTorrentioUrl();
-      await _loadStravoUrl();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('App data and cache wiped successfully.')),
-        );
-      }
-    }
-  }
-
-  void _copyDeviceId() {
-    Clipboard.setData(ClipboardData(text: _deviceId));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Device ID copied to clipboard.')),
-    );
-  }
 
   Future<void> _testPortalConnectivity() async {
     setState(() {
@@ -1304,60 +1253,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // 2. Cloud Sync Device ID
-                  _buildSectionHeader('Cloud Sync'),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Your Device ID',
-                          style: TextStyle(color: Colors.white38, fontSize: 13),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                _deviceId,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold,
-                                  fontFamily: 'Consolas',
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.copy_rounded, color: Colors.white70),
-                              onPressed: _copyDeviceId,
-                              tooltip: 'Copy Device ID',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        const Divider(color: Colors.white10),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Use this Device ID to sync your favorites list and resume playback progress across TV and mobile apps.',
-                          style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12,
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
                   // External Player Settings Section
                   _buildSectionHeader('External Player Integration'),
                   const SizedBox(height: 12),
@@ -1371,54 +1266,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Default External Player',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Select your preferred external player app (VLC, MX Player, etc.).',
-                          style: TextStyle(color: Colors.white60, fontSize: 12),
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: ExternalPlayerService.playerTypes.map((pt) {
-                            final id = pt['id']!;
-                            final name = pt['name']!;
-                            final isSelected = id == _defaultExternalPlayer;
-                            return GestureDetector(
-                              onTap: () => _changeDefaultExternalPlayer(id),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isSelected ? AppColors.accentBright : Colors.white10,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isSelected ? Colors.white : Colors.white12,
-                                    width: isSelected ? 1.5 : 1,
-                                  ),
-                                ),
-                                child: Text(
-                                  name,
-                                  style: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.white70,
-                                    fontSize: 12,
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  ),
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                        const SizedBox(height: 16),
-                        const Divider(color: Colors.white10),
-                        const SizedBox(height: 12),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -1427,26 +1274,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Play ALL Videos in External Player',
+                                    'Default External Player',
                                     style: GoogleFonts.outfit(
                                       color: Colors.white,
                                       fontSize: 15,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Force all video sources to open in your default external player.',
-                                    style: TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: 12,
-                                      height: 1.3,
-                                    ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    ExternalPlayerService.playerTypes.firstWhere(
+                                      (pt) => pt['id'] == _defaultExternalPlayer,
+                                      orElse: () => {'name': 'Internal Player (MPV)'},
+                                    )['name']!,
+                                    style: TextStyle(color: AppColors.accentBright, fontSize: 13, fontWeight: FontWeight.w600),
                                   ),
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 16),
                             Switch(
                               value: _useExternalPlayer,
                               onChanged: _toggleExternalPlayer,
@@ -1454,47 +1299,155 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        if (!_useExternalPlayer) ...[
-                          const SizedBox(height: 16),
-                          const Divider(color: Colors.white10),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Or Select Specific Sources to Play Externally:',
-                            style: GoogleFonts.outfit(
-                              color: Colors.white70,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Force all video playback to launch in your selected external player app.',
+                          style: TextStyle(color: Colors.white54, fontSize: 11.5, height: 1.3),
+                        ),
+                        const SizedBox(height: 14),
+
+                        // Expand / Collapse Button for Player Options and Source-wise Toggles
+                        InkWell(
+                          onTap: () => setState(() => _isExternalConfigExpanded = !_isExternalConfigExpanded),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.04),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      _isExternalConfigExpanded ? Icons.tune_rounded : Icons.expand_more_rounded,
+                                      color: AppColors.accentBright,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      _isExternalConfigExpanded
+                                          ? 'Hide Player & Source Options'
+                                          : 'Configure Player & Source Toggles',
+                                      style: GoogleFonts.outfit(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Icon(
+                                  _isExternalConfigExpanded
+                                      ? Icons.keyboard_arrow_up_rounded
+                                      : Icons.keyboard_arrow_down_rounded,
+                                  color: Colors.white70,
+                                  size: 20,
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 12),
-                          ...ExternalPlayerService.sourceTypes.map((src) {
-                            final id = src['id']!;
-                            final name = src['name']!;
-                            final desc = src['desc']!;
-                            final isEnabled = _enabledExternalSources.contains(id);
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
-                                        Text(desc, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                                      ],
+                        ),
+
+                        if (_isExternalConfigExpanded) ...[
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.white10),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Select Default Player App:',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Choose which external media player app receives stream URLs.',
+                            style: TextStyle(color: Colors.white60, fontSize: 11.5),
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: ExternalPlayerService.playerTypes.map((pt) {
+                              final id = pt['id']!;
+                              final name = pt['name']!;
+                              final isSelected = id == _defaultExternalPlayer;
+                              return GestureDetector(
+                                onTap: () => _changeDefaultExternalPlayer(id),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: isSelected ? AppColors.accentBright : Colors.white10,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isSelected ? Colors.white : Colors.white12,
+                                      width: isSelected ? 1.5 : 1,
                                     ),
                                   ),
-                                  Switch(
-                                    value: isEnabled,
-                                    onChanged: (val) => _toggleExternalSource(id, val),
-                                    activeColor: AppColors.accentBright,
+                                  child: Text(
+                                    name,
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.white : Colors.white70,
+                                      fontSize: 12,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    ),
                                   ),
-                                ],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                          if (!_useExternalPlayer) ...[
+                            const SizedBox(height: 18),
+                            const Divider(color: Colors.white10),
+                            const SizedBox(height: 10),
+                            Text(
+                              'Or Select Specific Sources to Play Externally:',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
                               ),
-                            );
-                          }).toList(),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Only the enabled stream sources below will launch externally.',
+                              style: TextStyle(color: Colors.white60, fontSize: 11.5),
+                            ),
+                            const SizedBox(height: 12),
+                            ...ExternalPlayerService.sourceTypes.map((src) {
+                              final id = src['id']!;
+                              final name = src['name']!;
+                              final desc = src['desc']!;
+                              final isEnabled = _enabledExternalSources.contains(id);
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+                                          Text(desc, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                                        ],
+                                      ),
+                                    ),
+                                    Switch(
+                                      value: isEnabled,
+                                      onChanged: (val) => _toggleExternalSource(id, val),
+                                      activeColor: AppColors.accentBright,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ],
                         ],
                       ],
                     ),
@@ -1537,35 +1490,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 builder: (_) => const DownloadsScreen(),
                               ),
                             );
-                          },
-                        ),
-                        const Divider(color: Colors.white10, height: 1),
-                        ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          leading: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
-                          title: Text(
-                            'Wipe Local App Data',
-                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text('Reset watch records and local cache', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          onTap: _clearCache,
-                        ),
-                        const Divider(color: Colors.white10, height: 1),
-                        ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          leading: const Icon(Icons.cached_rounded, color: Colors.orangeAccent),
-                          title: Text(
-                            'Reset Scraper Cache',
-                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text('Force re-download of all scraper scripts', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                          onTap: () async {
-                            await WebViewScraperExecutor.clearScriptCache();
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Scraper cache cleared')),
-                              );
-                            }
                           },
                         ),
                       ],

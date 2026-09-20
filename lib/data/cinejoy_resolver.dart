@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class CinejoyResolver {
@@ -21,6 +22,22 @@ class CinejoyResolver {
     int? episode,
     bool isSeries = false,
   }) async {
+    // 1. Try remote module on shared hosting first
+    try {
+      final remoteStreams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'cinejoy',
+        title: title,
+        year: year,
+        tmdbId: tmdbId,
+      );
+      if (remoteStreams.isNotEmpty) {
+        debugPrint('CinejoyResolver: Got ${remoteStreams.length} streams via remote module');
+        return remoteStreams;
+      }
+    } catch (e) {
+      debugPrint('CinejoyResolver: Remote module bypass/failed: $e. Using client engine.');
+    }
+
     final domain = await getBaseDomain();
     final sources = <StreamSourceInfo>[];
 

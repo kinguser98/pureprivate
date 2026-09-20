@@ -5,6 +5,8 @@ import '../../utils/admin_api_client.dart';
 import '../../utils/tmdb_service.dart';
 import '../../providers/settings_provider.dart';
 import '../../widgets/common/glass_card.dart';
+import '../../../data/modular_source_service.dart';
+import '../../../data/simkl_service.dart';
 
 class AppSettingsScreen extends ConsumerStatefulWidget {
   const AppSettingsScreen({super.key});
@@ -19,6 +21,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   bool _isSaving = false;
   
   List<Map<String, dynamic>> _sources = [];
+  Map<String, String> _customModuleLabels = {};
   String _maxSourceSize = '0';
   List<Map<String, dynamic>> _portals = [];
   
@@ -52,6 +55,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _epgUrlsCtrl = TextEditingController();
   final _tmdbApiKeyCtrl = TextEditingController();
   final _fanartApiKeyCtrl = TextEditingController();
+  final _simklClientIdCtrl = TextEditingController();
   
   // Track expanded addon states
   final Set<String> _expandedAddons = {};
@@ -83,6 +87,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _epgUrlsCtrl.dispose();
     _tmdbApiKeyCtrl.dispose();
     _fanartApiKeyCtrl.dispose();
+    _simklClientIdCtrl.dispose();
     super.dispose();
   }
 
@@ -97,7 +102,34 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       // 2. Fetch Stalker Portals configured in admin panel
       final allPortals = await _adminApi.getStalkerSettings();
       
-      // 3. Parse Source Priority & Visibility
+      // 3. Parse Dynamic Modules & Source Priority & Visibility
+      _customModuleLabels.clear();
+      final List<String> dynamicModuleKeys = [];
+      if (settingsMap.containsKey('source_modules_json') && settingsMap['source_modules_json']!.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(settingsMap['source_modules_json']!);
+          if (decoded is Map && decoded['modules'] is List) {
+            for (final m in decoded['modules']) {
+              if (m is Map && m['id'] != null) {
+                final k = m['id'].toString();
+                dynamicModuleKeys.add(k);
+                _customModuleLabels[k] = m['name']?.toString() ?? ModularSourceService.getModuleName(k);
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      if (dynamicModuleKeys.isEmpty) {
+        try {
+          final mods = await ModularSourceService.fetchActiveModules();
+          for (final m in mods) {
+            final k = m['id'].toString();
+            dynamicModuleKeys.add(k);
+            _customModuleLabels[k] = m['name']?.toString() ?? ModularSourceService.getModuleName(k);
+          }
+        } catch (_) {}
+      }
+
       final allSources = [
         'streamplay',
         'moviebox',
@@ -114,16 +146,26 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'vegamovies',
         'cinejoy',
         'netmirror_center',
+        'netmirror_ott',
         'streamtape',
         'directLink',
       ];
+      // Append any dynamic modules (like istreamflare) to allSources
+      for (final k in dynamicModuleKeys) {
+        if (!allSources.contains(k)) {
+          allSources.add(k);
+        }
+      }
+
       final List<String> orderedSources = [];
       if (settingsMap.containsKey('source_order')) {
         try {
           final List<dynamic> parsed = jsonDecode(settingsMap['source_order']!);
           for (final s in parsed) {
-            if (allSources.contains(s) && !orderedSources.contains(s)) {
-              orderedSources.add(s.toString());
+            final strKey = s.toString();
+            // Only keep if currently valid in allSources (removes deleted modules automatically)
+            if (allSources.contains(strKey) && !orderedSources.contains(strKey)) {
+              orderedSources.add(strKey);
             }
           }
         } catch (_) {}
@@ -141,6 +183,16 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
           } else {
             orderedSources.add('netmirror_center');
           }
+        }
+      }
+
+      // If netmirror_ott is not in the saved source_order yet, insert it right after netmirror_center!
+      if (!orderedSources.contains('netmirror_ott')) {
+        final insertIdx = orderedSources.indexOf('netmirror_center');
+        if (insertIdx != -1) {
+          orderedSources.insert(insertIdx + 1, 'netmirror_ott');
+        } else {
+          orderedSources.add('netmirror_ott');
         }
       }
 
@@ -243,6 +295,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
       _tmdbApiKeyCtrl.text = settingsMap['tmdb_api_key'] ?? '';
       _fanartApiKeyCtrl.text = settingsMap['fanart_api_key'] ?? '';
+      _simklClientIdCtrl.text = settingsMap['simkl_client_id'] ?? SimklService.clientId;
 
       if (mounted) {
         setState(() {
@@ -264,6 +317,9 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   }
 
   String _getSourceLabel(String key) {
+    if (_customModuleLabels.containsKey(key)) {
+      return _customModuleLabels[key]!;
+    }
     switch (key) {
       case 'streamplay': return 'StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)';
       case 'movy': return 'Movy.bz Multi-Source (Multi-Audio & Multi-Quality)';
@@ -281,10 +337,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'moviebox': return 'MovieBox Server';
       case 'vegamovies': return 'Vegamovies.se Server';
       case 'netmirror_center': return 'NetMirror Center Server';
+      case 'netmirror_ott': return 'NetMirror OTT Server (Netflix/Prime/Hotstar)';
       case 'cinejoy': return 'Cinejoy.to Server';
       case 'streamtape': return 'Streamtape Server';
       case 'directLink': return 'Direct Links';
-      default: return key;
+      default: return ModularSourceService.getModuleName(key);
     }
   }
 
@@ -411,10 +468,15 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
         'tmdb_api_key': _tmdbApiKeyCtrl.text.trim(),
         'fanart_api_key': _fanartApiKeyCtrl.text.trim(),
+        'simkl_client_id': _simklClientIdCtrl.text.trim(),
       };
       
       TmdbService.customApiKey = _tmdbApiKeyCtrl.text.trim();
       TmdbService.customFanartApiKey = _fanartApiKeyCtrl.text.trim();
+      final simklKey = _simklClientIdCtrl.text.trim();
+      if (simklKey.isNotEmpty) {
+        await SimklService.saveClientId(simklKey);
+      }
       
       for (final s in _sources) {
         newSettings['source_show_${s['key']}'] = s['enabled'] == true ? 'true' : 'false';
@@ -1429,6 +1491,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Seedr.cc Auth Token (shared)',
                 controller: _seedrTokenCtrl,
                 hint: 'Paste Seedr.cc auth token',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.movie_filter_rounded,
+                label: 'SIMKL Client ID (Secret API Key)',
+                controller: _simklClientIdCtrl,
+                hint: 'Paste SIMKL Developer Client ID (64-char key)',
               ),
             ],
           ),

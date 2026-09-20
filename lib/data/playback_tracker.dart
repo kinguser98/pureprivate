@@ -162,6 +162,7 @@ abstract final class PlaybackTracker {
       tags: movie.tags,
       cast: movie.cast,
       director: movie.director,
+      directorPhoto: movie.directorPhoto,
       videoSource: movie.videoSource,
       trailerUrl: movie.trailerUrl,
       castMembers: movie.castMembers,
@@ -169,6 +170,12 @@ abstract final class PlaybackTracker {
       tmdbId: movie.tmdbId,
       imdbId: movie.imdbId,
       streamSources: movie.streamSources,
+      collection: movie.collection,
+      isNew: movie.isNew,
+      ottName: movie.ottName,
+      ottLogo: movie.ottLogo,
+      ottId: movie.ottId,
+      logoUrl: movie.logoUrl,
     );
   }
 }

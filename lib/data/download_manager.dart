@@ -666,12 +666,43 @@ abstract final class DownloadManager {
     await prefs.setString('downloaded_movies_metadata', json.encode(decoded));
   }
 
+  /// Resolves the actual on-disk file path dynamically.
+  /// Handles iOS sandbox container UUID rotation across app launches.
+  static Future<String> resolveLocalPath(String storedPath) async {
+    if (storedPath.isEmpty || kIsWeb) return storedPath;
+    final file = File(storedPath);
+    if (await file.exists()) return storedPath;
+
+    try {
+      final docDir = await getApplicationDocumentsDirectory();
+      final fileName = p.basename(storedPath);
+      final c1 = p.join(docDir.path, 'downloads', fileName);
+      if (await File(c1).exists()) return c1;
+      final c2 = p.join(docDir.path, fileName);
+      if (await File(c2).exists()) return c2;
+    } catch (_) {}
+    return storedPath;
+  }
+
+  /// Canonicalizes movie title by stripping language tags, resolution, and punctuation.
+  static String canonicalTitle(String t) {
+    return t
+        .toLowerCase()
+        .replaceAll(RegExp(r'\b(mal|tam|hin|tel|kan|malayalam|tamil|hindi|telugu|kannada|4k|uhd|fhd|hd|hevc)\b', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'\[.*?\]'), ' ')
+        .replaceAll(RegExp(r'\(.*?\)'), ' ')
+        .replaceAll(RegExp(r'[-–—:.]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
   /// Checks if a movie has been fully downloaded and the file exists.
   static Future<bool> isDownloaded(String movieId) async {
     final path = await getLocalPath(movieId);
     if (path == null) return false;
     if (kIsWeb) return true; // On web, if metadata exists, consider it downloaded
-    return File(path).exists();
+    final resolved = await resolveLocalPath(path);
+    return File(resolved).exists();
   }
 
   /// Returns the local path where the movie video file is stored.
@@ -679,15 +710,27 @@ abstract final class DownloadManager {
     final prefs = await SharedPreferences.getInstance();
     final rawList = prefs.getString('downloaded_movies_metadata') ?? '[]';
     final List<dynamic> decoded = json.decode(rawList);
+    final targetCanonical = canonicalTitle(movieId);
 
     final match = decoded.firstWhere(
-      (item) => item['id']?.toString() == movieId ||
-                (item['tmdb_id'] != null && item['tmdb_id']?.toString() == movieId) ||
-                (item['title'] != null && item['title']?.toString().toLowerCase() == movieId.toLowerCase()),
+      (item) {
+        final id = item['id']?.toString() ?? '';
+        final tmdbId = item['tmdb_id']?.toString() ?? '';
+        final title = item['title']?.toString() ?? '';
+        if (id == movieId || tmdbId == movieId || title.toLowerCase() == movieId.toLowerCase()) {
+          return true;
+        }
+        if (targetCanonical.isNotEmpty && canonicalTitle(title) == targetCanonical) {
+          return true;
+        }
+        return false;
+      },
       orElse: () => null,
     );
     if (match == null) return null;
-    return match['stream_url']?.toString();
+    final rawPath = match['stream_url']?.toString();
+    if (rawPath == null) return null;
+    return await resolveLocalPath(rawPath);
   }
 
   /// Retrieves a list of all fully downloaded Movie models.
@@ -701,15 +744,23 @@ abstract final class DownloadManager {
     }
 
     final List<dynamic> validMetadata = [];
+    bool pathsChanged = false;
     for (final item in decoded) {
       final path = item['stream_url']?.toString();
-      if (path != null && await File(path).exists()) {
-        validMetadata.add(item);
+      if (path != null) {
+        final resolved = await resolveLocalPath(path);
+        if (await File(resolved).exists()) {
+          if (resolved != path) {
+            item['stream_url'] = resolved;
+            pathsChanged = true;
+          }
+          validMetadata.add(item);
+        }
       }
     }
 
-    // Rewrite cleaned list if missing files were detected and removed
-    if (validMetadata.length != decoded.length) {
+    // Save healed paths if sandbox changed, or clean if deleted
+    if (pathsChanged || validMetadata.length != decoded.length) {
       await prefs.setString('downloaded_movies_metadata', json.encode(validMetadata));
     }
 
@@ -733,7 +784,13 @@ abstract final class DownloadManager {
     final prefs = await SharedPreferences.getInstance();
     final rawList = prefs.getString('downloaded_movies_metadata') ?? '[]';
     final List<dynamic> decoded = json.decode(rawList);
-    decoded.removeWhere((item) => item['id']?.toString() == movieId);
+    final targetCanonical = canonicalTitle(movieId);
+    decoded.removeWhere((item) {
+      final id = item['id']?.toString() ?? '';
+      final tmdbId = item['tmdb_id']?.toString() ?? '';
+      final title = item['title']?.toString() ?? '';
+      return id == movieId || tmdbId == movieId || (targetCanonical.isNotEmpty && canonicalTitle(title) == targetCanonical);
+    });
     await prefs.setString('downloaded_movies_metadata', json.encode(decoded));
   }
 }

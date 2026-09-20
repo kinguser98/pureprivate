@@ -122,6 +122,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   double _playbackSpeed = 1.0;
   double _audioDelay = 0.0;
   double _subtitleDelay = 0.0;
+  bool _isSoftwareDecoding = false;
+  bool _autoFallbackTriggered = false;
+
+  Future<void> _toggleHardwareDecoding() async {
+    if (_player.platform is! NativePlayer) return;
+    final nativePlayer = _player.platform as NativePlayer;
+    final newMode = !_isSoftwareDecoding;
+    setState(() {
+      _isSoftwareDecoding = newMode;
+    });
+    final hwdecVal = newMode ? 'no' : 'auto-safe';
+    await nativePlayer.setProperty('hwdec', hwdecVal);
+    debugPrint('VideoPlayerScreen: Switched hwdec to $hwdecVal');
+    final currentPos = _player.state.position;
+    await _player.seek(currentPos);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(newMode ? 'Switched to Software Decoding (CPU)' : 'Switched to Hardware Decoding (GPU)'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
 
   String? _resolvedSourceUrl;
   Map<String, String>? _resolvedSourceHeaders;
@@ -266,7 +290,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _player = Player();
-    _controller = VideoController(_player);
+    _controller = VideoController(
+      _player,
+      configuration: const VideoControllerConfiguration(
+        hwdec: 'auto-safe',
+      ),
+    );
     _bindStreams();
     _open();
     
@@ -394,6 +423,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 setState(() => _showInitialTrackSelector = true);
               }
             });
+          }
+        }
+
+        // Automatic fallback watchdog: if audio is playing but video frames failed to render with hardware decoding
+        if (currentMs > 2000 && !_autoFallbackTriggered && !_isSoftwareDecoding) {
+          final realVideoTracks = _realVideoTracks;
+          final params = _player.state.videoParams;
+          if (realVideoTracks.isNotEmpty && (params.dw == null || params.dw == 0 || params.dh == null || params.dh == 0)) {
+            _autoFallbackTriggered = true;
+            debugPrint('VideoPlayerScreen: Hardware decoder failed to render frames. Auto-switching to software decoding...');
+            _toggleHardwareDecoding();
           }
         }
 
@@ -602,22 +642,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           }
         }
         // Hardware decoding configuration
-        if (Platform.isAndroid) {
-          await nativePlayer.setProperty('hwdec', 'auto');
-        } else if (Platform.isIOS || Platform.isMacOS) {
-          await nativePlayer.setProperty('hwdec', 'videotoolbox');
+        // 'auto-safe' selects safe copy-back hwdec (mediacodec-copy on Android, videotoolbox-copy on iOS)
+        // and enables seamless fallback to FFmpeg software decoding for non-compliant MKV Annex-B streams.
+        if (_isSoftwareDecoding) {
+          await nativePlayer.setProperty('hwdec', 'no');
         } else {
-          await nativePlayer.setProperty('hwdec', 'auto');
+          await nativePlayer.setProperty('hwdec', 'auto-safe');
         }
+        await nativePlayer.setProperty('vd-lavc-threads', '0');
+        await nativePlayer.setProperty('ad-lavc-downmix', 'yes');
+        await nativePlayer.setProperty('audio-pitch-correction', 'yes');
         
         if (widget.isLive) {
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '5');
-          await nativePlayer.setProperty('cache-secs', '5');
-          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
-          await nativePlayer.setProperty('cache-pause-wait', '0');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '20');
+          await nativePlayer.setProperty('cache-secs', '20');
+          await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
+          await nativePlayer.setProperty('cache-pause-wait', '1');
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('framedrop', 'vo');
@@ -671,13 +714,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerSubtitle.contains('telegram') ||
               lowerSubtitle.contains('streamplay') ||
               lowerSubtitle.contains('moviebox') ||
+              lowerSubtitle.contains('netmirror') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerSourceName.contains('streamplay') ||
               lowerSourceName.contains('moviebox') ||
+              lowerSourceName.contains('netmirror') ||
+              lowerSourceName.contains('istream') ||
+              lowerUrl.contains('okcdn.ru') ||
+              lowerUrl.contains('vkuser.net') ||
+              lowerUrl.contains('exposeworld.art') ||
               lowerUrl.contains('vidlink.pro') ||
               lowerUrl.contains('hlowb.com') ||
+              lowerUrl.contains('imgcdn.kim') ||
+              lowerUrl.contains('freecdn') ||
               lowerUrl.contains('castle') ||
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
@@ -868,7 +919,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _keepControlsVisible();
   }
 
-  Future<void> _seekRelative(int seconds) async {
+  Future<void> _seekRelative(int seconds, {bool showControls = false}) async {
     _startPlayerLogoTimer();
     final target = _position + Duration(seconds: seconds);
     final clamped = target < Duration.zero
@@ -891,7 +942,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     _showHud('seek', seconds);
-    _keepControlsVisible();
+    if (showControls) {
+      _keepControlsVisible();
+    }
   }
 
   void _showHud(String type, [int? value]) {
@@ -1081,11 +1134,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 if (_controlsLocked) return;
                 final x = details.localPosition.dx;
                 if (x < screenWidth / 2) {
-                  _seekRelative(-5);
+                  _seekRelative(-5, showControls: false);
                 } else {
-                  _seekRelative(5);
+                  _seekRelative(5, showControls: false);
                 }
               },
+              onDoubleTap: () {},
               behavior: HitTestBehavior.opaque,
             ),
           ),
@@ -2531,6 +2585,32 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                           () => _showSettingsSheet(initialPane: 2),
                         ),
 
+                        // Decoder Mode Toggle (HW / SW)
+                        _buildTopBarIcon(
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _isSoftwareDecoding
+                                  ? Colors.orangeAccent.withValues(alpha: 0.25)
+                                  : AppColors.accentBright.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _isSoftwareDecoding ? Colors.orangeAccent : AppColors.accentBright,
+                                width: 1,
+                              ),
+                            ),
+                            child: Text(
+                              _isSoftwareDecoding ? 'SW' : 'HW',
+                              style: TextStyle(
+                                color: _isSoftwareDecoding ? Colors.orangeAccent : AppColors.accentBright,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          _toggleHardwareDecoding,
+                        ),
+
                         // Lock Toggle
                         _buildTopBarIcon(
                           Icon(
@@ -2580,7 +2660,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                       if (!widget.isLive) ...[
                         IconButton(
                           icon: const Icon(Icons.fast_rewind_rounded, color: Colors.white, size: 56),
-                          onPressed: () => _seekRelative(-5),
+                          onPressed: () => _seekRelative(-5, showControls: true),
                         ),
                         const SizedBox(width: 60),
                       ],
@@ -2614,7 +2694,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         const SizedBox(width: 60),
                         IconButton(
                           icon: const Icon(Icons.fast_forward_rounded, color: Colors.white, size: 56),
-                          onPressed: () => _seekRelative(5),
+                          onPressed: () => _seekRelative(5, showControls: true),
                         ),
                       ],
                     ],

@@ -446,7 +446,7 @@ class SyncService {
       } catch (_) {}
     }
     if (list.isEmpty) {
-      list = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','telegram','filmu','vegamovies','cinejoy','streamtape','directLink'];
+      list = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','telegram','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','directLink'];
     }
     return list;
   }

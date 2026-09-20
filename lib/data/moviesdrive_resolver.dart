@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/domain_service.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class MoviesdriveResolver {
@@ -54,6 +55,20 @@ class MoviesdriveResolver {
     final candidateDomains = [baseDomain, ..._domains.where((d) => d != baseDomain)];
 
     debugPrint('MoviesdriveResolver: Searching "$cleanTitle" ($year)...');
+
+    // 1. Try remote shared hosting module first
+    try {
+      final remote = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'moviesdrive',
+        title: cleanTitle,
+        year: year,
+      );
+      if (remote.isNotEmpty) {
+        debugPrint('MoviesdriveResolver: Got ${remote.length} streams via remote module');
+        return remote;
+      }
+    } catch (_) {}
+
     final sources = <StreamSourceInfo>[];
 
     for (final domain in candidateDomains) {
@@ -304,8 +319,10 @@ class MoviesdriveResolver {
         final lowerHref = href.toLowerCase();
         final lowerLabel = label.toLowerCase();
 
-        // Skip fuckingfast as requested
-        if (lowerHref.contains('fuckingfast.net')) continue;
+        // Skip fuckingfast, pixel.hubcloud, pixeldrain
+        if (lowerHref.contains('fuckingfast.net') ||
+            lowerHref.contains('pixel.hubcloud') ||
+            lowerHref.contains('pixeldrain')) continue;
 
         if (lowerHref.contains('.r2.cloudflarestorage.com') ||
             lowerHref.contains('cdn.') ||

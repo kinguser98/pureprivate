@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'domain_service.dart';
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class VegamoviesResolver {
@@ -21,6 +22,22 @@ class VegamoviesResolver {
     int? episode,
     bool isSeries = false,
   }) async {
+    // 1. Try remote module on shared hosting first
+    try {
+      final remoteStreams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'vegamovies',
+        title: title,
+        year: year,
+        imdbId: imdbId,
+      );
+      if (remoteStreams.isNotEmpty) {
+        debugPrint('VegamoviesResolver: Got ${remoteStreams.length} streams via remote module');
+        return remoteStreams;
+      }
+    } catch (e) {
+      debugPrint('VegamoviesResolver: Remote module bypass/failed: $e. Using client engine.');
+    }
+
     final sources = <StreamSourceInfo>[];
 
     // If imdbId is already provided, attempt direct player resolution first

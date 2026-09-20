@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class FilmuResolver {
@@ -23,6 +24,24 @@ class FilmuResolver {
     int? episode,
     bool isSeries = false,
   }) async {
+    // 1. Try remote module on shared hosting first
+    try {
+      final y = int.tryParse(year ?? '') ?? 2024;
+      final remoteStreams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'filmu',
+        title: title,
+        year: y,
+        tmdbId: tmdbId,
+        imdbId: imdbId,
+      );
+      if (remoteStreams.isNotEmpty) {
+        debugPrint('FilmuResolver: Got ${remoteStreams.length} streams via remote module');
+        return remoteStreams;
+      }
+    } catch (e) {
+      debugPrint('FilmuResolver: Remote module bypass/failed: $e. Using client engine.');
+    }
+
     final sources = <StreamSourceInfo>[];
     final mediaType = isSeries ? 'tv' : 'movie';
     final targetId = (imdbId != null && imdbId.isNotEmpty && imdbId.startsWith('tt'))

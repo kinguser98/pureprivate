@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/domain_service.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
+import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class Hdhub4uResolver {
@@ -56,6 +57,20 @@ class Hdhub4uResolver {
     final candidateDomains = [baseDomain, ..._domains.where((d) => d != baseDomain)];
 
     debugPrint('Hdhub4uResolver: Searching "$cleanTitle" ($year)...');
+
+    // 1. Try remote shared hosting module first
+    try {
+      final remote = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'hdhub4u',
+        title: cleanTitle,
+        year: year,
+      );
+      if (remote.isNotEmpty) {
+        debugPrint('Hdhub4uResolver: Got ${remote.length} streams via remote module');
+        return remote;
+      }
+    } catch (_) {}
+
     final sources = <StreamSourceInfo>[];
 
     for (final domain in candidateDomains) {
@@ -120,7 +135,8 @@ class Hdhub4uResolver {
     return query
         .replaceAll(RegExp(r'\[.*?\]'), ' ')
         .replaceAll(RegExp(r'\(.*?\)'), ' ')
-        .replaceAll(RegExp(r'\b(dub|dubbed|hd|4k|hindi|tamil|telugu|multi|dual audio)\b', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'\b(dub|dubbed|hd|4k|hindi|tamil|telugu|malayalam|kannada|multi|dual audio)\b', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'[-–—:.]'), ' ')
         .replaceAll(RegExp(r'[^\w\s]'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
@@ -128,7 +144,17 @@ class Hdhub4uResolver {
 
   static List<String> _extractPostUrls(String html, String domain, String cleanTitle) {
     final postUrls = <String>[];
-    final words = cleanTitle.toLowerCase().split(' ').where((w) => w.length > 2).toList();
+    const languageStopWords = {'mal', 'tam', 'hin', 'tel', 'kan', 'eng', 'sub', 'dub', 'hd', '4k', 'uhd', 'fhd', 'movie', 'full', 'series', 'season'};
+    final words = cleanTitle
+        .toLowerCase()
+        .split(' ')
+        .map((w) => w.trim())
+        .where((w) => w.length >= 3 && !languageStopWords.contains(w))
+        .toList();
+    if (words.isEmpty && cleanTitle.trim().isNotEmpty) {
+      words.add(cleanTitle.trim().toLowerCase());
+    }
+
     final linkRegex = RegExp(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>', caseSensitive: false, dotAll: true);
     final matches = linkRegex.allMatches(html);
 
@@ -259,8 +285,10 @@ class Hdhub4uResolver {
         final label = m.group(2)?.replaceAll(RegExp(r'<[^>]*>'), '').trim() ?? '';
         final lowerHref = href.toLowerCase();
 
-        // Skip fuckingfast
-        if (lowerHref.contains('fuckingfast.net')) continue;
+        // Skip fuckingfast, pixel.hubcloud, pixeldrain
+        if (lowerHref.contains('fuckingfast.net') ||
+            lowerHref.contains('pixel.hubcloud') ||
+            lowerHref.contains('pixeldrain')) continue;
 
         if (lowerHref.contains('.r2.cloudflarestorage.com') ||
             lowerHref.contains('cdn.') ||

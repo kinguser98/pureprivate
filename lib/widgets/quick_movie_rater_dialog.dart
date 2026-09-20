@@ -530,6 +530,7 @@ class _QuickMovieRaterDialogState extends State<QuickMovieRaterDialog>
 
       overrides[movie.tmdbId] = {
         'release_date': movie.releaseDate,
+        'watched_date': DateTime.now().toIso8601String(),
         'rating': rating5,
         'notes': 'Rated via Quick Movie Rater',
         'title': movie.title,

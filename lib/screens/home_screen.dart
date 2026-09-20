@@ -136,6 +136,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final rawData = await ApiService.fetchRawData();
       final rawMovies = rawData['movies'] as List<dynamic>? ?? [];
       final rawLanguages = rawData['languages'] as List<dynamic>? ?? [];
+
       final parsedMovies = ApiService.parseMovies(rawMovies, rawLanguages, true);
       ApiService.cachedMovies = parsedMovies;
       final parsedLanguages = ApiService.parseLanguages(rawLanguages);

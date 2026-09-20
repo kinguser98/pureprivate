@@ -43,11 +43,15 @@ import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
 import 'package:private_cinema_mobile/data/vegamovies_resolver.dart';
 import 'package:private_cinema_mobile/data/netmirror_center_resolver.dart';
+import 'package:private_cinema_mobile/data/netmirror_ott_resolver.dart';
+import 'package:private_cinema_mobile/screens/netmirror_ott_verify_screen.dart';
 import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/filmu_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
 import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
 import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
+import 'package:private_cinema_mobile/data/movieshunt_resolver.dart';
+import 'package:private_cinema_mobile/data/modular_source_service.dart';
 import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/stream_metadata_tile.dart';
 
@@ -89,6 +93,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveMovySources = [];
   List<StreamSource> _liveMoviesdriveSources = [];
   List<StreamSource> _liveHdhub4uSources = [];
+  List<StreamSource> _liveMovieshuntSources = [];
   List<StreamSource> _liveStalkerSources = [];
   List<StreamSource> _liveStravoSources = [];
   List<StreamSource> _liveStremioSources = [];
@@ -106,6 +111,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingMovy = false;
   bool _resolvingMoviesdrive = false;
   bool _resolvingHdhub4u = false;
+  bool _resolvingMovieshunt = false;
   bool _resolvingStalker = false;
   bool _resolvingStravo = false;
   bool _resolvingStremio = false;
@@ -121,6 +127,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showMovy = true;
   bool _showMoviesdrive = true;
   bool _showHdhub4u = true;
+  bool _showMovieshunt = true;
   bool _showVidlink = true;
   bool _showNetmirror = true;
   bool _showMoviebox = true;
@@ -137,12 +144,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showNetmirrorCenter = true;
   bool _resolvingNetmirrorCenter = false;
   List<StreamSource> _liveNetmirrorCenterSources = [];
+  bool _showNetmirrorOtt = true;
+  bool _resolvingNetmirrorOtt = false;
+  List<StreamSource> _liveNetmirrorOttSources = [];
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [
-    'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u',
+    'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-    'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'
+    'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
   ];
+  List<Map<String, dynamic>> _dynamicModules = [];
+  Map<String, bool> _dynamicModuleVisibility = {};
+  Map<String, List<StreamSource>> _liveModuleSources = {};
+  Map<String, bool> _resolvingModules = {};
   StateSetter? _modalSetState;
 
   Color? _qualityBadgeColor(String quality) {
@@ -331,12 +345,20 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   Future<void> _loadSourceVisibilities() async {
     final prefs = await SharedPreferences.getInstance();
     final cloud = await SyncService.fetchAppSettings();
+    List<Map<String, dynamic>> activeMods = [];
+    try {
+      activeMods = await ModularSourceService.fetchActiveModules();
+    } catch (e) {
+      debugPrint('Error loading dynamic modules in MovieDetailScreen: $e');
+    }
+
     if (mounted) {
       setState(() {
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
         _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
+        _showMovieshunt = cloud.containsKey('source_show_movieshunt') ? cloud['source_show_movieshunt'] == 'true' : (prefs.getBool('source_show_movieshunt') ?? true);
         _showVidlink = cloud.containsKey('source_show_vidlink') ? cloud['source_show_vidlink'] == 'true' : (prefs.getBool('source_show_vidlink') ?? true);
         _showNetmirror = cloud.containsKey('source_show_netmirror') ? cloud['source_show_netmirror'] == 'true' : (prefs.getBool('source_show_netmirror') ?? true);
         _showStalker = cloud.containsKey('source_show_stalker') ? cloud['source_show_stalker'] == 'true' : (prefs.getBool('source_show_stalker') ?? true);
@@ -351,6 +373,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
         _showFilmu = cloud.containsKey('source_show_filmu') ? cloud['source_show_filmu'] == 'true' : (prefs.getBool('source_show_filmu') ?? true);
         _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
+        _showNetmirrorOtt = cloud.containsKey('source_show_netmirror_ott') ? cloud['source_show_netmirror_ott'] == 'true' : (prefs.getBool('source_show_netmirror_ott') ?? true);
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
         _blockedAddonGroups = blockedRaw
@@ -358,23 +381,52 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             .map((s) => s.trim().toLowerCase())
             .where((s) => s.isNotEmpty)
             .toList();
+
+        // Dynamic modules visibility
+        _dynamicModules = activeMods;
+        for (final m in activeMods) {
+          final id = m['id'].toString();
+          final isShow = cloud.containsKey('source_show_$id')
+              ? cloud['source_show_$id'] == 'true'
+              : (prefs.getBool('source_show_$id') ?? (m['enabled'] == true));
+          _dynamicModuleVisibility[id] = isShow;
+        }
       });
     }
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
     if (mounted) {
       final List<String> defaultOrder = [
-        'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u',
+        'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
         'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-        'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'directLink'
+        'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
       ];
+      for (final m in _dynamicModules) {
+        final id = m['id'].toString();
+        if (!defaultOrder.contains(id)) defaultOrder.add(id);
+      }
       final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
       for (final key in defaultOrder) {
         if (!mergedOrder.contains(key)) mergedOrder.add(key);
       }
+      for (final m in _dynamicModules) {
+        final id = m['id'].toString();
+        if (!mergedOrder.contains(id)) mergedOrder.add(id);
+      }
       mergedOrder.remove('mkvbase');
       mergedOrder.remove('cinemm');
       setState(() => _sourceOrder = mergedOrder);
+
+      // Trigger resolution for all visible dynamic modules now that dynamic modules are loaded
+      final builtInKeys = {'movieshunt', 'hdhub4u', 'moviesdrive', 'vegamovies', 'cinejoy', 'filmu'};
+      for (final mod in _dynamicModules) {
+        final modId = mod['id'].toString();
+        if (builtInKeys.contains(modId)) continue;
+        final isVisible = _dynamicModuleVisibility[modId] ?? true;
+        if (isVisible && _resolvingModules[modId] != true && !_liveModuleSources.containsKey(modId)) {
+          _resolveLiveDynamicModule(mod);
+        }
+      }
     }
   }
 
@@ -438,6 +490,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       _resolveLiveNetmirrorCenter(movie.title, movie.year?.toString() ?? '2026', originalLanguage: movie.language);
     }
 
+    if (_showNetmirrorOtt) {
+      _resolveLiveNetmirrorOtt(movie.title, movie.year?.toString() ?? '2026', originalLanguage: movie.language);
+    }
+
     final tmdbId = movie.tmdbId?.toString() ?? movie.id;
     if (_showMovy && tmdbId.isNotEmpty && tmdbId != '0' && tmdbId != 'null') {
       _resolveLiveMovy(tmdbId);
@@ -449,6 +505,82 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (_showHdhub4u && movie.title.isNotEmpty) {
       _resolveLiveHdhub4u(movie.title, movie.year?.toString() ?? '2024');
+    }
+
+    if (_showMovieshunt && movie.title.isNotEmpty) {
+      _resolveLiveMovieshunt(movie.title, movie.year?.toString() ?? '2024');
+    }
+
+    // Resolve dynamic modules (custom modules not already covered by built-in resolvers)
+    final builtInKeys = {'movieshunt', 'hdhub4u', 'moviesdrive', 'vegamovies', 'cinejoy', 'filmu'};
+    for (final mod in _dynamicModules) {
+      final modId = mod['id'].toString();
+      if (builtInKeys.contains(modId)) continue;
+      final isVisible = _dynamicModuleVisibility[modId] ?? true;
+      if (isVisible && _resolvingModules[modId] != true && !_liveModuleSources.containsKey(modId)) {
+        _resolveLiveDynamicModule(mod);
+      }
+    }
+  }
+
+  Future<void> _resolveLiveDynamicModule(Map<String, dynamic> mod) async {
+    final modId = mod['id'].toString();
+    final modName = mod['name']?.toString() ?? modId;
+    if (mounted) setState(() => _resolvingModules[modId] = true);
+    try {
+      final parsedYear = (movie.year is int)
+          ? (movie.year as int)
+          : (int.tryParse(movie.year?.toString() ?? '') ?? 0);
+      final streams = await ModularSourceService.resolveModuleStreams(
+        moduleKey: modId,
+        title: movie.title,
+        year: parsedYear,
+        imdbId: movie.imdbId,
+        tmdbId: movie.tmdbId,
+      );
+      if (mounted) {
+        setState(() {
+          _liveModuleSources[modId] = streams.map((s) => StreamSource(
+            name: s.name.isNotEmpty ? s.name : modName,
+            url: s.url,
+            quality: s.quality,
+            headers: s.headers,
+          )).toList();
+          _resolvingModules[modId] = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Dynamic module $modId stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingModules[modId] = false);
+    }
+  }
+
+  Future<void> _resolveLiveMovieshunt(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingMovieshunt = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2024;
+      final infos = await MovieshuntResolver.resolveStreams(
+        title: title,
+        year: y,
+      );
+      if (mounted) {
+        setState(() {
+          _liveMovieshuntSources = infos.map((info) {
+            var n = info.name.replaceAll(RegExp(r'\bMovies\s*Hunt\b[:\s-]*', caseSensitive: false), '').trim();
+            if (n.startsWith('•')) n = n.substring(1).trim();
+            return StreamSource(
+              name: n.isEmpty ? 'Cloudflare R2 Direct' : n,
+              url: info.url,
+              headers: info.headers,
+              quality: info.quality,
+            );
+          }).toList();
+          _resolvingMovieshunt = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('MoviesHunt stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingMovieshunt = false);
     }
   }
 
@@ -554,6 +686,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _resolveLiveNetmirrorCenter(String title, String yearStr, {String? originalLanguage}) async {
+    if (!_showNetmirrorCenter) return;
     if (mounted) setState(() => _resolvingNetmirrorCenter = true);
     try {
       final infos = await NetmirrorCenterResolver.resolveStreams(
@@ -575,6 +708,44 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     } catch (e) {
       debugPrint('NetMirror Center stream resolution failed: $e');
       if (mounted) setState(() => _resolvingNetmirrorCenter = false);
+    }
+  }
+
+  Future<void> _resolveLiveNetmirrorOtt(String title, String yearStr, {String? originalLanguage, bool isSeries = false, int? season, int? episode}) async {
+    if (!_showNetmirrorOtt) return;
+    if (mounted) setState(() => _resolvingNetmirrorOtt = true);
+    try {
+      final result = await NetmirrorOttResolver.resolveStreams(
+        title: title,
+        year: yearStr,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted) {
+        setState(() {
+          if (result.streams.isNotEmpty) {
+            _liveNetmirrorOttSources = result.streams.map((info) => StreamSource(
+              name: info.name,
+              url: info.url,
+              headers: info.headers,
+            )).toList();
+          } else if (result.needsOtp) {
+            _liveNetmirrorOttSources = [
+              StreamSource(
+                name: 'NetMirror OTT • [Tap to Verify Session]',
+                url: 'netmirror_verify_action',
+              ),
+            ];
+          } else {
+            _liveNetmirrorOttSources = [];
+          }
+          _resolvingNetmirrorOtt = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('NetMirror OTT stream resolution failed: $e');
+      if (mounted) setState(() => _resolvingNetmirrorOtt = false);
     }
   }
 
@@ -2366,6 +2537,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }) async {
     source = _sanitizeUrl(source);
 
+    // Only show verify screen for the sentinel placeholder URL, not real stream URLs.
+    if (source == 'netmirror_verify_action') {
+      final verified = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (_) => const NetmirrorOttVerifyScreen()),
+      );
+      if (verified == true && mounted) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.redAccent)),
+        );
+        await _resolveLiveNetmirrorOtt(movie.title, movie.year?.toString() ?? '2026');
+        if (mounted) Navigator.of(context).pop();
+        if (mounted && _liveNetmirrorOttSources.isNotEmpty &&
+            !_liveNetmirrorOttSources.any((s) => s.url == 'netmirror_verify_action')) {
+          final first = _liveNetmirrorOttSources.first;
+          // Play directly — bypass the verify check since we just verified
+          return _playWithResolution(
+            first.url,
+            resumeDirectly: resumeDirectly,
+            sourceName: first.name,
+            headers: first.headers,
+          );
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session verified! Tap NetMirror OTT again.')),
+          );
+        }
+      }
+      return;
+    }
+
     // Telegram Saved-Message file: resolve to a streamable URL first.
     if (TelegramSources.isTelegramUrl(source)) {
       await Future.delayed(const Duration(milliseconds: 350));
@@ -2660,13 +2864,25 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final isDirectMediaStream = nameLower.contains('moviebox') ||
         nameLower.contains('streamplay') ||
         nameLower.contains('netmirror') ||
+        nameLower.contains('fsl') ||
+        nameLower.contains('hubcloud') ||
+        nameLower.contains('hdhub4u') ||
+        nameLower.contains('movieshunt') ||
+        sLower.contains('movieshunt') ||
         sLower.contains('hakunaymatata.com') ||
         sLower.contains('aoneroom.com') ||
         sLower.contains('slast') ||
         sLower.contains('hutro433fil') ||
         sLower.contains('.m3u8') ||
         sLower.contains('.mp4') ||
+        sLower.contains('.mkv') ||
         sLower.contains('.mpd') ||
+        sLower.contains('.webm') ||
+        sLower.contains('lenin.buzz') ||
+        sLower.contains('cloudflarestorage.com') ||
+        sLower.contains('pixeldrain') ||
+        sLower.contains('/f/') ||
+        sLower.contains('/api/file/') ||
         forceNative;
 
     final isWebStream = !isDirectMediaStream && (nameLower.contains('vegamovies') ||
@@ -2820,12 +3036,23 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       final isStalkerOrDirect = (sourceName != null &&
               (sourceName.toLowerCase().contains('stalker') ||
                   sourceName.toLowerCase().contains('moviebox') ||
-                  sourceName.toLowerCase().contains('streamplay'))) ||
+                  sourceName.toLowerCase().contains('streamplay') ||
+                  sourceName.toLowerCase().contains('netmirror') ||
+                  sourceName.toLowerCase().contains('fsl') ||
+                  sourceName.toLowerCase().contains('hubcloud') ||
+                  sourceName.toLowerCase().contains('hdhub4u') ||
+                  sourceName.toLowerCase().contains('movieshunt'))) ||
           source.contains('hakunaymatata.com') ||
           source.contains('aoneroom.com') ||
+          source.contains('imgcdn.kim') ||
+          source.contains('freecdn') ||
           source.contains('.mp4') ||
+          source.contains('.mkv') ||
           source.contains('.mpd') ||
           source.contains('.m3u8') ||
+          source.contains('lenin.buzz') ||
+          source.contains('cloudflarestorage.com') ||
+          source.contains('pixeldrain') ||
           headers != null;
 
       String playUrl = source;
@@ -3028,6 +3255,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       context,
                       'HDHUB4U 4K & DOLBY STREAMS',
                       _liveHdhub4uSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // MoviesHunt Server
+            if ((_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
+              sourceWidgets['movieshunt'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('movieshunt')}. MoviesHunt Server',
+                subtitle: _resolvingMovieshunt
+                    ? 'Querying remote index...'
+                    : '${_liveMovieshuntSources.length} Fast Cloudflare R2 direct stream(s)',
+                disabled: _resolvingMovieshunt,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMovieshuntSources.length == 1) {
+                    _playWithResolution(
+                      _liveMovieshuntSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMovieshuntSources.first.name,
+                      headers: _liveMovieshuntSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVIESHUNT STREAM SERVERS',
+                      _liveMovieshuntSources,
                       resumeDirectly: resumeDirectly,
                     );
                   }
@@ -3482,6 +3739,55 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 },
               );
             }
+
+            // NetMirror OTT Server
+            if (_showNetmirrorOtt && enabledKeys.contains('netmirror_ott')) {
+              final isResolving = _resolvingNetmirrorOtt;
+              final hasAction = _liveNetmirrorOttSources.any((s) => s.url == 'netmirror_verify_action');
+              final validSources = _liveNetmirrorOttSources.where((s) => s.url != 'netmirror_verify_action').toList();
+              final hasLinks = validSources.isNotEmpty;
+
+              sourceWidgets['netmirror_ott'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('netmirror_ott')}. NetMirror OTT (Netflix/Prime/Hotstar)',
+                subtitle: isResolving
+                    ? 'Searching NetMirror OTT...'
+                    : (hasAction
+                        ? '⚠️ Tap to verify session'
+                        : (hasLinks
+                            ? '${validSources.length} links available'
+                            : 'No links found on NetMirror OTT')),
+                disabled: isResolving || (!hasLinks && !hasAction),
+                onTap: () async {
+                  if (hasAction) {
+                    final verified = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(builder: (_) => const NetmirrorOttVerifyScreen()),
+                    );
+                    if (verified == true && mounted) {
+                      _resolveLiveNetmirrorOtt(movie.title, movie.year?.toString() ?? '2026');
+                    }
+                  } else if (hasLinks) {
+                    Navigator.of(context).pop();
+                    if (validSources.length == 1) {
+                      _playWithResolution(
+                        validSources.first.url,
+                        resumeDirectly: resumeDirectly,
+                        sourceName: validSources.first.name,
+                        headers: validSources.first.headers,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        'NETMIRROR OTT STREAMS',
+                        validSources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  }
+                },
+              );
+            }
  
             // 4. Streamtape Server (always shown at top if exist)
             if (dbStreamtapeSources.isNotEmpty) {
@@ -3514,6 +3820,49 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
  
+            // Dynamic Modules (render tiles for custom modules that don't have dedicated tiles above)
+            for (final mod in _dynamicModules) {
+              final modId = mod['id'].toString();
+              if (sourceWidgets.containsKey(modId)) continue;
+
+              final isShow = _dynamicModuleVisibility[modId] ?? true;
+              if (isShow && enabledKeys.contains(modId)) {
+                final modName = mod['name']?.toString() ?? modId;
+                final isResolving = _resolvingModules[modId] == true;
+                final sources = _liveModuleSources[modId] ?? [];
+                final hasLinks = sources.isNotEmpty;
+                sourceWidgets[modId] = _buildSourceTile(
+                  icon: Icons.extension_rounded,
+                  title: '${pos(modId)}. $modName Server',
+                  subtitle: isResolving
+                      ? 'Searching $modName...'
+                      : (hasLinks
+                          ? '${sources.length} stream(s) available'
+                          : 'No streams found on $modName'),
+                  disabled: isResolving || !hasLinks,
+                  onTap: () {
+                    if (!hasLinks) return;
+                    Navigator.of(context).pop();
+                    if (sources.length == 1) {
+                      _playWithResolution(
+                        sources.first.url,
+                        resumeDirectly: resumeDirectly,
+                        sourceName: sources.first.name,
+                        headers: sources.first.headers,
+                      );
+                    } else {
+                      _showSubSourceSelector(
+                        context,
+                        '${modName.toUpperCase()} STREAMS',
+                        sources,
+                        resumeDirectly: resumeDirectly,
+                      );
+                    }
+                  },
+                );
+              }
+            }
+
             // Dynamically append other sources in sorted visibility order
             for (final key in _sourceOrder) {
               if (key == 'stremioAddon') {
@@ -3531,7 +3880,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
  
             if (items.isEmpty) {
-              final resolvingAny = _resolvingVidlink || _resolvingNetmirror || _resolvingStalker || _resolvingStravo || _resolvingStremio || _resolvingNuveo || _resolvingCastle;
+              final resolvingAny = _resolvingVidlink || _resolvingNetmirror || _resolvingNetmirrorCenter || _resolvingNetmirrorOtt || _resolvingStalker || _resolvingStravo || _resolvingStremio || _resolvingNuveo || _resolvingCastle || _resolvingModules.values.any((v) => v);
               return SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
@@ -3886,12 +4235,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         getUrl: (s) => s.url,
                         preferredLanguage: movie.language,
                       );
+
                       return ListView.separated(
                         shrinkWrap: true,
                         itemCount: sortedSources.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final source = sortedSources[index];
+                        itemBuilder: (context, idx) {
+                          final source = sortedSources[idx];
                           return StreamMetadataTile(
                             name: source.name,
                             url: source.url,
@@ -4579,160 +4929,26 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
-            // 4. Vegamovies Server
-            if (_showVegamovies && enabledKeys.contains('vegamovies')) {
-              final isResolving = _resolvingVegamovies;
-              final hasLinks = _liveVegamoviesSources.isNotEmpty;
-              downloadSourceWidgets['vegamovies'] = _buildSourceTile(
-                icon: Icons.movie_creation_rounded,
-                title: '${pos('vegamovies')}. Vegamovies Server',
-                subtitle: isResolving
-                    ? 'Searching Vegamovies...'
-                    : (hasLinks
-                        ? '${_liveVegamoviesSources.length} direct download link(s) available'
-                        : 'No direct download links'),
-                disabled: isResolving || !hasLinks,
-                onTap: () {
-                  if (!hasLinks) return;
-                  Navigator.of(context).pop();
-                  if (_liveVegamoviesSources.length == 1) {
-                          final s = _liveVegamoviesSources.first;
-                          _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
-                        } else {
-                          _showDownloadSubSelector('VEGAMOVIES DOWNLOADS', _liveVegamoviesSources);
-                        }
-                      },
-              );
-            }
-
-            // NetMirror Center Server Download
-            if (_showNetmirrorCenter && enabledKeys.contains('netmirror_center')) {
-              final isResolving = _resolvingNetmirrorCenter;
-              final hasLinks = _liveNetmirrorCenterSources.isNotEmpty;
-              downloadSourceWidgets['netmirror_center'] = _buildSourceTile(
-                icon: Icons.public_rounded,
-                title: '${pos('netmirror_center')}. NetMirror Center',
-                subtitle: isResolving
-                    ? 'Searching NetMirror Center...'
-                    : (hasLinks
-                        ? '${_liveNetmirrorCenterSources.length} stream link(s) available'
-                        : 'No stream links available'),
-                disabled: isResolving || !hasLinks,
-                onTap: () {
-                  if (!hasLinks) return;
-                  Navigator.of(context).pop();
-                  if (_liveNetmirrorCenterSources.length == 1) {
-                    final s = _liveNetmirrorCenterSources.first;
-                    _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
-                  } else {
-                    _showDownloadSubSelector('NETMIRROR CENTER DOWNLOADS', _liveNetmirrorCenterSources);
-                  }
-                },
-              );
-            }
-
-            // 5. Cinejoy Server
-            if ((_resolvingCinejoy || _liveCinejoySources.isNotEmpty) && enabledKeys.contains('cinejoy')) {
-              downloadSourceWidgets['cinejoy'] = _buildSourceTile(
-                icon: Icons.play_circle_fill_rounded,
-                title: '${pos('cinejoy')}. Cinejoy Server',
-                subtitle: _resolvingCinejoy
-                    ? 'Searching Cinejoy...'
-                    : (_liveCinejoySources.isEmpty
-                        ? 'No links available'
-                        : '${_liveCinejoySources.length} links available'),
-                disabled: _resolvingCinejoy || _liveCinejoySources.isEmpty,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (_liveCinejoySources.length == 1) {
-                    final s = _liveCinejoySources.first;
-                    _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
-                  } else {
-                    _showDownloadSubSelector('CINEJOY DOWNLOADS', _liveCinejoySources);
-                  }
-                },
-              );
-            }
-
-            // Vidlink Server
-            if ((_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
-              downloadSourceWidgets['vidlink'] = _buildSourceTile(
-                icon: Icons.play_arrow_rounded,
-                title: '${pos('vidlink')}. Vidlink Server',
-                subtitle: _resolvingVidlink 
-                    ? 'Checking live...' 
-                    : (_liveVidlinkSources.isNotEmpty ? '1 native link available' : 'Not available for this title'),
-                disabled: _liveVidlinkSources.isEmpty,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _downloadSourceUrl(_liveVidlinkSources.first.url, sourceName: _liveVidlinkSources.first.name);
-                },
-              );
-            }
-
-            // StreamPlay Multi-API
-            if ((_resolvingStreamplay || _liveStreamplaySources.isNotEmpty) && enabledKeys.contains('streamplay')) {
-              downloadSourceWidgets['streamplay'] = _buildSourceTile(
-                icon: Icons.flash_on_rounded,
-                title: '${pos('streamplay')}. StreamPlay Multi-API',
-                subtitle: _resolvingStreamplay
-                    ? 'Querying stream servers...'
-                    : '${_liveStreamplaySources.length} links available',
-                disabled: _resolvingStreamplay,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (_liveStreamplaySources.length == 1) {
-                    _downloadMovieboxStream(_liveStreamplaySources.first);
-                  } else {
-                    _showDownloadSubSelector('STREAMPLAY DOWNLOADS', _liveStreamplaySources, isMoviebox: true);
-                  }
-                },
-              );
-            }
-
-            // MovieBox Server
-            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
-              downloadSourceWidgets['moviebox'] = _buildSourceTile(
+            // MoviesHunt Server (Direct Fast Download)
+            if ((_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
+              downloadSourceWidgets['movieshunt'] = _buildSourceTile(
                 icon: Icons.movie_filter_rounded,
-                title: '${pos('moviebox')}. MovieBox Server',
-                subtitle: _resolvingMoviebox
-                    ? 'Searching MovieBox...'
-                    : '${_liveMovieboxSources.length} links available',
-                disabled: _resolvingMoviebox,
+                title: '${pos('movieshunt')}. MoviesHunt Server',
+                subtitle: _resolvingMovieshunt
+                    ? 'Searching MoviesHunt...'
+                    : (_liveMovieshuntSources.isEmpty
+                        ? 'No direct download links'
+                        : '${_liveMovieshuntSources.length} direct fast link(s) available'),
+                disabled: _resolvingMovieshunt || _liveMovieshuntSources.isEmpty,
                 onTap: () {
                   Navigator.of(context).pop();
-                  if (_liveMovieboxSources.length == 1) {
-                    _downloadMovieboxStream(_liveMovieboxSources.first);
+                  if (_liveMovieshuntSources.length == 1) {
+                    final s = _liveMovieshuntSources.first;
+                    _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
                   } else {
-                    _showDownloadSubSelector('MOVIEBOX DOWNLOADS', _liveMovieboxSources, isMoviebox: true);
+                    _showDownloadSubSelector('MOVIESHUNT DOWNLOADS', _liveMovieshuntSources);
                   }
                 },
-              );
-            }
-
-            // FilmU Premium Server
-            if (_showFilmu && enabledKeys.contains('filmu')) {
-              final isResolving = _resolvingFilmu;
-              final hasLinks = _liveFilmuSources.isNotEmpty;
-              downloadSourceWidgets['filmu'] = _buildSourceTile(
-                icon: Icons.hd_rounded,
-                title: '${pos('filmu')}. FilmU Premium Server',
-                subtitle: isResolving
-                    ? 'Searching FilmU...'
-                    : (hasLinks
-                        ? '${_liveFilmuSources.length} servers available for download'
-                        : 'No direct download links'),
-                disabled: isResolving || !hasLinks,
-                onTap: () {
-                  if (!hasLinks) return;
-                  Navigator.of(context).pop();
-                  if (_liveFilmuSources.length == 1) {
-                          final s = _liveFilmuSources.first;
-                          _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
-                        } else {
-                          _showDownloadSubSelector('FILMU DOWNLOADS', _liveFilmuSources);
-                        }
-                      },
               );
             }
 
@@ -5191,35 +5407,83 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                 ),
                 const SizedBox(height: 16),
                 Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: sources.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final source = sources[index];
-                      return ListTile(
-                        leading: Icon(Icons.download_rounded, color: AppColors.accentBright),
-                        title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                        tileColor: Colors.white.withOpacity(0.03),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          if (isStreamtape) {
-                            _downloadStreamtapeSource(source);
-                          } else if (isStravo) {
-                            _downloadStravoStream(source);
-                          } else if (isTelegram) {
-                            _downloadTelegramStream(source);
-                          } else if (isCastle) {
-                            _downloadCastleStream(source);
-                          } else if (isTorrentSeedr) {
-                            _downloadTorrentViaSeedr(source);
-                          } else if (isMoviebox) {
-                            _downloadMovieboxStream(source);
-                          } else {
-                            _downloadSourceUrl(source.url, sourceName: source.name, headers: source.headers);
-                          }
-                        },
+                  child: Builder(
+                    builder: (context) {
+                      final Map<String, List<StreamSource>> langGrouped = {};
+                      for (final s in sources) {
+                        final meta = parseStreamMeta(s.name, s.url);
+                        final lang = meta.languages.isNotEmpty ? meta.languages.first : 'Other';
+                        langGrouped.putIfAbsent(lang, () => []).add(s);
+                      }
+                      final bool hasMultipleLangs = langGrouped.length > 1;
+
+                      return ListView(
+                        shrinkWrap: true,
+                        children: [
+                          for (final entry in langGrouped.entries) ...[
+                            if (hasMultipleLangs)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8, bottom: 6),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.accentBright.withValues(alpha: 0.18),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: AppColors.accentBright.withValues(alpha: 0.35)),
+                                      ),
+                                      child: Text(
+                                        entry.key.toUpperCase(),
+                                        style: GoogleFonts.outfit(
+                                          color: AppColors.accentBright,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.8,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '${entry.value.length} link${entry.value.length != 1 ? "s" : ""}',
+                                      style: TextStyle(
+                                        color: Colors.white.withValues(alpha: 0.4),
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            for (final source in entry.value)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  leading: Icon(Icons.download_rounded, color: AppColors.accentBright),
+                                  title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  tileColor: Colors.white.withValues(alpha: 0.03),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  onTap: () {
+                                    Navigator.of(ctx).pop();
+                                    if (isStreamtape) {
+                                      _downloadStreamtapeSource(source);
+                                    } else if (isStravo) {
+                                      _downloadStravoStream(source);
+                                    } else if (isTelegram) {
+                                      _downloadTelegramStream(source);
+                                    } else if (isCastle) {
+                                      _downloadCastleStream(source);
+                                    } else if (isTorrentSeedr) {
+                                      _downloadTorrentViaSeedr(source);
+                                    } else if (isMoviebox) {
+                                      _downloadMovieboxStream(source);
+                                    } else {
+                                      _downloadSourceUrl(source.url, sourceName: source.name, headers: source.headers);
+                                    }
+                                  },
+                                ),
+                              ),
+                          ],
+                        ],
                       );
                     },
                   ),

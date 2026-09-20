@@ -1,3 +1,4 @@
+import 'package:private_cinema_mobile/data/netmirror_ott_resolver.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -466,6 +467,10 @@ class CustomDnsProxy {
                 req.headers.set('Referer', value);
               } else if (keyLower == 'origin') {
                 req.headers.set('Origin', value);
+              } else if (keyLower == 'user-agent') {
+                if (value.toLowerCase().contains('chrome')) {
+                  req.headers.set('User-Agent', value);
+                }
               } else {
                 req.headers.set(key, value);
               }
@@ -482,6 +487,15 @@ class CustomDnsProxy {
             if (targetHostLower.contains('hakunaymatata.com') || targetHostLower.contains('aoneroom.com')) {
               req.headers.set('Referer', 'https://fmoviesunblocked.net/');
               req.headers.set('Origin', 'https://fmoviesunblocked.net');
+            }
+
+            if (targetHostLower.contains('imgcdn.kim') || targetHostLower.contains('freecdn') || targetHostLower.contains('net77.cc') || targetHostLower.contains('net52.cc')) {
+              req.headers.set('Referer', 'https://tv.imgcdn.kim/');
+              req.headers.set('Cookie', 'hd=on');
+              final usertoken = await NetmirrorOttResolver.getSavedUsertoken();
+              if (usertoken != null && usertoken.isNotEmpty) {
+                req.headers.set('Usertoken', usertoken);
+              }
             }
             
             if (request.contentLength > 0 || request.headers.value('transfer-encoding') == 'chunked') {

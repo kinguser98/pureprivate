@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'sync_service.dart';
 
 class DomainService {
   static const String _primaryUrl =
@@ -31,6 +32,7 @@ class DomainService {
     'topmovies': 'https://moviesleech.bar',
     'toonstream': 'https://toon-stream.site',
     'netmirror_center': 'https://netmirror.center',
+    'netmirror_ott': 'https://net52.cc',
     'netmirror_api3': 'https://api2.imdb3.shop',
     'netmirror_api4': 'https://api2.imdb4.shop',
     'netmirror_watchbox': 'https://bet.watch21.shop',
@@ -60,6 +62,17 @@ class DomainService {
       if (now - lastFetch > _cacheTtl.inMilliseconds || _inMemoryDomains.isEmpty) {
         refreshDomains();
       }
+
+      // Check cloud settings for instant admin overrides
+      try {
+        final cloud = await SyncService.fetchAppSettings();
+        cloud.forEach((k, v) {
+          if (k.startsWith('domain_') && v.trim().isNotEmpty) {
+            final modId = k.substring('domain_'.length).toLowerCase();
+            _inMemoryDomains[modId] = v.trim().replaceAll(RegExp(r'/+$'), '');
+          }
+        });
+      } catch (_) {}
     } catch (e) {
       debugPrint('DomainService.init error: $e');
     }

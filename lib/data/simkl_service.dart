@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie.dart';
 import 'tmdb_service.dart';
+import 'sync_service.dart';
 
 class SimklPinResponse {
   final String userCode;
@@ -32,11 +33,13 @@ class SimklPinResponse {
 class SimklHistoryItem {
   final Movie movie;
   final DateTime watchedAt;
+  final DateTime? releaseDate;
   final double? userRating;
 
   SimklHistoryItem({
     required this.movie,
     required this.watchedAt,
+    this.releaseDate,
     this.userRating,
   });
 }
@@ -57,7 +60,16 @@ class SimklService {
   static String? _avatar;
   static bool _isInitialized = false;
 
-  static String get clientId => _customClientId ?? _defaultClientId;
+  static String get clientId =>
+      (_customClientId != null && _customClientId!.isNotEmpty)
+          ? _customClientId!
+          : _defaultClientId;
+
+  static set customClientId(String? id) {
+    if (id != null && id.trim().isNotEmpty) {
+      _customClientId = id.trim();
+    }
+  }
 
   static final ValueNotifier<bool> isAuthenticated = ValueNotifier(false);
   static final ValueNotifier<String?> currentUsername = ValueNotifier(null);
@@ -67,7 +79,8 @@ class SimklService {
   static Future<void> init() async {
     if (_isInitialized) return;
     final prefs = await SharedPreferences.getInstance();
-    _customClientId = prefs.getString(_prefClientId);
+    _customClientId = prefs.getString(_prefClientId) ??
+        prefs.getString('simkl_client_id');
     _accessToken = prefs.getString(_prefAccessToken);
     _username = prefs.getString(_prefUsername);
     _avatar = prefs.getString(_prefAvatar);
@@ -80,13 +93,14 @@ class SimklService {
     _isInitialized = true;
   }
 
-  /// Save custom SIMKL Client ID
+  /// Save custom SIMKL Client ID / API Key
   static Future<void> saveClientId(String id) async {
     final cleanId = id.trim();
     if (cleanId.isEmpty) return;
     _customClientId = cleanId;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefClientId, cleanId);
+    await prefs.setString('simkl_client_id', cleanId);
   }
 
   static Map<String, String> _headers({bool requireAuth = false}) {
@@ -365,61 +379,142 @@ class SimklService {
   static Future<List<SimklHistoryItem>> fetchWatchedTimeline() async {
     if (_accessToken == null) return [];
     try {
-      final res = await http.get(
+      // Fetch both completed history and rated items concurrently
+      final completedFuture = http.get(
         Uri.parse('$_baseUrl/sync/all-items/movies/completed?extended=full'),
         headers: _headers(requireAuth: true),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 12));
 
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final moviesList = data['movies'] as List? ?? [];
-        final items = <SimklHistoryItem>[];
+      final ratingsFuture = http.get(
+        Uri.parse('$_baseUrl/sync/ratings/movies'),
+        headers: _headers(requireAuth: true),
+      ).timeout(const Duration(seconds: 12));
 
-        await Future.wait(moviesList.map((item) async {
-          final m = item['movie'] as Map? ?? {};
-          final ids = m['ids'] as Map? ?? {};
-          final tmdb = ids['tmdb']?.toString();
-          final title = m['title']?.toString() ?? 'Movie';
-          final poster = m['poster'] != null ? 'https://simkl.in/posters/${m['poster']}_m.webp' : '';
-          final rating = (m['ratings']?['simkl']?['rating'] as num?)?.toDouble() ?? 0.0;
-          final userRate = (item['user_rating'] as num?)?.toDouble();
+      final responses = await Future.wait([completedFuture, ratingsFuture]);
+      final completedRes = responses[0];
+      final ratingsRes = responses[1];
 
-          DateTime releaseDate = DateTime.now();
-          if (tmdb != null && tmdb.isNotEmpty && tmdb != '0') {
-            final exactRel = await _getTmdbReleaseDate(tmdb);
-            if (exactRel != null) {
-              releaseDate = DateTime.tryParse(exactRel) ?? releaseDate;
-            } else if (m['release_date'] != null) {
-              releaseDate = DateTime.tryParse(m['release_date'].toString()) ?? releaseDate;
-            } else if (item['last_watched_at'] != null) {
-              releaseDate = DateTime.tryParse(item['last_watched_at'].toString()) ?? DateTime.now();
+      final Map<String, Map<String, dynamic>> ratingsMap = {};
+      final Map<String, Map<String, dynamic>> allRatedItems = {};
+
+      if (ratingsRes.statusCode == 200) {
+        final ratingsData = jsonDecode(ratingsRes.body);
+        final ratedList = ratingsData['movies'] as List? ?? [];
+        for (final item in ratedList) {
+          if (item is Map) {
+            final itemMap = Map<String, dynamic>.from(item);
+            final m = itemMap['movie'] as Map? ?? {};
+            final ids = m['ids'] as Map? ?? {};
+            final tmdb = ids['tmdb']?.toString();
+            final simkl = ids['simkl']?.toString();
+            if (tmdb != null && tmdb.isNotEmpty) {
+              ratingsMap[tmdb] = itemMap;
+              allRatedItems[tmdb] = itemMap;
             }
+            if (simkl != null && simkl.isNotEmpty) {
+              ratingsMap[simkl] = itemMap;
+              allRatedItems.putIfAbsent(simkl, () => itemMap);
+            }
+          }
+        }
+      }
+
+      final List<Map<String, dynamic>> moviesList = [];
+      final Set<String> processedKeys = {};
+
+      if (completedRes.statusCode == 200) {
+        final data = jsonDecode(completedRes.body);
+        final list = data['movies'] as List? ?? [];
+        for (final item in list) {
+          if (item is Map) {
+            final itemMap = Map<String, dynamic>.from(item);
+            final m = itemMap['movie'] as Map? ?? {};
+            final ids = m['ids'] as Map? ?? {};
+            final tmdb = ids['tmdb']?.toString();
+            final simkl = ids['simkl']?.toString();
+            final key = tmdb ?? simkl ?? '${m['title']}_${m['year']}';
+            processedKeys.add(key);
+            if (tmdb != null) processedKeys.add(tmdb);
+            if (simkl != null) processedKeys.add(simkl);
+            moviesList.add(itemMap);
+          }
+        }
+      }
+
+      // Merge any rated movies from /sync/ratings/movies not in completed list
+      allRatedItems.forEach((key, item) {
+        if (!processedKeys.contains(key)) {
+          moviesList.add(item);
+          processedKeys.add(key);
+        }
+      });
+
+      final items = <SimklHistoryItem>[];
+
+      await Future.wait(moviesList.map((item) async {
+        final m = item['movie'] as Map? ?? {};
+        final ids = m['ids'] as Map? ?? {};
+        final tmdb = ids['tmdb']?.toString();
+        final simkl = ids['simkl']?.toString();
+        final title = m['title']?.toString() ?? 'Movie';
+        final poster = m['poster'] != null ? 'https://simkl.in/posters/${m['poster']}_m.webp' : '';
+        final rating = (m['ratings']?['simkl']?['rating'] as num?)?.toDouble() ?? 0.0;
+
+        final ratingInfo = (tmdb != null ? ratingsMap[tmdb] : null) ?? (simkl != null ? ratingsMap[simkl] : null);
+        num? rawUserRate = item['user_rating'] as num? ?? item['rating'] as num?;
+        if (rawUserRate == null && ratingInfo != null) {
+          rawUserRate = ratingInfo['rating'] as num? ?? ratingInfo['user_rating'] as num?;
+        }
+        final userRate = rawUserRate?.toDouble();
+
+        int? yearNum = m['year'] is num ? (m['year'] as num).toInt() : int.tryParse(m['year']?.toString() ?? '');
+        DateTime releaseDate = (yearNum != null && yearNum > 1800)
+            ? DateTime(yearNum, 1, 1)
+            : DateTime(2020, 1, 1);
+
+        if (tmdb != null && tmdb.isNotEmpty && tmdb != '0') {
+          final exactRel = await _getTmdbReleaseDate(tmdb);
+          if (exactRel != null) {
+            releaseDate = DateTime.tryParse(exactRel) ?? releaseDate;
           } else if (m['release_date'] != null) {
             releaseDate = DateTime.tryParse(m['release_date'].toString()) ?? releaseDate;
-          } else if (item['last_watched_at'] != null) {
-            releaseDate = DateTime.tryParse(item['last_watched_at'].toString()) ?? DateTime.now();
           }
+        } else if (m['release_date'] != null) {
+          releaseDate = DateTime.tryParse(m['release_date'].toString()) ?? releaseDate;
+        }
 
-          items.add(SimklHistoryItem(
-            movie: Movie(
-              id: 'simkl_${ids['simkl'] ?? tmdb}',
-              title: title,
-              year: releaseDate.year,
-              description: m['overview']?.toString() ?? '',
-              tmdbId: tmdb,
-              genre: 'Watched',
-              posterUrl: poster,
-              rating: rating,
-            ),
-            watchedAt: releaseDate,
-            userRating: userRate != null ? (userRate / 2.0) : null,
-          ));
-        }));
+        // Retrieve actual rated date or last watched date
+        DateTime actualDate = releaseDate;
+        final String? dateStr = item['rated_at']?.toString() ??
+            ratingInfo?['rated_at']?.toString() ??
+            item['last_watched_at']?.toString() ??
+            item['watched_at']?.toString() ??
+            ratingInfo?['last_watched_at']?.toString();
 
-        // Sort descending by exact release date
-        items.sort((a, b) => b.watchedAt.compareTo(a.watchedAt));
-        return items;
-      }
+        if (dateStr != null && dateStr.isNotEmpty) {
+          actualDate = DateTime.tryParse(dateStr) ?? releaseDate;
+        }
+
+        items.add(SimklHistoryItem(
+          movie: Movie(
+            id: 'simkl_${ids['simkl'] ?? tmdb}',
+            title: title,
+            year: releaseDate.year,
+            description: m['overview']?.toString() ?? '',
+            tmdbId: tmdb,
+            genre: 'Watched',
+            posterUrl: poster,
+            rating: rating,
+          ),
+          watchedAt: actualDate,
+          releaseDate: releaseDate,
+          userRating: userRate != null ? (userRate > 5.0 ? userRate / 2.0 : userRate) : null,
+        ));
+      }));
+
+      // Sort descending by actual rated/watched date initially
+      items.sort((a, b) => b.watchedAt.compareTo(a.watchedAt));
+      return items;
     } catch (e) {
       debugPrint('SIMKL fetchWatchedTimeline error: $e');
     }

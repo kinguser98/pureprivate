@@ -487,8 +487,14 @@ class AdminApiClient {
     }
   }
 
-  Future<Map<String, dynamic>> toggleChannel(int channelId, int status) async {
-    try { await _dio.post('${ApiConfig.iptvChannels}?ajax_toggle=$channelId&status=$status'); return {'success': true, 'message': status == 1 ? 'Channel enabled' : 'Channel disabled'}; } catch (_) { return {'success': true, 'message': status == 1 ? 'Channel enabled' : 'Channel disabled'}; }
+  Future<Map<String, dynamic>> toggleChannel(int channelId, int status, {bool autoOrder = true}) async {
+    try {
+      final autoOrderParam = autoOrder ? '&auto_order=1' : '&auto_order=0';
+      await _dio.post('${ApiConfig.iptvChannels}?ajax_toggle=$channelId&status=$status$autoOrderParam');
+      return {'success': true, 'message': status == 1 ? 'Channel enabled' : 'Channel disabled'};
+    } catch (_) {
+      return {'success': true, 'message': status == 1 ? 'Channel enabled' : 'Channel disabled'};
+    }
   }
 
   // Streamtape details fetching (config, account, cache stats, progress, logs)
