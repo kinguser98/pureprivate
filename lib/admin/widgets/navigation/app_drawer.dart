@@ -70,6 +70,7 @@ class AppDrawer extends ConsumerWidget {
                   _navItem(context, ref, Icons.storage, 'Streamtape', '/streamtape', false),
                   _divider(),
                   _sectionHeader('System'),
+                  _navItem(context, ref, Icons.shield_rounded, 'Device Access', '/device-access', currentRoute == '/device-access', color: const Color(0xFFEF4444)),
                   _navItem(context, ref, Icons.settings, 'App Settings', '/app-settings', false),
                   _navItem(context, ref, Icons.backup, 'Backups', '/backups', false),
                   _navItem(context, ref, Icons.people, 'OTT Providers', '/ott-providers', false),

@@ -15,8 +15,13 @@ class _StalkerHttpResponse {
 class StalkerStream {
   final String url;
   final Map<String, String> headers;
+  final bool isDirect;
 
-  StalkerStream({required this.url, required this.headers});
+  StalkerStream({
+    required this.url,
+    required this.headers,
+    this.isDirect = false,
+  });
 }
 
 class StalkerUrlParams {
@@ -201,11 +206,11 @@ class StalkerResolver {
     String url, {
     required Map<String, String> headers,
     int? portalId,
-    int timeoutSeconds = 12,
+    int timeoutSeconds = 8,
   }) async {
     int attempts = 0;
-    const maxAttempts = 5;
-    final backoffs = [2000, 4000, 8000, 16000];
+    const maxAttempts = 2;
+    final backoffs = [600];
 
     // If portalId is provided, merge cached session cookies (like PHPSESSID)
     final Map<String, String> processedHeaders = Map.from(headers);
@@ -393,12 +398,19 @@ class StalkerResolver {
       final token = await _authenticate(portalId, settings);
       final portalUrl = _cleanPortalUrl(settings['portal_url'] ?? '');
       final macAddress = (settings['mac_address'] ?? '').toString().trim();
+      final serialNumber = (settings['serial_number'] ?? '').toString().trim();
       var deviceId = (settings['device_id'] ?? '').toString().trim();
       if (deviceId.contains(' ')) {
         deviceId = deviceId.split(' ').last.trim();
       }
       final userAgent = (settings['user_agent'] ?? 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3').toString().trim();
-      final cookiesStr = _cachedCookiesMap[portalId] ?? 'mac=$macAddress; token=$token; Bearer=$token';
+      var cookiesStr = _cachedCookiesMap[portalId] ?? 'mac=$macAddress; token=$token; Bearer=$token; stb_lang=en; timezone=Asia/Kolkata';
+      if (serialNumber.isNotEmpty && !cookiesStr.contains('sn=')) {
+        cookiesStr += '; sn=$serialNumber';
+      }
+      if (deviceId.isNotEmpty && !cookiesStr.contains('device_id=')) {
+        cookiesStr += '; device_id=$deviceId; device_id2=$deviceId';
+      }
 
       final headers = {
         'User-Agent': userAgent,
@@ -409,14 +421,14 @@ class StalkerResolver {
 
       // 1. Standard Live TV heartbeat: type=itv&action=keep_alive
       var keepAliveUrl = '$portalUrl?type=itv&action=keep_alive&mac=${Uri.encodeComponent(macAddress)}';
-      keepAliveUrl = _appendDeviceParams(keepAliveUrl, deviceId);
+      keepAliveUrl = _appendDeviceParams(keepAliveUrl, deviceId, serialNumber: serialNumber);
 
       var res = await _stalkerGet(keepAliveUrl, headers: headers, portalId: portalId, timeoutSeconds: 5);
 
       // 2. Fallback if portal returns non-200 (e.g. 500): type=stb&action=get_profile
       if (res.statusCode != 200) {
         var profileUrl = '$portalUrl?type=stb&action=get_profile&mac=${Uri.encodeComponent(macAddress)}';
-        profileUrl = _appendDeviceParams(profileUrl, deviceId);
+        profileUrl = _appendDeviceParams(profileUrl, deviceId, serialNumber: serialNumber);
         res = await _stalkerGet(profileUrl, headers: headers, portalId: portalId, timeoutSeconds: 5);
       }
 
@@ -436,14 +448,15 @@ class StalkerResolver {
       deviceId = deviceId.split(' ').last.trim();
     }
 
-    // Direct HTTP/HTTPS stream check (e.g. Indigo Live TV streams)
+    // Direct pre-authorized stream check (e.g. Indigo channels with uid/deviceMac baked in)
     var cleanCmd = cmd.trim();
     if (cleanCmd.startsWith('ffmpeg ')) cleanCmd = cleanCmd.substring(7).trim();
     if (cleanCmd.startsWith('auto ')) cleanCmd = cleanCmd.substring(5).trim();
     if (cleanCmd.startsWith('ffrt ')) cleanCmd = cleanCmd.substring(5).trim();
 
-    if (cleanCmd.startsWith('http://') || cleanCmd.startsWith('https://')) {
-      debugPrint('Stalker direct stream URL detected: $cleanCmd');
+    if ((cleanCmd.startsWith('http://') || cleanCmd.startsWith('https://')) &&
+        (cleanCmd.contains('uid=') || cleanCmd.contains('deviceMac='))) {
+      debugPrint('Stalker direct pre-authorized stream URL detected: $cleanCmd');
       var playerCookies = 'mac=$macAddress';
       if (deviceId.isNotEmpty) {
         playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
@@ -454,6 +467,7 @@ class StalkerResolver {
           'User-Agent': userAgent,
           'Cookie': playerCookies,
         },
+        isDirect: true,
       );
     }
 
@@ -505,19 +519,28 @@ class StalkerResolver {
     }
 
     // Fallback: If all create_link variations failed, only check if cmd was already a direct HTTP/HTTPS stream
+    // IMPORTANT: Must NOT be localhost or 127.0.0.1
     for (final cmdVar in cmdVariations) {
       var urlToCheck = cmdVar.trim();
       if (urlToCheck.startsWith('ffmpeg ')) urlToCheck = urlToCheck.substring(7).trim();
       if (urlToCheck.startsWith('auto ')) urlToCheck = urlToCheck.substring(5).trim();
       if (urlToCheck.startsWith('ffrt ')) urlToCheck = urlToCheck.substring(5).trim();
 
-      if (urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) {
+      if ((urlToCheck.startsWith('http://') || urlToCheck.startsWith('https://')) &&
+          !urlToCheck.contains('localhost') &&
+          !urlToCheck.contains('127.0.0.1')) {
         debugPrint('Stalker resolveStream: Falling back to direct HTTP stream: $urlToCheck');
+        var playerCookies = 'mac=$macAddress';
+        if (deviceId.isNotEmpty) {
+          playerCookies += '; device_id=$deviceId; device_id2=$deviceId';
+        }
         return StalkerStream(
           url: urlToCheck,
           headers: {
             'User-Agent': userAgent,
+            'Cookie': playerCookies,
           },
+          isDirect: true,
         );
       }
     }
@@ -595,7 +618,7 @@ class StalkerResolver {
 
     final headers = {
       'User-Agent': userAgent,
-      'Cookie': cookiesStr,
+      'Cookie': _getMergedCookies(portalId, cookiesStr),
       'Authorization': 'Bearer $token',
       'X-User-Agent': _getXUserAgent(userAgent),
     };

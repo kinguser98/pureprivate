@@ -448,23 +448,43 @@ class MovieboxResolver {
               var url = item['url']?.toString() ?? '';
               final cookie = item['signCookie']?.toString() ?? '';
 
-              // Extract CloudFront Policy Resource if URL is dummy/update video
+              // Extract stream URL from signCookie (Edge-Cache-Cookie urlprefix or CloudFront Policy)
               if (url.isEmpty || _isUpdateVideo(url)) {
                 if (cookie.isNotEmpty) {
-                  final polMatch = RegExp(r'CloudFront-Policy=([^;]+)').firstMatch(cookie);
-                  if (polMatch != null) {
+                  // 1. Try Edge-Cache-Cookie (urlprefix=...)
+                  final urlprefixMatch = RegExp(r'urlprefix=([^:;]+)').firstMatch(cookie);
+                  if (urlprefixMatch != null) {
                     try {
-                      var b64Pol = polMatch.group(1)!;
-                      while (b64Pol.length % 4 != 0) {
-                        b64Pol += '=';
+                      var b64 = urlprefixMatch.group(1)!;
+                      while (b64.length % 4 != 0) {
+                        b64 += '=';
                       }
-                      final decoded = utf8.decode(base64.decode(b64Pol.replaceAll('-', '+').replaceAll('_', '/')));
-                      final polJson = jsonDecode(decoded);
-                      final resource = polJson['Statement']?[0]?['Resource']?.toString() ?? '';
-                      if (resource.isNotEmpty) {
-                        url = resource.replaceAll(RegExp(r'/\*$'), '/index.mpd');
+                      final decoded = utf8.decode(base64.decode(b64.replaceAll('-', '+').replaceAll('_', '/')));
+                      if (decoded.startsWith('http')) {
+                        url = decoded.endsWith('/') ? '${decoded}index.mpd' : decoded;
                       }
-                    } catch (_) {}
+                    } catch (e) {
+                      debugPrint('MovieboxResolver: urlprefix decode error: $e');
+                    }
+                  }
+
+                  // 2. Try legacy CloudFront-Policy
+                  if (url.isEmpty || _isUpdateVideo(url)) {
+                    final polMatch = RegExp(r'CloudFront-Policy=([^;]+)').firstMatch(cookie);
+                    if (polMatch != null) {
+                      try {
+                        var b64Pol = polMatch.group(1)!;
+                        while (b64Pol.length % 4 != 0) {
+                          b64Pol += '=';
+                        }
+                        final decoded = utf8.decode(base64.decode(b64Pol.replaceAll('-', '+').replaceAll('_', '/')));
+                        final polJson = jsonDecode(decoded);
+                        final resource = polJson['Statement']?[0]?['Resource']?.toString() ?? '';
+                        if (resource.isNotEmpty) {
+                          url = resource.replaceAll(RegExp(r'/\*$'), '/index.mpd');
+                        }
+                      } catch (_) {}
+                    }
                   }
                 }
               }

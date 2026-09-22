@@ -1,4 +1,4 @@
-import 'package:private_cinema_mobile/data/netmirror_ott_resolver.dart';
+import 'netmirror_ott_resolver.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -911,6 +911,15 @@ class MyHttpOverrides extends HttpOverrides {
     'vodvidl.site',
     'ironwallnet.com',
     'hakunamatata',
+    'jiotv',
+    'airtel4k',
+    'max4k',
+    'new4k',
+    'elite4k',
+    'indigotv',
+    'cloudcdn',
+    'cloudlivecdn',
+    'cdn77',
   ];
 
   @override

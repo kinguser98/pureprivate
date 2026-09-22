@@ -45,8 +45,8 @@ class SimklHistoryItem {
 }
 
 class SimklService {
-  // Default SIMKL Client Credentials
-  static const String _defaultClientId = '25b906a64ef8139be6e01452174c8b66eec6a9e144d1804f323a6358c279c656';
+  // Default SIMKL Client Credentials (synced from admin panel)
+  static const String _defaultClientId = 'b5a475a71343823974d5dc6e2b50bad782da22005eb8069e410bb051baf833b8';
   static const String _baseUrl = 'https://api.simkl.com';
 
   static const String _prefClientId = 'simkl_custom_client_id';
@@ -75,6 +75,24 @@ class SimklService {
   static final ValueNotifier<String?> currentUsername = ValueNotifier(null);
   static final ValueNotifier<String?> currentAvatar = ValueNotifier(null);
 
+  /// Fetch remote SIMKL Client ID from admin panel / cloud settings
+  static Future<String> refreshRemoteConfig() async {
+    try {
+      final settings = await SyncService.fetchAppSettings();
+      final remoteKey = settings['simkl_client_id']?.trim();
+      if (remoteKey != null && remoteKey.isNotEmpty) {
+        _customClientId = remoteKey;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_prefClientId, remoteKey);
+        await prefs.setString('simkl_client_id', remoteKey);
+        return remoteKey;
+      }
+    } catch (e) {
+      debugPrint('SimklService: Failed to fetch remote SIMKL config: $e');
+    }
+    return clientId;
+  }
+
   /// Initialize SIMKL session on app start
   static Future<void> init() async {
     if (_isInitialized) return;
@@ -91,6 +109,7 @@ class SimklService {
       currentAvatar.value = _avatar;
     }
     _isInitialized = true;
+    unawaited(refreshRemoteConfig());
   }
 
   /// Save custom SIMKL Client ID / API Key
@@ -121,16 +140,29 @@ class SimklService {
   /// Step 1: Request a user code and verification link (e.g. simkl.com/pin/XXXX)
   static Future<SimklPinResponse?> generatePin() async {
     try {
-      final res = await http.get(
-        Uri.parse('$_baseUrl/oauth/pin?client_id=$clientId'),
+      var currentId = clientId;
+      var res = await http.get(
+        Uri.parse('$_baseUrl/oauth/pin?client_id=$currentId'),
         headers: _headers(),
       );
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         return SimklPinResponse.fromJson(data);
-      } else {
-        debugPrint('SIMKL generatePin response: ${res.statusCode} ${res.body}');
       }
+
+      // Retry with freshly fetched remote key if initial attempt failed
+      final refreshedId = await refreshRemoteConfig();
+      if (refreshedId != currentId) {
+        res = await http.get(
+          Uri.parse('$_baseUrl/oauth/pin?client_id=$refreshedId'),
+          headers: _headers(),
+        );
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          return SimklPinResponse.fromJson(data);
+        }
+      }
+      debugPrint('SIMKL generatePin response: ${res.statusCode} ${res.body}');
     } catch (e) {
       debugPrint('SIMKL generatePin error: $e');
     }

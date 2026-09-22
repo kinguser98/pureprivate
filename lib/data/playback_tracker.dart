@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/data/api_service.dart';
+import 'package:private_cinema_mobile/data/device_auth_service.dart';
 import 'package:private_cinema_mobile/data/mock_catalog.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 
@@ -37,6 +38,10 @@ abstract final class PlaybackTracker {
       if (list.contains(id)) {
         list.remove(id);
         await prefs.setStringList(_listKey, list);
+      }
+      // Report completed watch to device auth backend (fire & forget)
+      if (progress >= 0.95) {
+        DeviceAuthService.reportWatched(id);
       }
     } else {
       await prefs.setInt('resume_position_$id', positionMs);

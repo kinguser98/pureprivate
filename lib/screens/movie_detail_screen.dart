@@ -1,3 +1,4 @@
+import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -72,6 +73,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _isDownloaded = false;
   String? _downloadedLocalPath;
 
+  bool _showCastPhotos = true;
   List<CastMember> _dynamicCast = [];
   String? _dynamicDirector;
   String? _directorProfileUrl;
@@ -105,6 +107,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveFilmuSources = [];
 
   bool _resolvingStreamplay = false;
+  bool _resolvingCinefreak = false;
+  bool _showCinefreak = true;
+  List<StreamSource> _liveCinefreakSources = [];
   bool _resolvingVidlink = false;
   bool _resolvingNetmirror = false;
   bool _resolvingMoviebox = false;
@@ -149,6 +154,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveNetmirrorOttSources = [];
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [
+    'cinefreak',
     'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
     'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
@@ -374,6 +380,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showFilmu = cloud.containsKey('source_show_filmu') ? cloud['source_show_filmu'] == 'true' : (prefs.getBool('source_show_filmu') ?? true);
         _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
         _showNetmirrorOtt = cloud.containsKey('source_show_netmirror_ott') ? cloud['source_show_netmirror_ott'] == 'true' : (prefs.getBool('source_show_netmirror_ott') ?? true);
+        _showCastPhotos = prefs.getBool('show_cast_photos') ?? true;
         
         final blockedRaw = cloud['blocked_addon_groups'] ?? '';
         _blockedAddonGroups = blockedRaw
@@ -397,7 +404,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final order = await SyncService.fetchSourceOrder();
     if (mounted) {
       final List<String> defaultOrder = [
-        'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
+        'cinefreak',
+    'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
         'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
         'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
       ];
@@ -443,6 +451,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                ? movie.tmdbId
                : null);
 
+    if (_showCinefreak) _resolveLiveCinefreak(movie.title);
     if (_showStreamplay) _resolveLiveStreamplay(movie.title);
     if (_showVidlink && activeId != null) {
       _resolveLiveVidlink(activeId);
@@ -845,6 +854,33 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       debugPrint('NetMirror resolution failed: $e');
     } finally {
       if (mounted) setState(() => _resolvingNetmirror = false);
+    }
+  }
+
+  Future<void> _resolveLiveCinefreak(String title) async {
+    _resolvingCinefreak = true;
+    if (mounted) setState(() {});
+    try {
+      debugPrint('Cinefreak: Resolving streams for $title...');
+      final streams = await CinefreakResolver.resolveStreams(
+        title: title,
+        year: int.tryParse(movie.year?.toString() ?? ''),
+      );
+      if (mounted) {
+        setState(() {
+          _liveCinefreakSources = streams.map((s) => StreamSource(
+            name: s.name,
+            url: s.url,
+            headers: s.headers,
+            quality: s.quality,
+            qualityBadgeText: s.quality,
+          )).toList();
+          _resolvingCinefreak = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Cinefreak resolution failed: $e');
+      if (mounted) setState(() { _resolvingCinefreak = false; });
     }
   }
 
@@ -1944,12 +1980,18 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _loadTmdbDetails() async {
+    final prefs = await SharedPreferences.getInstance();
+    final showCastPhotos = prefs.getBool('show_cast_photos') ?? true;
+    if (mounted) {
+      setState(() => _showCastPhotos = showCastPhotos);
+    }
+
     final tmdbId = movie.tmdbId;
     if (tmdbId == null || tmdbId.isEmpty || tmdbId == '0' || tmdbId == 'null') {
       setState(() {
         _dynamicCast = movie.castMembers;
         _dynamicDirector = movie.director;
-        _directorProfileUrl = movie.directorPhoto;
+        _directorProfileUrl = showCastPhotos ? movie.directorPhoto : null;
         _dynamicRating = null;
         _watchProviders = [];
       });
@@ -1957,21 +1999,24 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
 
     try {
-      // 1. Fetch Credits (Cast & Crew)
-      var creditsUrl = Uri.parse(
-        'https://api.themoviedb.org/3/movie/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
-      );
-      var creditsResponse = await http
-          .get(creditsUrl)
-          .timeout(const Duration(seconds: 8));
-
-      if (creditsResponse.statusCode == 404) {
-        creditsUrl = Uri.parse(
-          'https://api.themoviedb.org/3/tv/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+      http.Response? creditsResponse;
+      if (showCastPhotos) {
+        // 1. Fetch Credits (Cast & Crew) only if enabled
+        var creditsUrl = Uri.parse(
+          'https://api.themoviedb.org/3/movie/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
         );
         creditsResponse = await http
             .get(creditsUrl)
             .timeout(const Duration(seconds: 8));
+
+        if (creditsResponse.statusCode == 404) {
+          creditsUrl = Uri.parse(
+            'https://api.themoviedb.org/3/tv/$tmdbId/credits?api_key=8baba8ab6b8bbe247645bcae7df63d0d',
+          );
+          creditsResponse = await http
+              .get(creditsUrl)
+              .timeout(const Duration(seconds: 8));
+        }
       }
 
       // 2. Fetch Details (Rating / Vote Average)
@@ -2028,11 +2073,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
       List<CastMember> cast = movie.castMembers;
       String? director = movie.director;
-      String? directorProfile;
+      String? directorProfile = showCastPhotos ? movie.directorPhoto : null;
       double? rating;
       double? popularity;
 
-      if (creditsResponse.statusCode == 200) {
+      if (showCastPhotos && creditsResponse != null && creditsResponse.statusCode == 200) {
         final jsonString = utf8.decode(creditsResponse.bodyBytes);
         final data = json.decode(jsonString) as Map<String, dynamic>;
 
@@ -2115,7 +2160,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         setState(() {
           _dynamicCast = cast;
           _dynamicDirector = director ?? movie.director;
-          _directorProfileUrl = directorProfile ?? movie.directorPhoto;
+          _directorProfileUrl = showCastPhotos ? (directorProfile ?? movie.directorPhoto) : null;
           _dynamicRating = rating;
           _dynamicPopularity = popularity;
           _watchProviders = flatrateProviders;
@@ -2126,7 +2171,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         setState(() {
           _dynamicCast = movie.castMembers;
           _dynamicDirector = movie.director;
-          _directorProfileUrl = movie.directorPhoto;
+          _directorProfileUrl = showCastPhotos ? movie.directorPhoto : null;
           _dynamicRating = null;
           _dynamicPopularity = null;
           _watchProviders = [];
@@ -2862,7 +2907,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     
     // Direct media streams should NEVER be treated as web embeds or run through off-screen webview scrapers
     final isDirectMediaStream = nameLower.contains('moviebox') ||
-        nameLower.contains('streamplay') ||
+        nameLower.contains('streamplay') || nameLower.contains('cinefreak') || sLower.contains('cinecloud') || sLower.contains('r2.dev') ||
         nameLower.contains('netmirror') ||
         nameLower.contains('fsl') ||
         nameLower.contains('hubcloud') ||
@@ -3171,6 +3216,66 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             int pos(String key) => orderPos[key] ?? 99;
 
             final Map<String, Widget> sourceWidgets = {};
+
+                        // CineFreak Direct Streams
+            if ((_resolvingCinefreak || _liveCinefreakSources.isNotEmpty) && enabledKeys.contains('cinefreak')) {
+              sourceWidgets['cinefreak'] = _buildSourceTile(
+                icon: Icons.cloud_download_rounded,
+                title: '${pos('cinefreak')}. CineCloud Direct Server',
+                subtitle: _resolvingCinefreak
+                    ? 'Searching CineCloud...'
+                    : '${_liveCinefreakSources.length} High-Speed direct links available',
+                disabled: _resolvingCinefreak,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveCinefreakSources.length == 1) {
+                    _playWithResolution(
+                      _liveCinefreakSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveCinefreakSources.first.name,
+                      headers: _liveCinefreakSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'CINECLOUD DIRECT STREAMS',
+                      _liveCinefreakSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // MovieBox Server
+            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+              sourceWidgets['moviebox'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('moviebox')}. MovieBox Server',
+                subtitle: _resolvingMoviebox
+                    ? 'Searching MovieBox...'
+                    : '${_liveMovieboxSources.length} Multi-Language HD & 4K links available',
+                disabled: _resolvingMoviebox,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveMovieboxSources.length == 1) {
+                    _playWithResolution(
+                      _liveMovieboxSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveMovieboxSources.first.name,
+                      headers: _liveMovieboxSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'MOVIEBOX MULTI-LANG STREAMS',
+                      _liveMovieboxSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
 
             // Movy.bz Multi-Source
             if ((_resolvingMovy || _liveMovySources.isNotEmpty) && enabledKeys.contains('movy')) {
@@ -6441,13 +6546,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     radius: 20,
                                     backgroundColor: AppColors.surface,
                                     backgroundImage:
+                                        _showCastPhotos &&
                                         _directorProfileUrl != null &&
-                                            _directorProfileUrl!.isNotEmpty
+                                        _directorProfileUrl!.isNotEmpty
                                         ? NetworkImage(_directorProfileUrl!)
                                         : null,
                                     child:
+                                        !_showCastPhotos ||
                                         _directorProfileUrl == null ||
-                                            _directorProfileUrl!.isEmpty
+                                        _directorProfileUrl!.isEmpty
                                         ? const Icon(
                                             Icons.person_rounded,
                                             color: Colors.white30,
@@ -6533,7 +6640,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                         ),
                                         child: ClipRRect(
                                           borderRadius: BorderRadius.circular(12),
-                                          child: actor.profileUrl.isNotEmpty
+                                          child: (_showCastPhotos && actor.profileUrl.isNotEmpty)
                                               ? MovieImage(
                                                   source: actor.profileUrl,
                                                   fit: BoxFit.cover,

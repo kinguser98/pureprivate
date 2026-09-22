@@ -12,6 +12,7 @@ class ExternalPlayerService {
   ];
 
   static const List<Map<String, String>> sourceTypes = [
+    {'id': 'cinefreak', 'name': 'CineFreak Streams', 'desc': 'Play CineFreak streams externally'},
     {'id': 'telegram', 'name': 'Telegram Streams', 'desc': 'Play Telegram video links externally'},
     {'id': 'stalker', 'name': 'Stalker IPTV & Portals', 'desc': 'Play Stalker live & VOD externally'},
     {'id': 'torrentio', 'name': 'Torrentio & Debrid', 'desc': 'Play RealDebrid/Seedr externally'},
@@ -88,6 +89,9 @@ class ExternalPlayerService {
     final lowerUrl = url.toLowerCase();
     final lowerName = sourceName?.toLowerCase() ?? '';
 
+    if (enabledSources.contains('cinefreak') && (lowerName.contains('cinefreak') || lowerUrl.contains('cinecloud') || lowerUrl.contains('r2.dev'))) {
+      return true;
+    }
     if (enabledSources.contains('telegram') && (
         lowerName.contains('telegram') ||
         lowerName.contains('tg') ||

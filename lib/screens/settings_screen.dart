@@ -62,9 +62,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSeedrToken();
     _loadExternalPlayerSetting();
     _loadClearLogosSetting();
+    _loadCastPhotosSetting();
   }
 
   bool _showClearLogos = true;
+  bool _showCastPhotos = true;
 
   Future<void> _loadClearLogosSetting() async {
     final prefs = await SharedPreferences.getInstance();
@@ -80,6 +82,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setBool('show_clear_logos', value);
     if (mounted) {
       setState(() => _showClearLogos = value);
+    }
+  }
+
+  Future<void> _loadCastPhotosSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _showCastPhotos = prefs.getBool('show_cast_photos') ?? true;
+      });
+    }
+  }
+
+  Future<void> _toggleCastPhotosSetting(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('show_cast_photos', value);
+    if (mounted) {
+      setState(() => _showCastPhotos = value);
     }
   }
 
@@ -821,6 +840,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           value: _showClearLogos,
                           activeColor: const Color(0xFF8B5CF6),
                           onChanged: (val) => _toggleClearLogosSetting(val),
+                        ),
+                        const Divider(color: Colors.white10, height: 24),
+                        SwitchListTile.adaptive(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            'Show Cast & Crew Photos',
+                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text(
+                            'Load actor & director photos from TMDB (disable for faster loading)',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                          value: _showCastPhotos,
+                          activeColor: const Color(0xFF8B5CF6),
+                          onChanged: (val) => _toggleCastPhotosSetting(val),
                         ),
                       ],
                     ),
