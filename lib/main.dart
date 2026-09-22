@@ -15,7 +15,7 @@ import 'package:private_cinema_mobile/data/simkl_service.dart';
 import 'package:private_cinema_mobile/data/tmdb_service.dart';
 import 'package:private_cinema_mobile/data/logo_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
-import 'package:private_cinema_mobile/screens/navigation_holder.dart';
+import 'package:private_cinema_mobile/screens/device_gate.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
 
@@ -198,7 +198,8 @@ class PrivateCinemaMobileApp extends StatelessWidget {
               brightness: Brightness.dark,
             ),
           ),
-          home: const NavigationHolder(),
+          // DeviceGate checks approval before showing the real home screen
+          home: const DeviceGate(),
         );
       },
     );

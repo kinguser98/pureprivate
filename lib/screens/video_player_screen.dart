@@ -647,25 +647,38 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         if (_isSoftwareDecoding) {
           await nativePlayer.setProperty('hwdec', 'no');
         } else {
-          await nativePlayer.setProperty('hwdec', 'auto-safe');
+          await nativePlayer.setProperty('hwdec', 'auto');
+          await nativePlayer.setProperty('hwdec-codecs', 'all');
         }
+        await nativePlayer.setProperty('video-sync', 'audio');
         await nativePlayer.setProperty('vd-lavc-threads', '0');
         await nativePlayer.setProperty('ad-lavc-downmix', 'yes');
         await nativePlayer.setProperty('audio-pitch-correction', 'yes');
+        await nativePlayer.setProperty('vd-lavc-dr', 'yes');
+        await nativePlayer.setProperty('vd-lavc-fast', 'yes');
+        await nativePlayer.setProperty('vd-lavc-skiploopfilter', 'nonref');
+        await nativePlayer.setProperty('profile', 'fast');
+        await nativePlayer.setProperty('opengl-pbo', 'yes');
+        await nativePlayer.setProperty('framedrop', 'vo');
         
         if (widget.isLive) {
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '20');
-          await nativePlayer.setProperty('cache-secs', '20');
-          await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
-          await nativePlayer.setProperty('cache-pause-wait', '1');
-          await nativePlayer.setProperty('network-timeout', '30');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '4');
+          await nativePlayer.setProperty('cache-secs', '10');
+          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
+          await nativePlayer.setProperty('cache-pause', 'no');
+          await nativePlayer.setProperty('cache-pause-wait', '0');
+          await nativePlayer.setProperty('cache-pause-initial', 'no');
+          await nativePlayer.setProperty('network-timeout', '20');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('framedrop', 'vo');
           await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('correct-pts', 'yes');
           await nativePlayer.setProperty('audio-pitch-correction', 'yes');
+          await nativePlayer.setProperty('demuxer-lavf-probesize', '65536');
+          await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1');
         } else if (!isLocalStream) {
           await nativePlayer.setProperty('network-timeout', '30');
           await nativePlayer.setProperty('cache', 'yes');
@@ -687,9 +700,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('ao', 'audiounit,');
         }
         
-        // Disable HTTP persistent connections to avoid avformat_open_input()
-        // "Cannot reuse HTTP connection for different host" failures with HLS CDN segments
-        await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+        // For live streams, use persistent HTTP connections and resilient reconnect options
+        if (widget.isLive) {
+          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_http_error=4xx,5xx,reconnect_on_network_error=1');
+        } else {
+          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+        }
       }
 
       var resolvedSource = widget.videoSource;
@@ -709,7 +725,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           final hasStalkerCookie = playHeaders.entries.any(
             (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
           );
-          if (lowerSubtitle.contains('stalker') ||
+          if (widget.isLive ||
+              lowerSubtitle.contains('stalker') ||
               lowerSubtitle.contains('castle') ||
               lowerSubtitle.contains('telegram') ||
               lowerSubtitle.contains('streamplay') ||

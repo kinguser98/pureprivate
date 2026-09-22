@@ -1,3 +1,4 @@
+import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
@@ -84,6 +85,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   // Source visibility flags
   bool _showStreamplay = true;
+  bool _showCinefreak = true;
   bool _showStravo = true;
   bool _showStalker = true;
   bool _showMoviebox = true;
@@ -121,13 +123,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _dynamicModules = activeModules;
         _dynamicModuleVisibility = dynamicVis;
         _sourceOrder = [
-          'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
+          
+          
+        'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
           'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
         ];
         for (final m in activeModules) {
           final id = m['id'].toString();
           if (!_sourceOrder.contains(id)) _sourceOrder.add(id);
         }
+        _showCinefreak = cloud.containsKey('source_show_cinefreak') ? cloud['source_show_cinefreak'] == 'true' : (prefs.getBool('source_show_cinefreak') ?? true);
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
@@ -158,7 +163,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
     final List<String> defaultOrder = [
-      'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
+      
+          
+        'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
       'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
     ];
     final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
@@ -490,6 +497,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final movieYear = _selectedMovie?['release_date']?.toString().split('-').first ?? '';
 
       // Resolve StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)
+      if (_showCinefreak) {
+        tasks.add(_resolveCinefreak(title, movieYear, isSeries: _isSeriesSearch, season: season, episode: episode));
+      }
       if (_showStreamplay) {
         tasks.add(
           _resolveStreamplay(
@@ -727,6 +737,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
     } catch (e) {
       debugPrint('Stalker VOD database search failed: $e');
+    }
+  }
+
+  Future<void> _resolveCinefreak(String title, String year, {bool isSeries = false, int? season, int? episode}) async {
+    try {
+      debugPrint('Cinefreak Scraper: Resolving streams for $title...');
+      final streams = await CinefreakResolver.resolveStreams(
+        title: title,
+        year: int.tryParse(year),
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && streams.isNotEmpty) {
+        setState(() {
+          _resolvedSources.addAll(streams);
+        });
+      }
+    } catch (e) {
+      debugPrint('Cinefreak resolution failed: $e');
     }
   }
 
@@ -2829,6 +2859,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final movieboxStreams = filteredSources
         .where((s) => s.type == StreamSourceType.moviebox)
         .toList();
+    final cinefreakStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.cinefreak)
+        .toList();
     final stremioStreams = filteredSources
         .where((s) => s.type == StreamSourceType.stremioAddon)
         .toList();
@@ -2972,6 +3005,26 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.stalker,
                 ),
+        );
+      }
+
+            // CineFreak Server
+      if (_showCinefreak && (_resolvingStreams || cinefreakStreams.isNotEmpty) && enabledKeys.contains('cinefreak')) {
+        sourceWidgets['cinefreak'] = _buildServerGroupCard(
+          title: '${pos('cinefreak')}. CineCloud Direct Server',
+          subtitle: _resolvingStreams && cinefreakStreams.isEmpty
+              ? 'Searching CineCloud...'
+              : (cinefreakStreams.isNotEmpty
+                    ? '${cinefreakStreams.length} direct links available'
+                    : 'Not available'),
+          icon: Icons.cloud_download_rounded,
+          accentColor: Colors.deepOrangeAccent,
+          onTap: cinefreakStreams.isEmpty
+              ? null
+              : () => setState(
+                  () => _activeGroupType = StreamSourceType.cinefreak,
+                ),
+          
         );
       }
 
@@ -3772,6 +3825,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 }
 
 enum StreamSourceType {
+  cinefreak,
   streamplay,
   movy,
   moviesdrive,

@@ -1,3 +1,4 @@
+import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -136,7 +137,7 @@ class ModularSourceService {
               if (lowerUrl.contains('pixel.hubcloud') ||
                   lowerUrl.contains('pixeldrain') ||
                   lowerUrl.contains('fuckingfast') ||
-                  lowerUrl.contains('istreamcdn.com/hls/') ||
+                  lowerUrl.contains('istreamcdn_disabled/hls/') ||
                   lowerUrl.contains('iasbase.net/stream/')) {
                 continue;
               }

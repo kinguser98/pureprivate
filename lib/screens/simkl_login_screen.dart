@@ -40,6 +40,10 @@ class _SimklLoginScreenState extends State<SimklLoginScreen> {
 
   Future<void> _startPinAuth() async {
     setState(() => _isLoading = true);
+    await SimklService.refreshRemoteConfig();
+    if (mounted) {
+      _clientIdController.text = SimklService.clientId;
+    }
     final pin = await SimklService.generatePin();
     if (pin != null && mounted) {
       setState(() {

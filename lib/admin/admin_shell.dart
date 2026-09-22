@@ -26,6 +26,7 @@ import 'package:private_cinema_mobile/admin/screens/browser/browser_screen.dart'
 import 'package:private_cinema_mobile/admin/screens/cloud_accounts/cloud_accounts_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/downloads/download_manager_screen.dart';
 import 'package:private_cinema_mobile/admin/screens/modules/source_modules_screen.dart';
+import 'package:private_cinema_mobile/admin/screens/device_access/device_access_screen.dart';
 import 'package:private_cinema_mobile/admin/widgets/navigation/app_drawer.dart';
 
 class AdminShell extends StatelessWidget {
@@ -105,6 +106,7 @@ final _adminRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/cloud-accounts', builder: (context, state) => const CloudAccountsScreen()),
           GoRoute(path: '/downloads', builder: (context, state) => const DownloadManagerScreen()),
           GoRoute(path: '/modules', builder: (context, state) => const SourceModulesScreen()),
+          GoRoute(path: '/device-access', builder: (context, state) => const AdminDeviceAccessScreen()),
         ],
       ),
     ],

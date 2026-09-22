@@ -66,11 +66,10 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   // Auto-reconnect & Stalker keep_alive state
   bool _userStoppedMini = false;
+  bool _activeStreamIsDirect = false;
   DateTime? _miniPlaybackStarted;
   Timer? _reconnectDebounce;
   Timer? _stalkerKeepAliveTimer;
-  Timer? _proxyStatsTimer;
-  int _lastDemuxerBytesRead = 0;
 
   void stopPlayback() {
     _userStoppedMini = true;
@@ -106,13 +105,12 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         _reconnectDebounce?.cancel();
         _startStalkerKeepAliveTimer();
       } else {
-        _stalkerKeepAliveTimer?.cancel();
-        // Fallback auto-reconnect ONLY if stream remains stopped/dead for 8 seconds continuously
+        // Fallback auto-reconnect ONLY if stream remains stopped/dead for 25 seconds continuously
         if (!_userStoppedMini && _activeMiniChannel != null && _miniPlaybackStarted != null) {
           _reconnectDebounce?.cancel();
-          _reconnectDebounce = Timer(const Duration(seconds: 8), () {
+          _reconnectDebounce = Timer(const Duration(seconds: 25), () {
             if (mounted && !_userStoppedMini && _activeMiniChannel != null && !_isMiniPlayerPlaying) {
-              debugPrint('LiveTvScreen: Stream stopped for 8s continuously — auto-reconnecting...');
+              debugPrint('LiveTvScreen: Stream stopped for 25s continuously — auto-reconnecting...');
               _autoReconnectMini();
             }
           });
@@ -132,7 +130,6 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
   void dispose() {
     if (_activeState == this) _activeState = null;
     stopPlayback();
-    _proxyStatsTimer?.cancel();
     _miniEpgTimer?.cancel();
     _miniPlayer?.dispose();
     _searchController.dispose();
@@ -140,59 +137,23 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     super.dispose();
   }
 
-  void _startProxyStatsTimer({bool resetStats = false}) {
-    _proxyStatsTimer?.cancel();
-    _lastDemuxerBytesRead = 0;
-    if (resetStats) {
-      ProxyStats.reset();
-    }
-    _proxyStatsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      if (!mounted || _miniPlayer == null || _miniPlayer!.platform is! NativePlayer) return;
-      final nativePlayer = _miniPlayer!.platform as NativePlayer;
-      try {
-        int bytes = 0;
-        final res1 = await nativePlayer.getProperty('demuxer-bytes-read');
-        bytes = int.tryParse(res1.toString()) ?? 0;
-        if (bytes == 0) {
-          final res2 = await nativePlayer.getProperty('bytes-read');
-          bytes = int.tryParse(res2.toString()) ?? 0;
-        }
-        if (bytes == 0) {
-          final res3 = await nativePlayer.getProperty('stream-pos');
-          bytes = int.tryParse(res3.toString()) ?? 0;
-        }
-
-        if (bytes > 0 && bytes > _lastDemuxerBytesRead) {
-          final delta = bytes - _lastDemuxerBytesRead;
-          ProxyStats.addBytes(delta);
-          _lastDemuxerBytesRead = bytes;
-        } else if (_isMiniPlayerPlaying) {
-          ProxyStats.addBytes(384 * 1024);
-        }
-      } catch (_) {
-        if (_isMiniPlayerPlaying) {
-          ProxyStats.addBytes(384 * 1024);
-        }
-      }
-    });
-  }
-
   void _startStalkerKeepAliveTimer() {
     _stalkerKeepAliveTimer?.cancel();
-    // Send initial keep_alive heartbeat immediately
     if (_activeMiniChannel != null) {
+      // Direct HTTP streams must NOT send Stalker portal keep_alive
+      if (_activeStreamIsDirect) return;
+
       final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
       StalkerResolver.keepAlive(portalId);
+      
+      _stalkerKeepAliveTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+        if (mounted && _activeMiniChannel != null && !_userStoppedMini && _isMiniPlayerPlaying) {
+          StalkerResolver.keepAlive(portalId);
+        } else {
+          timer.cancel();
+        }
+      });
     }
-    // Periodically send keep_alive every 30 seconds to prevent Stalker portal from revoking stream token
-    _stalkerKeepAliveTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (mounted && _activeMiniChannel != null && !_userStoppedMini && _isMiniPlayerPlaying) {
-        final portalId = int.tryParse(_activeMiniChannel!['portal_id']?.toString() ?? '') ?? 1;
-        StalkerResolver.keepAlive(portalId);
-      } else {
-        timer.cancel();
-      }
-    });
   }
 
   /// Silently re-resolves the current Stalker stream and reopens the player.
@@ -206,13 +167,13 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
       final portalId = int.tryParse(channel['portal_id']?.toString() ?? '') ?? 1;
       final resolved = await StalkerResolver.resolveStream(cmd, portalId);
       if (!mounted || _activeMiniChannel != channel || _userStoppedMini) return;
+      _activeStreamIsDirect = resolved.isDirect;
       _userStoppedMini = true;
       _miniPlaybackStarted = null;
       await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
       _userStoppedMini = false;
       _miniPlaybackStarted = DateTime.now();
       _startStalkerKeepAliveTimer();
-      _startProxyStatsTimer(resetStats: false);
       debugPrint('LiveTvScreen: Auto-reconnect successful for ${channel["name"]}');
     } catch (e) {
       debugPrint('LiveTvScreen: Auto-reconnect failed: $e');
@@ -574,18 +535,9 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           if (!Platform.isIOS) {
             await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
           }
-          if (resolved.headers.isNotEmpty) {
-            final headerList = <String>[];
-            resolved.headers.forEach((key, value) {
-              headerList.add('$key: $value');
-            });
-            if (headerList.isNotEmpty) {
-              await nativePlayer.setProperty('http-header-fields', headerList.join(','));
-            }
-          }
           
           if (Platform.isAndroid) {
-            await nativePlayer.setProperty('hwdec', 'mediacodec-copy');
+            await nativePlayer.setProperty('hwdec', 'mediacodec');
           } else if (Platform.isIOS || Platform.isMacOS) {
             await nativePlayer.setProperty('hwdec', 'videotoolbox');
           } else {
@@ -594,25 +546,26 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '20');
-          await nativePlayer.setProperty('cache-secs', '20');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
+          await nativePlayer.setProperty('cache-secs', '15');
           await nativePlayer.setProperty('demuxer-max-bytes', '67108864');
           await nativePlayer.setProperty('demuxer-max-back-bytes', '16777216');
-          await nativePlayer.setProperty('cache-pause-wait', '1');
-          await nativePlayer.setProperty('network-timeout', '30');
+          await nativePlayer.setProperty('network-timeout', '25');
+          await nativePlayer.setProperty('demuxer-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
+          await nativePlayer.setProperty('demuxer-lavf-probesize', '5000000');
+          await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '3000000');
           await nativePlayer.setProperty('hr-seek', 'no');
           await nativePlayer.setProperty('framedrop', 'vo');
-          await nativePlayer.setProperty('autosync', '0');
           await nativePlayer.setProperty('correct-pts', 'yes');
           await nativePlayer.setProperty('audio-pitch-correction', 'yes');
         }
 
+        _activeStreamIsDirect = resolved.isDirect;
         _userStoppedMini = true; // suppress reconnect trigger during open transition
         await _miniPlayer!.open(Media(resolved.url, httpHeaders: resolved.headers), play: true);
         _userStoppedMini = false;
         _miniPlaybackStarted = DateTime.now();
         _startStalkerKeepAliveTimer();
-        _startProxyStatsTimer(resetStats: true);
 
         final channelId = channel['stalker_id']?.toString() ?? channel['id']?.toString();
         
@@ -927,56 +880,6 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                if (!_isResolvingStream && _activeMiniChannel != null)
-                  Positioned(
-                    top: 12,
-                    right: 12,
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: ProxyStats.speedNotifier,
-                      builder: (context, speed, _) {
-                        return ValueListenableBuilder<int>(
-                          valueListenable: ProxyStats.totalDataNotifier,
-                          builder: (context, totalBytes, _) {
-                            final speedText = speed <= 0
-                                ? '0 KB/s'
-                                : (speed < 1024 * 1024
-                                    ? '${(speed / 1024).toStringAsFixed(1)} KB/s'
-                                    : '${(speed / (1024 * 1024)).toStringAsFixed(2)} MB/s');
-                            
-                            final dataText = totalBytes < 1024 * 1024
-                                ? '${(totalBytes / 1024).toStringAsFixed(1)} KB'
-                                : (totalBytes < 1024 * 1024 * 1024
-                                    ? '${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
-                                    : '${(totalBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB');
-
-                            return Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.flash_on_rounded, color: Colors.amber, size: 10),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '$speedText | $dataText',
-                                    style: GoogleFonts.outfit(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        );
-                      },
                     ),
                   ),
               ],
