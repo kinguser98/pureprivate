@@ -1,4 +1,6 @@
 import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
+import 'package:private_cinema_mobile/data/telegram_premium_resolver.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -26,6 +28,8 @@ import 'package:private_cinema_mobile/data/telegram_sources.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
 import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
+import 'package:freebuff_core/services/telegram/telegram_bot_resolver.dart';
+import 'package:private_cinema_mobile/widgets/telegram_auto_join_dialog.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
@@ -102,6 +106,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<StreamSource> _liveNuveoSources = [];
   List<StreamSource> _liveCastleSources = [];
   List<StreamSource> _liveTelegramSources = [];
+  List<StreamSource> _liveTelegramPremiumSources = [];
   List<StreamSource> _liveVegamoviesSources = [];
   List<StreamSource> _liveCinejoySources = [];
   List<StreamSource> _liveFilmuSources = [];
@@ -124,6 +129,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingCastle = false;
   bool _resolvingTorrent = false;
   bool _resolvingTelegram = false;
+  bool _resolvingTelegramPremium = false;
   bool _resolvingVegamovies = false;
   bool _resolvingCinejoy = false;
   bool _resolvingFilmu = false;
@@ -143,6 +149,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showNuveoAddon = true;
   bool _showCastle = true;
   bool _showTelegram = true;
+  bool _showTelegramPremium = true;
   bool _showVegamovies = true;
   bool _showCinejoy = true;
   bool _showFilmu = true;
@@ -157,7 +164,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     'cinefreak',
     'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-    'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
+    'telegram', 'telegram_premium', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
   ];
   List<Map<String, dynamic>> _dynamicModules = [];
   Map<String, bool> _dynamicModuleVisibility = {};
@@ -374,6 +381,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         _showNuveoAddon = (cloud.containsKey('source_show_stremioAddon') ? cloud['source_show_stremioAddon'] == 'true' : (prefs.getBool('source_show_stremioAddon') ?? true)) && (cloud['nuveo_addons_enabled'] ?? 'true') == 'true';
         _showCastle = cloud.containsKey('source_show_castle') ? cloud['source_show_castle'] == 'true' : (prefs.getBool('source_show_castle') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showTelegramPremium = cloud.containsKey('source_show_telegram_premium') ? cloud['source_show_telegram_premium'] == 'true' : (prefs.getBool('source_show_telegram_premium') ?? true);
         _showMoviebox = cloud.containsKey('source_show_moviebox') ? cloud['source_show_moviebox'] == 'true' : (prefs.getBool('source_show_moviebox') ?? true);
         _showVegamovies = cloud.containsKey('source_show_vegamovies') ? cloud['source_show_vegamovies'] == 'true' : (prefs.getBool('source_show_vegamovies') ?? true);
         _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
@@ -407,7 +415,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         'cinefreak',
     'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
         'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
-        'telegram', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
+        'telegram', 'telegram_premium', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
       ];
       for (final m in _dynamicModules) {
         final id = m['id'].toString();
@@ -476,6 +484,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (_showTelegram) {
       _resolveLiveTelegram();
+    }
+
+    if (_showTelegramPremium) {
+      _resolveLiveTelegramPremium();
     }
 
     if (_showVegamovies) {
@@ -1279,6 +1291,46 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
+  bool _hasSearchedTelegramGroup = false;
+  bool _isSearchingTelegramGroup = false;
+
+  int _rankTelegramQuality(StreamSource s) {
+    final text = '${s.quality ?? ''} ${s.qualityBadgeText ?? ''} ${s.name}'.toLowerCase();
+    if (text.contains('4k') || text.contains('2160p') || text.contains('ultra hd') || text.contains('uhd')) {
+      return 4;
+    }
+    if (text.contains('1080p') || text.contains('full hd') || text.contains('fhd')) {
+      return 3;
+    }
+    if (text.contains('720p') || text.contains('hdrip') || text.contains('720') || text.contains('hd')) {
+      return 2;
+    }
+    if (text.contains('480p') || text.contains('360p') || text.contains('sd')) {
+      return 1;
+    }
+    return 0;
+  }
+
+  double _parseSizeMb(String text) {
+    final m = RegExp(r'(\d+(?:\.\d+)?)\s*(gb|mb)', caseSensitive: false).firstMatch(text);
+    if (m == null) return 0;
+    final val = double.tryParse(m.group(1) ?? '0') ?? 0;
+    final unit = m.group(2)?.toLowerCase();
+    if (unit == 'gb') return val * 1024;
+    return val;
+  }
+
+  void _sortTelegramSources(List<StreamSource> sources) {
+    sources.sort((a, b) {
+      final rankA = _rankTelegramQuality(a);
+      final rankB = _rankTelegramQuality(b);
+      if (rankA != rankB) return rankB.compareTo(rankA);
+      final sizeA = _parseSizeMb('${a.quality ?? ''} ${a.name}');
+      final sizeB = _parseSizeMb('${b.quality ?? ''} ${b.name}');
+      return sizeB.compareTo(sizeA);
+    });
+  }
+
   Future<void> _resolveLiveTelegram() async {
     if (mounted) setState(() => _resolvingTelegram = true);
     try {
@@ -1292,23 +1344,88 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         return;
       }
       if (cfg.apiId != null && cfg.apiHash != null) {
-        await TelegramService.instance
-            .setCredentials(cfg.apiId, cfg.apiHash);
+        await TelegramService.instance.setCredentials(cfg.apiId, cfg.apiHash);
       }
       await TelegramService.instance.init();
-      final query =
-          '${movie.title}${movie.year != null ? ' ${movie.year}' : ''}';
+      final query = '${movie.title}${movie.year != null ? ' ${movie.year}' : ''}';
       final hits = await TelegramService.instance.search(query);
+      final sources = TelegramSources.toStreamSources(hits).cast<StreamSource>().toList();
+      _sortTelegramSources(sources);
+
       if (mounted) {
         setState(() {
-          _liveTelegramSources =
-              TelegramSources.toStreamSources(hits).cast<StreamSource>();
+          _liveTelegramSources = sources;
         });
       }
     } catch (e) {
       debugPrint('Telegram resolution failed: $e');
     } finally {
       if (mounted) setState(() => _resolvingTelegram = false);
+    }
+  }
+
+  Future<void> _ensureTelegramGroupSearched() async {
+    if (_hasSearchedTelegramGroup || _isSearchingTelegramGroup) return;
+    _isSearchingTelegramGroup = true;
+    if (mounted) {
+      setState(() => _resolvingTelegram = true);
+      _modalSetState?.call(() {});
+    }
+
+    try {
+      if (!await TelegramService.instance.hasSession) return;
+      final groupResults = await TelegramService.instance.searchMovieInConfiguredGroup(movie.title);
+      _hasSearchedTelegramGroup = true;
+
+      final updatedSources = List<StreamSource>.from(_liveTelegramSources);
+      for (final gr in groupResults) {
+        if (!updatedSources.any((s) => s.url == gr.botStartUrl)) {
+          updatedSources.add(
+            StreamSource(
+              name: 'TG • ${gr.title}',
+              url: gr.botStartUrl,
+              quality: gr.qualityOrSize,
+              qualityBadgeText: 'TG BOT',
+            ),
+          );
+        }
+      }
+      _sortTelegramSources(updatedSources);
+
+      if (mounted) {
+        setState(() {
+          _liveTelegramSources = updatedSources;
+        });
+        _modalSetState?.call(() {});
+      }
+    } catch (e) {
+      debugPrint('[MovieDetail] Telegram group search note: $e');
+    } finally {
+      _isSearchingTelegramGroup = false;
+      if (mounted) {
+        setState(() => _resolvingTelegram = false);
+        _modalSetState?.call(() {});
+      }
+    }
+  }
+
+  Future<void> _resolveLiveTelegramPremium() async {
+    if (mounted) setState(() => _resolvingTelegramPremium = true);
+    try {
+      final sources = await TelegramPremiumResolver.search(
+        movie.title,
+        year: movie.year,
+        imdbId: movie.imdbId,
+      );
+      if (mounted) {
+        setState(() {
+          _liveTelegramPremiumSources = sources;
+        });
+      }
+    } catch (e) {
+      debugPrint('Telegram Premium resolution failed: $e');
+    } finally {
+      if (mounted) setState(() => _resolvingTelegramPremium = false);
     }
   }
 
@@ -2438,8 +2555,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   String _sanitizeUrl(String url) {
     try {
       final uri = Uri.parse(url);
+      if (url.contains('/api/download/') ||
+          url.contains('/api/stream/') ||
+          url.contains('/stream/')) {
+        return url;
+      }
       final isAlist =
-          uri.host.contains('koyeb.app') ||
+          (uri.host.contains('koyeb.app') && !url.contains('infsolution')) ||
           uri.host.contains('alist') ||
           url.contains('/Movies/Movies/');
       if (isAlist &&
@@ -2613,6 +2735,70 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         }
       }
       return;
+    }
+
+    // Telegram Bot or Deep Link: resolve via TelegramBotResolver
+    if (TelegramBotResolver.instance.canHandle(source)) {
+      if (!mounted) return;
+      final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
+      bool dialogOpen = true;
+
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => TelegramAutoJoinDialog(
+          initialStatus: 'Connecting to Telegram Bot...',
+          statusNotifier: statusNotifier,
+          onCancel: () {
+            dialogOpen = false;
+            Navigator.of(ctx).pop();
+          },
+        ),
+      );
+
+      try {
+        final videoItem = await TelegramBotResolver.instance.resolveLink(
+          source,
+          onStatus: (st) {
+            statusNotifier.value = st;
+          },
+        );
+
+        if (!dialogOpen) return;
+
+        if (videoItem == null) {
+          throw Exception('No playable video was returned by the bot.');
+        }
+
+        statusNotifier.value = 'Preparing video player...';
+        final resolved = await TelegramService.instance.resolveStream(videoItem);
+
+        if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+          Navigator.of(context, rootNavigator: true).pop();
+          dialogOpen = false;
+        }
+
+        return _playWithResolution(
+          resolved,
+          resumeDirectly: resumeDirectly,
+          sourceName: 'mp4/mkv',
+          forceNative: true,
+          forceWeb: false,
+          headers: headers,
+        );
+      } catch (e) {
+        if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+          Navigator.of(context, rootNavigator: true).pop();
+          dialogOpen = false;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Telegram Bot Resolve Failed: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ));
+        }
+        return;
+      }
     }
 
     // Telegram Saved-Message file: resolve to a streamable URL first.
@@ -3086,6 +3272,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                   sourceName.toLowerCase().contains('fsl') ||
                   sourceName.toLowerCase().contains('hubcloud') ||
                   sourceName.toLowerCase().contains('hdhub4u') ||
+                  sourceName.toLowerCase().contains('telegram') ||
                   sourceName.toLowerCase().contains('movieshunt'))) ||
           source.contains('hakunaymatata.com') ||
           source.contains('aoneroom.com') ||
@@ -3626,17 +3813,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
              // Telegram Server
-             if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+             if ((_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty || enabledKeys.contains('telegram')) && enabledKeys.contains('telegram')) {
+               final isSearching = _resolvingTelegram || _isSearchingTelegramGroup;
                sourceWidgets['telegram'] = _buildSourceTile(
                  icon: Icons.send_rounded,
                  title: '${pos('telegram')}. Telegram Server',
-                 subtitle: _resolvingTelegram
+                 subtitle: isSearching
                      ? 'Searching Telegram...'
                      : (_liveTelegramSources.isEmpty
-                         ? 'No files found'
+                         ? 'No files found (Tap to search)'
                          : '${_liveTelegramSources.length} files in Telegram Server'),
-                 disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
+                 disabled: false,
                  onTap: () {
+                   if (!_hasSearchedTelegramGroup && !isSearching) {
+                     _ensureTelegramGroupSearched();
+                   }
                    Navigator.of(context).pop();
                    if (_liveTelegramSources.length == 1) {
                      final s = _liveTelegramSources.first;
@@ -3657,6 +3848,39 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                  },
               );
             }
+
+             // Telegram Premium
+             if (_showTelegramPremium && (_resolvingTelegramPremium || _liveTelegramPremiumSources.isNotEmpty) && enabledKeys.contains('telegram_premium')) {
+               sourceWidgets['telegram_premium'] = _buildSourceTile(
+                 icon: Icons.star_rounded,
+                 title: '${pos('telegram_premium')}. Telegram Premium',
+                 subtitle: _resolvingTelegramPremium
+                     ? 'Searching Telegram Premium...'
+                     : (_liveTelegramPremiumSources.isEmpty
+                         ? 'No files found'
+                         : '${_liveTelegramPremiumSources.length} files available'),
+                 disabled: _resolvingTelegramPremium || _liveTelegramPremiumSources.isEmpty,
+                 onTap: () {
+                   Navigator.of(context).pop();
+                   if (_liveTelegramPremiumSources.length == 1) {
+                     final s = _liveTelegramPremiumSources.first;
+                     _playWithResolution(
+                       s.url,
+                       resumeDirectly: resumeDirectly,
+                       sourceName: s.name,
+                       headers: s.headers,
+                     );
+                   } else {
+                     _showSubSourceSelector(
+                       context,
+                       'TELEGRAM PREMIUM',
+                       _liveTelegramPremiumSources,
+                       resumeDirectly: resumeDirectly,
+                     );
+                   }
+                 },
+               );
+             }
 
             // Vegamovies Server
             if (_showVegamovies && enabledKeys.contains('vegamovies')) {
@@ -4310,75 +4534,176 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Flexible(
-                  child: Builder(
-                    builder: (context) {
-                      final sortedSources = sortStreamsByQuality<StreamSource>(
-                        sources,
-                        getName: (s) => s.name,
-                        getUrl: (s) => s.url,
-                        preferredLanguage: movie.language,
-                      );
+        String selectedFilter = 'ALL';
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final isTelegram = title.toUpperCase().contains('TELEGRAM');
 
-                      return ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: sortedSources.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, idx) {
-                          final source = sortedSources[idx];
-                          return StreamMetadataTile(
-                            name: source.name,
-                            url: source.url,
-                            headers: source.headers,
-                            isSelected: false,
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              _playWithResolution(
-                                source.url,
-                                resumeDirectly: resumeDirectly,
-                                sourceName: source.name,
-                                headers: source.headers,
-                              );
-                            },
-                            onLongPress: () {
-                              Clipboard.setData(ClipboardData(text: source.url));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Copied Link: ${source.url}'),
-                                  duration: const Duration(seconds: 2),
+            String getQualityBucket(StreamSource s) {
+              final q = (s.quality ?? '').toUpperCase();
+              final n = s.name.toUpperCase();
+              if (q.contains('4K') || q.contains('2160') || n.contains('4K') || n.contains('2160P')) return '4K';
+              if (q.contains('1080') || n.contains('1080P')) return '1080p';
+              if (q.contains('720') || n.contains('720P')) return '720p';
+              if (q.contains('480') || n.contains('480P') || q.contains('SD')) return '480p';
+              return 'Other';
+            }
+
+            final sortedSources = sortStreamsByQuality<StreamSource>(
+              sources,
+              getName: (s) => s.name,
+              getUrl: (s) => s.url,
+              preferredLanguage: movie.language,
+            );
+
+            final Map<String, int> counts = {};
+            for (final s in sortedSources) {
+              final b = getQualityBucket(s);
+              counts[b] = (counts[b] ?? 0) + 1;
+            }
+
+            final List<String> filterOptions = [];
+            if (!isTelegram) {
+              filterOptions.add('ALL');
+              counts['ALL'] = sortedSources.length;
+            }
+            for (final b in ['4K', '1080p', '720p', '480p', 'Other']) {
+              if (counts.containsKey(b) && counts[b]! > 0) {
+                filterOptions.add(b);
+              }
+            }
+
+            if (isTelegram && (selectedFilter == 'ALL' || !filterOptions.contains(selectedFilter))) {
+              selectedFilter = filterOptions.isNotEmpty ? filterOptions.first : 'Other';
+            }
+
+            final displayedSources = (isTelegram || selectedFilter != 'ALL')
+                ? sortedSources.where((s) => getQualityBucket(s) == selectedFilter).toList()
+                : sortedSources;
+
+            return SafeArea(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            title,
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentBright.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${displayedSources.length} ${displayedSources.length == 1 ? 'stream' : 'streams'}',
+                              style: TextStyle(
+                                color: AppColors.accentBright,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (isTelegram && filterOptions.length > 1) ...[
+                        const SizedBox(height: 12),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: filterOptions.map((f) {
+                              final isSelected = selectedFilter == f;
+                              final count = counts[f] ?? 0;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(
+                                    f == 'ALL' ? 'All ($count)' : '$f ($count)',
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.white : Colors.white70,
+                                      fontSize: 12,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    ),
+                                  ),
+                                  selected: isSelected,
+                                  onSelected: (val) {
+                                    if (val) setModalState(() => selectedFilter = f);
+                                  },
+                                  selectedColor: AppColors.accentBright,
+                                  backgroundColor: const Color(0xFF1E2433),
+                                  side: BorderSide(
+                                    color: isSelected
+                                        ? AppColors.accentBright
+                                        : Colors.white.withValues(alpha: 0.1),
+                                  ),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                                 ),
                               );
-                            },
-                          );
-                        },
-                      );
-                    },
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: displayedSources.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, idx) {
+                            final source = displayedSources[idx];
+                            return StreamMetadataTile(
+                              name: source.name,
+                              url: source.url,
+                              headers: source.headers,
+                              isSelected: false,
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                _playWithResolution(
+                                  source.url,
+                                  resumeDirectly: resumeDirectly,
+                                  sourceName: source.name,
+                                  headers: source.headers,
+                                );
+                              },
+                              onLongPress: () {
+                                Clipboard.setData(ClipboardData(text: source.url));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Copied Link: ${source.url}'),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -4479,43 +4804,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           ),
                           ...entry.value.map((source) => Padding(
                             padding: const EdgeInsets.only(bottom: 6),
-                            child: ListTile(
-                              leading: Icon(
-                                Icons.play_circle_outline_rounded,
-                                color: AppColors.accentBright,
-                              ),
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      source.name.replaceAll(RegExp(r'[-_.]?[tT][gG]\b'), '').replaceAll(RegExp(r'\[[tT][gG]\]'), '').replaceAll(RegExp(r'\b[tT][gG]\b'), '').replaceAll(RegExp(r'\s+'), ' ').trim(),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    source.url,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white30,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              tileColor: Colors.white.withValues(alpha: 0.03),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
+                            child: StreamMetadataTile(
+                              name: source.name,
+                              url: source.url,
+                              headers: source.headers,
+                              explicitQuality: source.qualityBadgeText ?? source.quality,
+                              explicitSize: source.size,
+                              explicitLanguages: source.languages,
                               onTap: () {
                                 Navigator.of(context).pop();
                                 _playWithResolution(
@@ -4626,7 +4921,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 ...streams.map((s) => Padding(
                                   padding: EdgeInsets.only(left: siteEntries.length > 1 ? 8 : 0),
                                   child: StreamMetadataTile(
-                                    name: s.name, url: s.url, headers: s.headers,
+                                    name: s.name,
+                                    url: s.url,
+                                    headers: s.headers,
+                                    explicitQuality: s.qualityBadgeText ?? s.quality,
+                                    explicitSize: s.size,
+                                    explicitLanguages: s.languages,
                                     onTap: () {
                                       Navigator.of(ctx).pop();
                                       _playWithResolution(s.url, resumeDirectly: resumeDirectly, sourceName: s.name, headers: s.headers);
@@ -4666,6 +4966,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           name: s.name,
           url: s.url,
           headers: s.headers,
+          explicitQuality: s.qualityBadgeText ?? s.quality,
+          explicitSize: s.size,
+          explicitLanguages: s.languages,
           onTap: () {
             Navigator.of(context).pop();
             _playWithResolution(s.url, resumeDirectly: resumeDirectly, sourceName: s.name, headers: s.headers);
@@ -4834,6 +5137,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _handlePlayPressed({bool resumeDirectly = false}) async {
+    if (_showTelegram && !_hasSearchedTelegramGroup) {
+      _ensureTelegramGroupSearched();
+    }
+
     final picked = _pickedPath;
     if (picked != null) {
       _playWithResolution(picked, resumeDirectly: resumeDirectly);
@@ -4902,6 +5209,54 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _downloadTelegramStream(StreamSource source) async {
+    if (TelegramBotResolver.instance.canHandle(source.url)) {
+      final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
+      bool dialogOpen = true;
+
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => TelegramAutoJoinDialog(
+          initialStatus: 'Connecting to Telegram Bot...',
+          statusNotifier: statusNotifier,
+          onCancel: () {
+            dialogOpen = false;
+            Navigator.of(ctx).pop();
+          },
+        ),
+      );
+
+      try {
+        final videoItem = await TelegramBotResolver.instance.resolveLink(
+          source.url,
+          onStatus: (st) => statusNotifier.value = st,
+        );
+        if (!dialogOpen) return;
+        if (videoItem == null) throw Exception('No video file returned by bot.');
+
+        statusNotifier.value = 'Preparing download stream...';
+        final resolved = await TelegramService.instance.resolveStream(videoItem);
+
+        if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+          Navigator.of(context, rootNavigator: true).pop();
+          dialogOpen = false;
+        }
+
+        await _promptAndStartDownload(resolved);
+      } catch (e) {
+        if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+          Navigator.of(context, rootNavigator: true).pop();
+          dialogOpen = false;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Telegram download error: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+      return;
+    }
+
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -5120,22 +5475,52 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Telegram Server
-            if ((_resolvingTelegram || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+            if ((_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty || enabledKeys.contains('telegram')) && enabledKeys.contains('telegram')) {
+              final isSearching = _resolvingTelegram || _isSearchingTelegramGroup;
               downloadSourceWidgets['telegram'] = _buildSourceTile(
                 icon: Icons.send_rounded,
                 title: '${pos('telegram')}. Telegram Server',
-                subtitle: _resolvingTelegram
+                subtitle: isSearching
                     ? 'Searching Telegram...'
                     : (_liveTelegramSources.isEmpty
-                        ? 'No files found'
+                        ? 'No files found (Tap to search)'
                         : '${_liveTelegramSources.length} files in Telegram Server'),
-                disabled: _resolvingTelegram || _liveTelegramSources.isEmpty,
+                disabled: false,
                 onTap: () {
+                  if (!_hasSearchedTelegramGroup && !isSearching) {
+                    _ensureTelegramGroupSearched();
+                  }
                   Navigator.of(context).pop();
                   if (_liveTelegramSources.length == 1) {
                     _downloadTelegramStream(_liveTelegramSources.first);
                   } else {
                     _showDownloadSubSelector('TELEGRAM DOWNLOADS', _liveTelegramSources, isTelegram: true);
+                  }
+                },
+              );
+            }
+
+            // Telegram Premium
+            if (_showTelegramPremium && (_resolvingTelegramPremium || _liveTelegramPremiumSources.isNotEmpty) && enabledKeys.contains('telegram_premium')) {
+              downloadSourceWidgets['telegram_premium'] = _buildSourceTile(
+                icon: Icons.star_rounded,
+                title: '${pos('telegram_premium')}. Telegram Premium',
+                subtitle: _resolvingTelegramPremium
+                    ? 'Searching Telegram Premium...'
+                    : (_liveTelegramPremiumSources.isEmpty
+                        ? 'No files found'
+                        : '${_liveTelegramPremiumSources.length} files available'),
+                disabled: _resolvingTelegramPremium || _liveTelegramPremiumSources.isEmpty,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveTelegramPremiumSources.length == 1) {
+                    _downloadSourceUrl(
+                      _liveTelegramPremiumSources.first.url,
+                      sourceName: _liveTelegramPremiumSources.first.name,
+                      headers: _liveTelegramPremiumSources.first.headers,
+                    );
+                  } else {
+                    _showDownloadSubSelector('TELEGRAM PREMIUM DOWNLOADS', _liveTelegramPremiumSources);
                   }
                 },
               );
@@ -5495,32 +5880,134 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+        String selectedFilter = 'ALL';
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final isTelegram = title.toUpperCase().contains('TELEGRAM');
+
+            String getQualityBucket(StreamSource s) {
+              final q = (s.quality ?? '').toUpperCase();
+              final n = s.name.toUpperCase();
+              if (q.contains('4K') || q.contains('2160') || n.contains('4K') || n.contains('2160P')) return '4K';
+              if (q.contains('1080') || n.contains('1080P')) return '1080p';
+              if (q.contains('720') || n.contains('720P')) return '720p';
+              if (q.contains('480') || n.contains('480P') || q.contains('SD')) return '480p';
+              return 'Other';
+            }
+
+            final Map<String, int> counts = {};
+            for (final s in sources) {
+              final b = getQualityBucket(s);
+              counts[b] = (counts[b] ?? 0) + 1;
+            }
+
+            final List<String> filterOptions = [];
+            if (!isTelegram) {
+              filterOptions.add('ALL');
+              counts['ALL'] = sources.length;
+            }
+            for (final b in ['4K', '1080p', '720p', '480p', 'Other']) {
+              if (counts.containsKey(b) && counts[b]! > 0) {
+                filterOptions.add(b);
+              }
+            }
+
+            if (isTelegram && (selectedFilter == 'ALL' || !filterOptions.contains(selectedFilter))) {
+              selectedFilter = filterOptions.isNotEmpty ? filterOptions.first : 'Other';
+            }
+
+            final activeSources = (isTelegram || selectedFilter != 'ALL')
+                ? sources.where((s) => getQualityBucket(s) == selectedFilter).toList()
+                : sources;
+
+            return SafeArea(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.85,
                 ),
-                const SizedBox(height: 16),
-                Flexible(
-                  child: Builder(
-                    builder: (context) {
-                      final Map<String, List<StreamSource>> langGrouped = {};
-                      for (final s in sources) {
-                        final meta = parseStreamMeta(s.name, s.url);
-                        final lang = meta.languages.isNotEmpty ? meta.languages.first : 'Other';
-                        langGrouped.putIfAbsent(lang, () => []).add(s);
-                      }
-                      final bool hasMultipleLangs = langGrouped.length > 1;
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            title,
+                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentBright.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${activeSources.length} ${activeSources.length == 1 ? 'file' : 'files'}',
+                              style: TextStyle(
+                                color: AppColors.accentBright,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (isTelegram && filterOptions.length > 1) ...[
+                        const SizedBox(height: 12),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: filterOptions.map((f) {
+                              final isSelected = selectedFilter == f;
+                              final count = counts[f] ?? 0;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(
+                                    f == 'ALL' ? 'All ($count)' : '$f ($count)',
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.white : Colors.white70,
+                                      fontSize: 12,
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    ),
+                                  ),
+                                  selected: isSelected,
+                                  onSelected: (val) {
+                                    if (val) setModalState(() => selectedFilter = f);
+                                  },
+                                  selectedColor: AppColors.accentBright,
+                                  backgroundColor: const Color(0xFF1E2433),
+                                  side: BorderSide(
+                                    color: isSelected
+                                        ? AppColors.accentBright
+                                        : Colors.white.withValues(alpha: 0.1),
+                                  ),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Flexible(
+                        child: Builder(
+                          builder: (context) {
+                            final Map<String, List<StreamSource>> langGrouped = {};
+                            for (final s in activeSources) {
+                              final meta = parseStreamMeta(s.name, s.url);
+                              final lang = meta.languages.isNotEmpty ? meta.languages.first : 'Other';
+                              langGrouped.putIfAbsent(lang, () => []).add(s);
+                            }
+                            final bool hasMultipleLangs = langGrouped.length > 1;
 
                       return ListView(
                         shrinkWrap: true,
@@ -5593,15 +6080,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     },
                   ),
                 ),
-              ],
-            ),
-          ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
   }
 
   Future<void> _startDownload() async {
+    if (_showTelegram && !_hasSearchedTelegramGroup) {
+      _ensureTelegramGroupSearched();
+    }
     _showDownloadSourceSelector();
   }
 
@@ -6548,17 +7041,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                     backgroundImage:
                                         _showCastPhotos &&
                                         _directorProfileUrl != null &&
-                                            _directorProfileUrl!.isNotEmpty
+                                        _directorProfileUrl!.isNotEmpty
                                         ? NetworkImage(_directorProfileUrl!)
                                         : null,
                                     child:
                                         !_showCastPhotos ||
                                         _directorProfileUrl == null ||
-                                            _directorProfileUrl!.isEmpty
+                                        _directorProfileUrl!.isEmpty
                                         ? const Icon(
                                             Icons.person_rounded,
                                             color: Colors.white30,
-                                            size: 24,
                                           )
                                         : null,
                                   ),

@@ -575,6 +575,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                             widget.videoSource.contains('localhost') || 
                             widget.videoSource.contains('/f/');
 
+      final _lowerUrl = widget.videoSource.toLowerCase();
+      final isTelegramStream = _lowerUrl.contains(':8088') ||
+                               _lowerUrl.contains('68.233.107.119') ||
+                               _lowerUrl.contains('/api/download/') ||
+                               _lowerUrl.contains('/api/stream/') ||
+                               (widget.sourceName?.toLowerCase().contains('telegram') ?? false) ||
+                               (widget.subtitle?.toLowerCase().contains('telegram') ?? false);
+
       if (!isLocalStream) {
         if (widget.headers != null) {
           playHeaders.addAll(widget.headers!);
@@ -680,19 +688,50 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           await nativePlayer.setProperty('demuxer-lavf-probesize', '65536');
           await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1');
         } else if (!isLocalStream) {
-          await nativePlayer.setProperty('network-timeout', '30');
-          await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('cache-on-disk', 'no');
-          await nativePlayer.setProperty('demuxer-max-bytes', '134217728'); // 128 MB RAM buffer
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '33554432'); // 32 MB back buffer
-          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // Buffer up to 30 seconds ahead
-          await nativePlayer.setProperty('cache-secs', '30');
-          await nativePlayer.setProperty('cache-pause', 'yes');
-          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer at least 2s before resuming to prevent frame stutter
-          await nativePlayer.setProperty('cache-pause-initial', 'yes');
-          await nativePlayer.setProperty('demuxer-lavf-buffersize', '1048576');
-          await nativePlayer.setProperty('stream-buffer-size', '2097152');
-          await nativePlayer.setProperty('stream-live', 'no');
+          if (isTelegramStream) {
+            // =========================================================================
+            // DEDICATED TELEGRAM PREMIUM FAST-SEEK & NO-STALL CONFIGURATION
+            // =========================================================================
+            await nativePlayer.setProperty('network-timeout', '10');
+            await nativePlayer.setProperty('cache', 'yes');
+            await nativePlayer.setProperty('cache-on-disk', 'no');
+            await nativePlayer.setProperty('demuxer-max-bytes', '67108864'); // 64 MB forward buffer
+            await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608'); // 8 MB back buffer
+            await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // 30s readahead so normal playback never runs dry
+            await nativePlayer.setProperty('cache-secs', '30');
+            await nativePlayer.setProperty('cache-pause', 'no');
+            await nativePlayer.setProperty('cache-pause-wait', '0');
+            await nativePlayer.setProperty('cache-pause-initial', 'no');
+            await nativePlayer.setProperty('stream-live', 'no');
+            await nativePlayer.setProperty('hr-seek', 'no'); // Keyframe seek
+            await nativePlayer.setProperty('hr-seek-framedrop', 'yes');
+            // Setting demuxer-seekable-cache to 'no' forces MPV to immediately seek through
+            // the HTTP stream layer on long seeks (>1 min) without stalling in the cache.
+            await nativePlayer.setProperty('demuxer-seekable-cache', 'no');
+            await nativePlayer.setProperty('demuxer-lavf-probesize', '1048576'); // 1 MB probe to read MKV headers in a single HTTP request
+            await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1.5');
+            // PHP MadelineProto server closes connection after byte ranges.
+            // http_persistent=0 prevents 30-second socket timeout hangs during seeks!
+            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0,reconnect=0');
+          } else {
+            // =========================================================================
+            // ORIGINAL CONFIGURATION FOR ALL OTHER SOURCES
+            // =========================================================================
+            await nativePlayer.setProperty('network-timeout', '30');
+            await nativePlayer.setProperty('cache', 'yes');
+            await nativePlayer.setProperty('cache-on-disk', 'no');
+            await nativePlayer.setProperty('demuxer-max-bytes', '134217728'); // 128 MB RAM buffer
+            await nativePlayer.setProperty('demuxer-max-back-bytes', '33554432'); // 32 MB back buffer
+            await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // Buffer up to 30 seconds ahead
+            await nativePlayer.setProperty('cache-secs', '30');
+            await nativePlayer.setProperty('cache-pause', 'yes');
+            await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer at least 2s before resuming to prevent frame stutter
+            await nativePlayer.setProperty('cache-pause-initial', 'yes');
+            await nativePlayer.setProperty('demuxer-lavf-buffersize', '1048576');
+            await nativePlayer.setProperty('stream-buffer-size', '2097152');
+            await nativePlayer.setProperty('stream-live', 'no');
+            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+          }
         }
         
         await nativePlayer.setProperty('force-seekable', 'yes');
@@ -703,8 +742,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         // For live streams, use persistent HTTP connections and resilient reconnect options
         if (widget.isLive) {
           await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_http_error=4xx,5xx,reconnect_on_network_error=1');
-        } else {
-          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
         }
       }
 

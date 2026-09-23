@@ -7,6 +7,7 @@ import '../../providers/settings_provider.dart';
 import '../../widgets/common/glass_card.dart';
 import '../../../data/modular_source_service.dart';
 import '../../../data/simkl_service.dart';
+import '../../../data/telegram_premium_resolver.dart';
 
 class AppSettingsScreen extends ConsumerStatefulWidget {
   const AppSettingsScreen({super.key});
@@ -38,6 +39,19 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   bool _telegramEnabled = true;
   final _tgApiIdCtrl = TextEditingController();
   final _tgApiHashCtrl = TextEditingController();
+
+  // Telegram Premium / PencariMovie Server
+  bool _telegramPremiumEnabled = true;
+  String _tgPremServerMode = 'koyeb'; // 'koyeb' or 'local'
+  bool _tgPremAutoDetect = true;
+  final _tgPremKoyebUrlCtrl = TextEditingController();
+  final _tgPremKoyebTokenCtrl = TextEditingController();
+  final _tgPremLocalUrlCtrl = TextEditingController();
+  final _tgPremLocalTokenCtrl = TextEditingController();
+  bool _isTestingTgPrem = false;
+  String? _tgPremTestResult;
+  bool? _tgPremTestSuccess;
+
 
   final _blockedGroupsCtrl = TextEditingController();
 
@@ -72,6 +86,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _nuveoInputCtrl.dispose();
     _tgApiIdCtrl.dispose();
     _tgApiHashCtrl.dispose();
+    _tgPremKoyebUrlCtrl.dispose();
+    _tgPremKoyebTokenCtrl.dispose();
+    _tgPremLocalUrlCtrl.dispose();
+    _tgPremLocalTokenCtrl.dispose();
+
     _blockedGroupsCtrl.dispose();
     _torrentioUrlCtrl.dispose();
     _stravoUrlCtrl.dispose();
@@ -142,6 +161,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'torrent',
         'stremioAddon',
         'telegram',
+        'telegram_premium',
         'filmu',
         'vegamovies',
         'cinejoy',
@@ -280,6 +300,31 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _tgApiIdCtrl.text = settingsMap['telegram_api_id'] ?? '';
       _tgApiHashCtrl.text = settingsMap['telegram_api_hash'] ?? '';
 
+      // 9b. Parse Telegram Premium (PencariMovie Server)
+      _telegramPremiumEnabled = settingsMap.containsKey('source_show_telegram_premium')
+          ? (settingsMap['source_show_telegram_premium'] == 'true')
+          : (await TelegramPremiumResolver.isEnabled());
+      _tgPremServerMode = settingsMap['tg_prem_server_mode'] ?? 'koyeb';
+      _tgPremAutoDetect = settingsMap.containsKey('tg_prem_auto_detect')
+          ? (settingsMap['tg_prem_auto_detect'] == 'true')
+          : true;
+      final savedCloudUrl = settingsMap['tg_prem_koyeb_url'];
+      if (savedCloudUrl == null || savedCloudUrl.contains('koyeb.app')) {
+        _tgPremKoyebUrlCtrl.text = TelegramPremiumResolver.defaultCloudUrl;
+        _tgPremKoyebTokenCtrl.text = '';
+      } else {
+        _tgPremKoyebUrlCtrl.text = TelegramPremiumResolver.cleanServerUrl(savedCloudUrl);
+        final savedCloudToken = settingsMap['tg_prem_koyeb_token'];
+        if (savedCloudToken == '1ddeccdcf49e759d703aec350478b07e' || savedCloudToken == '1be8ba347bc587835231c9f4a922b58c') {
+          _tgPremKoyebTokenCtrl.text = '';
+        } else {
+          _tgPremKoyebTokenCtrl.text = savedCloudToken ?? '';
+        }
+      }
+      _tgPremLocalUrlCtrl.text = settingsMap['tg_prem_local_url'] ?? TelegramPremiumResolver.defaultLocalUrl;
+      _tgPremLocalTokenCtrl.text = settingsMap['tg_prem_local_token'] ?? '';
+
+
       // 10. Parse Provider Addons, EPG & External API Keys
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
       _stravoUrlCtrl.text = settingsMap['stravo_addon_url'] ?? '';
@@ -333,6 +378,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       case 'torrent': return 'Torrent Server';
       case 'stremioAddon': return 'Stremio Addons';
       case 'telegram': return 'Telegram Server';
+      case 'telegram_premium': return 'Telegram Premium (PencariMovie Server)';
       case 'filmu': return 'FilmU Premium Server';
       case 'moviebox': return 'MovieBox Server';
       case 'vegamovies': return 'Vegamovies.se Server';
@@ -454,6 +500,14 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'source_show_telegram': _telegramEnabled ? 'true' : 'false',
         'telegram_api_id': _tgApiIdCtrl.text.trim(),
         'telegram_api_hash': _tgApiHashCtrl.text.trim(),
+        'source_show_telegram_premium': _telegramPremiumEnabled ? 'true' : 'false',
+        'tg_prem_server_mode': _tgPremServerMode,
+        'tg_prem_auto_detect': _tgPremAutoDetect ? 'true' : 'false',
+        'tg_prem_koyeb_url': _tgPremKoyebUrlCtrl.text.trim(),
+        'tg_prem_koyeb_token': _tgPremKoyebTokenCtrl.text.trim(),
+        'tg_prem_local_url': _tgPremLocalUrlCtrl.text.trim(),
+        'tg_prem_local_token': _tgPremLocalTokenCtrl.text.trim(),
+
         'torrentio_addon_url': _torrentioUrlCtrl.text.trim(),
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
@@ -483,6 +537,15 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       }
       
       await ref.read(settingsProvider.notifier).bulkSaveSettings(newSettings);
+
+      await TelegramPremiumResolver.setEnabled(_telegramPremiumEnabled);
+      await TelegramPremiumResolver.setServerMode(_tgPremServerMode);
+      await TelegramPremiumResolver.setAutoDetect(_tgPremAutoDetect);
+      await TelegramPremiumResolver.setKoyebUrl(_tgPremKoyebUrlCtrl.text.trim());
+      await TelegramPremiumResolver.setKoyebToken(_tgPremKoyebTokenCtrl.text.trim());
+      await TelegramPremiumResolver.setLocalUrl(_tgPremLocalUrlCtrl.text.trim());
+      await TelegramPremiumResolver.setLocalToken(_tgPremLocalTokenCtrl.text.trim());
+
       
       if (mounted) {
         setState(() => _isSaving = false);
@@ -536,6 +599,8 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                       _buildNuveoAddonsSection(),
                       const SizedBox(height: 16),
                       _buildTelegramSection(),
+                      const SizedBox(height: 16),
+                      _buildTelegramPremiumSection(),
                       const SizedBox(height: 16),
                       _buildBlockedGroupsSection(),
                       const SizedBox(height: 32),
@@ -1369,6 +1434,430 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                   ),
                 ],
               ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+Widget _buildTelegramPremiumSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle(
+          'Telegram Premium (PencariMovie Server)',
+          subtitle: 'High-speed direct Telegram streaming with instant seeking via Koyeb or Local Server',
+        ),
+        GlassCard(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header & Enable Switch
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.star_rounded,
+                      color: Color(0xFFF59E0B),
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Telegram Premium Streams',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Enable direct video streams from PencariMovie catalog (4K, 1080p, 720p)',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.45),
+                            fontSize: 11,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _telegramPremiumEnabled,
+                    onChanged: (val) => setState(() => _telegramPremiumEnabled = val),
+                    activeThumbColor: const Color(0xFFF59E0B),
+                    activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                    inactiveThumbColor: Colors.white60,
+                    inactiveTrackColor: Colors.white10,
+                  ),
+                ],
+              ),
+
+              if (_telegramPremiumEnabled) ...[
+                const SizedBox(height: 14),
+                Container(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.07),
+                ),
+                const SizedBox(height: 16),
+
+                // Server Mode Selection
+                const Text(
+                  'ACTIVE STREAMING SERVER',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() => _tgPremServerMode = 'koyeb'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: _tgPremServerMode == 'koyeb'
+                                ? const Color(0xFF3B82F6).withValues(alpha: 0.2)
+                                : const Color(0xFF0B0F19),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _tgPremServerMode == 'koyeb'
+                                  ? const Color(0xFF3B82F6)
+                                  : Colors.white.withValues(alpha: 0.08),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.cloud_done_rounded,
+                                    size: 16,
+                                    color: _tgPremServerMode == 'koyeb' ? const Color(0xFF60A5FA) : Colors.white60,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Cloud (Oracle VPS)',
+                                    style: TextStyle(
+                                      color: _tgPremServerMode == 'koyeb' ? Colors.white : Colors.white70,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Recommended • Works anywhere on 4G/5G',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.4),
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => setState(() => _tgPremServerMode = 'local'),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: _tgPremServerMode == 'local'
+                                ? const Color(0xFF10B981).withValues(alpha: 0.2)
+                                : const Color(0xFF0B0F19),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _tgPremServerMode == 'local'
+                                  ? const Color(0xFF10B981)
+                                  : Colors.white.withValues(alpha: 0.08),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.computer_rounded,
+                                    size: 16,
+                                    color: _tgPremServerMode == 'local' ? const Color(0xFF34D399) : Colors.white60,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Local / Tunnel',
+                                    style: TextStyle(
+                                      color: _tgPremServerMode == 'local' ? Colors.white : Colors.white70,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'PC/LAN • 0 MB Koyeb quota used',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.4),
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // Auto-Detect Toggle
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0B0F19),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.wifi_rounded, color: Color(0xFF38BDF8), size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Smart Auto-Detect on Home Wi-Fi',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Automatically streams via Local PC server when on home Wi-Fi to save Koyeb data quota.',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 10.5,
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Switch(
+                        value: _tgPremAutoDetect,
+                        onChanged: (val) => setState(() => _tgPremAutoDetect = val),
+                        activeThumbColor: const Color(0xFF38BDF8),
+                        activeTrackColor: const Color(0xFF38BDF8).withValues(alpha: 0.4),
+                        inactiveThumbColor: Colors.white60,
+                        inactiveTrackColor: Colors.white10,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // Oracle Cloud VPS Settings Header
+                Row(
+                  children: [
+                    const Icon(Icons.cloud_outlined, size: 14, color: Color(0xFF60A5FA)),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'ORACLE CLOUD VPS SERVER',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _tgPremKoyebUrlCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontFamily: 'Consolas'),
+                  decoration: InputDecoration(
+                    labelText: 'Oracle VPS Base URL',
+                    labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+                    hintText: 'http://68.233.107.119:8088',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                    filled: true,
+                    fillColor: const Color(0xFF0B0F19),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _tgPremKoyebTokenCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontFamily: 'Consolas'),
+                  decoration: InputDecoration(
+                    labelText: 'Oracle VPS Access Token',
+                    labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+                    hintText: 'Access token (if configured)',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                    filled: true,
+                    fillColor: const Color(0xFF0B0F19),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Local Server Settings Header
+                Row(
+                  children: [
+                    const Icon(Icons.dns_outlined, size: 14, color: Color(0xFF34D399)),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'LOCAL / TUNNEL SERVER',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _tgPremLocalUrlCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontFamily: 'Consolas'),
+                  decoration: InputDecoration(
+                    labelText: 'Local Base URL',
+                    labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+                    hintText: 'http://192.168.1.8:8088 or http://127.0.0.1:8088',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                    filled: true,
+                    fillColor: const Color(0xFF0B0F19),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _tgPremLocalTokenCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontFamily: 'Consolas'),
+                  decoration: InputDecoration(
+                    labelText: 'Local Access Token (Optional)',
+                    labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
+                    hintText: 'Leave blank if local requests bypass token',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                    filled: true,
+                    fillColor: const Color(0xFF0B0F19),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // Test Connection Button & Result
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _isTestingTgPrem
+                          ? null
+                          : () async {
+                              setState(() {
+                                _isTestingTgPrem = true;
+                                _tgPremTestResult = null;
+                                _tgPremTestSuccess = null;
+                              });
+
+                              final url = _tgPremServerMode == 'koyeb'
+                                  ? _tgPremKoyebUrlCtrl.text.trim()
+                                  : _tgPremLocalUrlCtrl.text.trim();
+                              final token = _tgPremServerMode == 'koyeb'
+                                  ? _tgPremKoyebTokenCtrl.text.trim()
+                                  : _tgPremLocalTokenCtrl.text.trim();
+
+                              final res = await TelegramPremiumResolver.testServer(url: url, token: token);
+
+                              if (mounted) {
+                                setState(() {
+                                  _isTestingTgPrem = false;
+                                  _tgPremTestSuccess = res['success'] == true;
+                                  if (res['success'] == true) {
+                                    _tgPremTestResult = 'Connected: ${res['name']} v${res['version']} (${res['latencyMs']} ms)';
+                                  } else {
+                                    _tgPremTestResult = 'Error: ${res['error']}';
+                                  }
+                                });
+                              }
+                            },
+                      icon: _isTestingTgPrem
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.speed_rounded, size: 16),
+                      label: Text(_isTestingTgPrem ? 'Testing...' : 'Test Connection'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFF59E0B),
+                        side: BorderSide(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    if (_tgPremTestResult != null)
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: (_tgPremTestSuccess == true ? const Color(0xFF10B981) : const Color(0xFFEF4444))
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: (_tgPremTestSuccess == true ? const Color(0xFF10B981) : const Color(0xFFEF4444))
+                                  .withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: Text(
+                            _tgPremTestResult!,
+                            style: TextStyle(
+                              color: _tgPremTestSuccess == true ? const Color(0xFF34D399) : const Color(0xFFF87171),
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

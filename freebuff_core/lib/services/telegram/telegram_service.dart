@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mtflute/mtflute.dart';
 
 import 'telegram_index_db.dart';
@@ -44,6 +46,10 @@ class TelegramService {
 
   MtpClient? _client;
   TelegramFileStreamServer? _streamServer;
+  
+  MtpClient? get client => _client;
+  TelegramFileStreamServer? get streamServer => _streamServer;
+  Future<void> ensureStreamServerStarted() => _ensureStreamServerStarted();
   
   String? _phoneNumber;
   String? _phoneCodeHash;
@@ -604,12 +610,20 @@ class TelegramService {
       if (chatIdStr.startsWith('-100')) {
         final channelId = int.tryParse(chatIdStr.substring(4)) ?? 0;
         if (channelId > 0) {
-          peer = InputPeerChannel(channelId: channelId, accessHash: 0);
+          int accessHash = 0;
+          try {
+            accessHash = _client?.cache.getChannelAccessHash(channelId) ?? 0;
+          } catch (_) {}
+          peer = InputPeerChannel(channelId: channelId, accessHash: accessHash);
         }
       } else if (item.chatId < 0) {
         peer = InputPeerChat(chatId: -item.chatId);
       } else if (item.chatId > 0) {
-        peer = InputPeerUser(userId: item.chatId, accessHash: 0);
+        int accessHash = 0;
+        try {
+          accessHash = _client?.cache.getUserAccessHash(item.chatId) ?? 0;
+        } catch (_) {}
+        peer = InputPeerUser(userId: item.chatId, accessHash: accessHash);
       }
     }
 
@@ -752,6 +766,427 @@ class TelegramService {
 
     return score;
   }
+
+  // --- Movie Group Search & Discovery ---
+
+  static const String keyMovieGroupId = 'tg_movie_group_id';
+  static const String keyMovieGroupTitle = 'tg_movie_group_title';
+  static const String keyMovieGroupAccessHash = 'tg_movie_group_access_hash';
+
+  Future<int?> getConfiguredMovieGroupId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final str = prefs.getString(keyMovieGroupId);
+    if (str == null || str.isEmpty) return null;
+    return int.tryParse(str);
+  }
+
+  Future<String?> getConfiguredMovieGroupTitle() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(keyMovieGroupTitle);
+  }
+
+  Future<void> setConfiguredMovieGroup({
+    required int id,
+    required String title,
+    int accessHash = 0,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(keyMovieGroupId, id.toString());
+    await prefs.setString(keyMovieGroupTitle, title);
+    await prefs.setInt(keyMovieGroupAccessHash, accessHash);
+  }
+
+  Future<void> clearConfiguredMovieGroup() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(keyMovieGroupId);
+    await prefs.remove(keyMovieGroupTitle);
+    await prefs.remove(keyMovieGroupAccessHash);
+  }
+
+  /// Retrieves all joined supergroups and channels for the Group Picker dialog.
+  Future<List<Map<String, dynamic>>> getJoinedGroups() async {
+    await init();
+    if (_client == null || status.value != TelegramStatus.ready) return [];
+    try {
+      final res = await _client!.getDialogs(limit: 100);
+      final List<Chat> chats = [];
+      if (res is MessagesDialogsObj) {
+        chats.addAll(res.chats);
+      } else if (res is MessagesDialogsSlice) {
+        chats.addAll(res.chats);
+      }
+      final List<Map<String, dynamic>> results = [];
+      for (final c in chats) {
+        if (c is Channel) {
+          results.add({
+            'id': c.id,
+            'accessHash': c.accessHash ?? 0,
+            'title': c.title,
+            'username': c.username,
+            'isGroup': c.megagroup,
+            'isChannel': c.broadcast,
+          });
+        } else if (c is ChatObj) {
+          results.add({
+            'id': c.id,
+            'accessHash': 0,
+            'title': c.title,
+            'username': null,
+            'isGroup': true,
+            'isChannel': false,
+          });
+        }
+      }
+      return results;
+    } catch (e) {
+      debugPrint('[TelegramService] getJoinedGroups error: $e');
+      return [];
+    }
+  }
+
+  /// Searches a movie query inside the user's configured movie group.
+  Future<List<TelegramGroupSearchResult>> searchMovieInConfiguredGroup(String query) async {
+    final groupId = await getConfiguredMovieGroupId();
+    if (groupId == null) return [];
+    final prefs = await SharedPreferences.getInstance();
+    final accessHash = prefs.getInt(keyMovieGroupAccessHash) ?? 0;
+    return searchMovieInGroup(groupId: groupId, accessHash: accessHash, query: query);
+  }
+
+  /// Searches a movie query inside any specified group/channel by ID.
+  Future<List<TelegramGroupSearchResult>> searchMovieInGroup({
+    required int groupId,
+    int accessHash = 0,
+    required String query,
+  }) async {
+    await init();
+    if (_client == null || status.value != TelegramStatus.ready) return [];
+
+    try {
+      int hash = accessHash;
+      if (hash == 0) {
+        try {
+          hash = _client!.cache.getChannelAccessHash(groupId);
+        } catch (_) {}
+      }
+      final peer = InputPeerChannel(channelId: groupId, accessHash: hash);
+
+      final List<TelegramGroupSearchResult> results = [];
+      final Set<String> seenUrls = {};
+      KeyboardButtonCallback? nextPageCallback;
+      int? nextPageMsgId;
+
+      void extractFromMessages(List<dynamic> msgs) {
+        for (final m in msgs) {
+          if (m is! MessageObj) continue;
+          debugPrint('[TelegramService] Inspecting bot reply msg id=${m.id}, text="${m.message.replaceAll('\n', ' ')}", markup=${m.replyMarkup?.runtimeType}');
+
+          // Check inline keyboard buttons
+          if (m.replyMarkup is ReplyInlineMarkup) {
+            final markup = m.replyMarkup as ReplyInlineMarkup;
+            for (final row in markup.rows) {
+              if (row is! KeyboardButtonRowObj) continue;
+              for (final btn in row.buttons) {
+                String btnText = '';
+                try {
+                  btnText = (btn as dynamic).text?.toString().trim() ?? '';
+                } catch (_) {}
+                final lowerText = btnText.toLowerCase();
+
+                // Detect pagination next-page button
+                final isPaginationNext = lowerText.contains('next page') ||
+                    lowerText.contains('next ▶') ||
+                    lowerText.contains('next ⏩') ||
+                    lowerText.contains('nextpage') ||
+                    lowerText.contains('⏩') ||
+                    (lowerText.contains('next') && !lowerText.contains('season') && !lowerText.contains('episode'));
+
+                // Skip non-stream utility buttons and pagination controls
+                final isUtilityOrNav = lowerText == 'close' ||
+                    lowerText == 'delete' ||
+                    lowerText.contains('how to') ||
+                    lowerText.contains('tutorial') ||
+                    lowerText.contains('help') ||
+                    lowerText.contains('rules') ||
+                    lowerText.contains('support') ||
+                    lowerText.contains('previous page') ||
+                    lowerText.contains('prev page') ||
+                    lowerText.contains('back') ||
+                    lowerText.contains('page ') ||
+                    lowerText.contains('pages') ||
+                    RegExp(r'^\s*[\d]+\s*/\s*[\d]+\s*$').hasMatch(lowerText) ||
+                    RegExp(r'^[⏪◀️▶️⏩\s\d/]+$').hasMatch(lowerText) ||
+                    isPaginationNext;
+
+                if (isPaginationNext && btn is KeyboardButtonCallback) {
+                  nextPageCallback = btn;
+                  nextPageMsgId = m.id;
+                }
+
+                if (isUtilityOrNav) {
+                  continue;
+                }
+
+                String? qualityOrSize;
+                final sizeMatch = RegExp(r'(\d+(?:\.\d+)?\s*(?:GB|MB|KB))', caseSensitive: false).firstMatch(btnText);
+                final qMatch = RegExp(r'\b(4K|1080p|720p|480p|HD|HQ|HDRip)\b', caseSensitive: false).firstMatch(btnText);
+                if (sizeMatch != null && qMatch != null) {
+                  qualityOrSize = '${qMatch.group(1)} • ${sizeMatch.group(1)}';
+                } else if (sizeMatch != null) {
+                  qualityOrSize = sizeMatch.group(1);
+                } else if (qMatch != null) {
+                  qualityOrSize = qMatch.group(1);
+                }
+
+                // Handle URL buttons (t.me/... or bot deep links)
+                if (btn is KeyboardButtonUrl) {
+                  final btnUrl = btn.url;
+                  debugPrint('[TelegramService] Found KeyboardButtonUrl: "$btnText" -> $btnUrl');
+                  if (!seenUrls.contains(btnUrl)) {
+                    seenUrls.add(btnUrl);
+                    final match = RegExp(
+                      r'(?:t\.me|telegram\.me)/([a-zA-Z0-9_]+)\?start=([^\s&]+)',
+                      caseSensitive: false,
+                    ).firstMatch(btnUrl);
+
+                    final bot = match?.group(1) ?? '';
+                    final param = match?.group(2) ?? '';
+
+                    results.add(TelegramGroupSearchResult(
+                      title: btnText,
+                      botStartUrl: btnUrl,
+                      botUsername: bot,
+                      startParam: param,
+                      qualityOrSize: qualityOrSize,
+                    ));
+                  }
+                }
+                // Handle callback buttons (inline query / get file buttons)
+                else if (btn is KeyboardButtonCallback) {
+                  final callbackUrl = 'tg://callback?chatId=$groupId&msgId=${m.id}&data=${base64Url.encode(btn.data)}';
+                  debugPrint('[TelegramService] Found KeyboardButtonCallback: "$btnText" -> data len=${btn.data.length}');
+                  if (!seenUrls.contains(callbackUrl)) {
+                    seenUrls.add(callbackUrl);
+                    results.add(TelegramGroupSearchResult(
+                      title: btnText,
+                      botStartUrl: callbackUrl,
+                      botUsername: 'callback',
+                      startParam: base64Url.encode(btn.data),
+                      qualityOrSize: qualityOrSize,
+                    ));
+                  }
+                }
+              }
+            }
+          }
+
+          // Also check text links inside m.message
+          if (m.message.isNotEmpty) {
+            final textMatches = RegExp(
+              r'(?:https?://)?(?:t\.me|telegram\.me)/(?:c/\d+/\d+|[a-zA-Z0-9_]+/[0-9]+|[a-zA-Z0-9_]+\?start=[^\s&]+)',
+              caseSensitive: false,
+            ).allMatches(m.message);
+
+            for (final tm in textMatches) {
+              final rawUrl = tm.group(0)!;
+              final fullUrl = rawUrl.startsWith('http') ? rawUrl : 'https://$rawUrl';
+
+              if (!seenUrls.contains(fullUrl)) {
+                seenUrls.add(fullUrl);
+                String title = m.message.split('\n').first.trim();
+                for (final line in m.message.split('\n')) {
+                  if (line.contains(rawUrl) && line.trim().length > rawUrl.length) {
+                    title = line.replaceAll(rawUrl, '').replaceAll(RegExp(r'[:\-–—]'), '').trim();
+                    break;
+                  }
+                }
+                if (title.isEmpty) title = 'Stream via Telegram';
+
+                final startMatch = RegExp(r'(?:t\.me|telegram\.me)/([a-zA-Z0-9_]+)\?start=([^\s&]+)').firstMatch(fullUrl);
+
+                results.add(TelegramGroupSearchResult(
+                  title: title,
+                  botStartUrl: fullUrl,
+                  botUsername: startMatch?.group(1) ?? '',
+                  startParam: startMatch?.group(2) ?? '',
+                ));
+              }
+            }
+          }
+        }
+      }
+
+      // Send the movie query to the group to trigger the auto-filter bot
+      debugPrint('[TelegramService] Sending movie query "$query" to group $groupId...');
+      int? mySentMsgId;
+      try {
+        final sentRes = await _client!.sendMessage(peer: peer, text: query);
+        debugPrint('[TelegramService] Query sent, result type: ${sentRes.runtimeType}');
+
+        if (sentRes is UpdateShortSentMessage) {
+          mySentMsgId = sentRes.id;
+        } else if (sentRes is UpdateShortMessage) {
+          mySentMsgId = sentRes.id;
+        } else if (sentRes is UpdateShortChatMessage) {
+          mySentMsgId = sentRes.id;
+        } else if (sentRes is UpdatesObj) {
+          for (final u in sentRes.updates) {
+            if (u is UpdateNewChannelMessage && u.message is MessageObj) {
+              mySentMsgId = (u.message as MessageObj).id;
+            } else if (u is UpdateNewMessage && u.message is MessageObj) {
+              mySentMsgId = (u.message as MessageObj).id;
+            }
+          }
+        } else if (sentRes is UpdatesCombined) {
+          for (final u in sentRes.updates) {
+            if (u is UpdateNewChannelMessage && u.message is MessageObj) {
+              mySentMsgId = (u.message as MessageObj).id;
+            } else if (u is UpdateNewMessage && u.message is MessageObj) {
+              mySentMsgId = (u.message as MessageObj).id;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[TelegramService] Error sending query to group: $e');
+      }
+
+      // If mySentMsgId not directly in sent response, look it up in recent messages
+      if (mySentMsgId == null) {
+        try {
+          final recent = await _client!.getHistory(peer: peer, limit: 10);
+          List<dynamic> msgs = [];
+          if (recent is MessagesChannelMessages) msgs = recent.messages;
+          else if (recent is MessagesMessagesSlice) msgs = recent.messages;
+          else if (recent is MessagesMessagesObj) msgs = recent.messages;
+          else { try { msgs = (recent as dynamic).messages ?? []; } catch (_) {} }
+
+          for (final m in msgs) {
+            if (m is MessageObj && m.out == true && m.message.trim().toLowerCase() == query.trim().toLowerCase()) {
+              mySentMsgId = m.id;
+              debugPrint('[TelegramService] Found mySentMsgId from recent messages: $mySentMsgId');
+              break;
+            }
+          }
+        } catch (e) {
+          debugPrint('[TelegramService] Error retrieving sent message ID: $e');
+        }
+      }
+
+      debugPrint('[TelegramService] Waiting for bot replies quoting message $mySentMsgId (query: "$query")...');
+
+      // Poll history for the bot's response quoting our search message (up to 5 attempts)
+      for (int attempt = 1; attempt <= 5; attempt++) {
+        await Future.delayed(const Duration(milliseconds: 2000));
+        try {
+          final history = await _client!.getHistory(peer: peer, limit: 25);
+          List<dynamic> histMsgs = [];
+          if (history is MessagesChannelMessages) {
+            histMsgs = history.messages;
+          } else if (history is MessagesMessagesSlice) {
+            histMsgs = history.messages;
+          } else if (history is MessagesMessagesObj) {
+            histMsgs = history.messages;
+          } else {
+            try { histMsgs = (history as dynamic).messages ?? []; } catch (_) {}
+          }
+
+          // STRICT FILTER: Only accept messages that quoted or replied to OUR movie search message!
+          final List<MessageObj> myBotReplies = [];
+          for (final m in histMsgs) {
+            if (m is! MessageObj) continue;
+
+            int? repliedId;
+            String? quoteText;
+            if (m.replyTo is MessageReplyHeaderObj) {
+              final r = m.replyTo as MessageReplyHeaderObj;
+              repliedId = r.replyToMsgId;
+              quoteText = r.quoteText;
+            } else if (m.replyTo != null) {
+              try { repliedId = (m.replyTo as dynamic).replyToMsgId; } catch (_) {}
+              try { quoteText = (m.replyTo as dynamic).quoteText; } catch (_) {}
+            }
+
+            bool isReplyToMySearch = false;
+            if (mySentMsgId != null && repliedId == mySentMsgId) {
+              isReplyToMySearch = true;
+            } else if (quoteText != null && quoteText.toLowerCase().contains(query.toLowerCase())) {
+              isReplyToMySearch = true;
+            }
+
+            if (isReplyToMySearch) {
+              myBotReplies.add(m);
+            }
+          }
+
+          if (myBotReplies.isNotEmpty) {
+            debugPrint('[TelegramService] Poll attempt $attempt: Found ${myBotReplies.length} bot reply message(s) quoting our search!');
+            extractFromMessages(myBotReplies);
+
+            if (results.isNotEmpty) {
+              debugPrint('[TelegramService] Successfully extracted ${results.length} bot results!');
+
+              // If bot has a Next Page button, trigger it to fetch page 2 results!
+              if (nextPageCallback != null && nextPageMsgId != null) {
+                try {
+                  final curPageMsgId = nextPageMsgId!;
+                  final cbData = nextPageCallback!.data;
+                  nextPageCallback = null;
+                  nextPageMsgId = null;
+
+                  debugPrint('[TelegramService] Bot has next page! Sending callback to load next page...');
+                  await _client!.invoke(
+                    MessagesGetBotCallbackAnswerRequest(
+                      peer: peer,
+                      msgId: curPageMsgId,
+                      data: cbData,
+                    ),
+                  );
+                  await Future.delayed(const Duration(milliseconds: 1500));
+                  final updatedMsg = await _client!.getMessage(peer: peer, id: curPageMsgId);
+                  if (updatedMsg != null && updatedMsg is MessageObj) {
+                    debugPrint('[TelegramService] Extracted page 2 bot results!');
+                    extractFromMessages([updatedMsg]);
+                  }
+                } catch (e) {
+                  debugPrint('[TelegramService] Next page fetch note: $e');
+                }
+              }
+
+              // If we already have multiple results or we're on attempt >= 2, return
+              if (results.length >= 2 || attempt >= 2) {
+                break;
+              }
+            }
+          } else {
+            debugPrint('[TelegramService] Poll attempt $attempt: No replies quoting our search message yet...');
+          }
+        } catch (e) {
+          debugPrint('[TelegramService] Poll error: $e');
+        }
+      }
+
+      return results;
+    } catch (e) {
+      debugPrint('[TelegramService] searchMovieInGroup error: $e');
+      return [];
+    }
+  }
+}
+
+class TelegramGroupSearchResult {
+  final String title;
+  final String botStartUrl;
+  final String botUsername;
+  final String startParam;
+  final String? qualityOrSize;
+
+  const TelegramGroupSearchResult({
+    required this.title,
+    required this.botStartUrl,
+    required this.botUsername,
+    required this.startParam,
+    this.qualityOrSize,
+  });
 }
 
 class _Scored<T> {
@@ -759,3 +1194,4 @@ class _Scored<T> {
   final double score;
   _Scored(this.value, this.score);
 }
+

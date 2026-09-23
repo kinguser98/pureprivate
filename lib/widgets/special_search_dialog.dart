@@ -1,4 +1,10 @@
 import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
+import 'package:private_cinema_mobile/data/telegram_premium_resolver.dart';
+import 'package:freebuff_core/services/telegram/telegram_service.dart';
+import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
+import 'package:freebuff_core/services/telegram/telegram_bot_resolver.dart';
+import 'package:private_cinema_mobile/data/telegram_sources.dart';
+import 'package:private_cinema_mobile/widgets/telegram_auto_join_dialog.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
@@ -100,11 +106,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _showCinejoy = true;
   bool _showStreamtape = true;
   bool _showTelegram = true;
+  bool _showTelegramPremium = true;
   bool _showNetmirrorCenter = true;
   bool _showNetmirrorOtt = true;
   bool _showDirectLink = true;
   String? _selectedStremioResolution;
   List<String> _blockedAddonGroups = [];
+  bool _hasSearchedTelegramGroup = false;
+  bool _isSearchingTelegramGroup = false;
+  String? _selectedTelegramQuality;
 
   Future<void> _loadSourceVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -126,7 +136,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           
           
         'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
-          'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
+          'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','telegram_premium','directLink'
         ];
         for (final m in activeModules) {
           final id = m['id'].toString();
@@ -147,6 +157,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _showCinejoy = cloud.containsKey('source_show_cinejoy') ? cloud['source_show_cinejoy'] == 'true' : (prefs.getBool('source_show_cinejoy') ?? true);
         _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
         _showTelegram = cloud.containsKey('source_show_telegram') ? cloud['source_show_telegram'] == 'true' : (prefs.getBool('source_show_telegram') ?? true);
+        _showTelegramPremium = cloud.containsKey('source_show_telegram_premium') ? cloud['source_show_telegram_premium'] == 'true' : (prefs.getBool('source_show_telegram_premium') ?? true);
         _showNetmirrorCenter = cloud.containsKey('source_show_netmirror_center') ? cloud['source_show_netmirror_center'] == 'true' : (prefs.getBool('source_show_netmirror_center') ?? true);
         _showNetmirrorOtt = cloud.containsKey('source_show_netmirror_ott') ? cloud['source_show_netmirror_ott'] == 'true' : (prefs.getBool('source_show_netmirror_ott') ?? true);
         _showDirectLink = cloud.containsKey('source_show_direct_link') ? cloud['source_show_direct_link'] == 'true' : (prefs.getBool('source_show_direct_link') ?? true);
@@ -166,7 +177,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       
           
         'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
-      'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','directLink'
+      'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','telegram_premium','directLink'
     ];
     final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
     for (final key in defaultOrder) {
@@ -211,6 +222,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 
   Future<void> _performLiveSearch(String query) async {
+    if (TelegramBotResolver.instance.canHandle(query)) {
+      _resolveTelegramLink(query);
+      return;
+    }
+
     setState(() {
       _searching = true;
       _selectedMovie = null;
@@ -254,6 +270,87 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           SnackBar(
             content: Text('Search failed: $e'),
             backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _resolveTelegramLink(String link) async {
+    setState(() {
+      _searching = true;
+      _selectedMovie = null;
+      _activeGroupType = null;
+      _selectedAddonSubGroup = null;
+      _selectingEpisode = false;
+      _searchResults = [];
+    });
+
+    final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
+    bool dialogOpen = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => TelegramAutoJoinDialog(
+        initialStatus: 'Connecting to Telegram Bot...',
+        statusNotifier: statusNotifier,
+        onCancel: () {
+          dialogOpen = false;
+          Navigator.of(ctx).pop();
+        },
+      ),
+    );
+
+    try {
+      final videoItem = await TelegramBotResolver.instance.resolveLink(
+        link,
+        onStatus: (st) {
+          statusNotifier.value = st;
+        },
+      );
+
+      if (!dialogOpen) return;
+
+      if (videoItem == null) {
+        throw Exception('No playable video was returned by the Telegram bot.');
+      }
+
+      statusNotifier.value = 'Preparing video player...';
+      final streamUrl = await TelegramService.instance.resolveStream(videoItem);
+
+      if (!mounted || !dialogOpen) return;
+      setState(() => _searching = false);
+
+      if (dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: streamUrl,
+            title: videoItem.displayTitle,
+            subtitle: 'Telegram • ${videoItem.sizeLabel ?? ''}',
+            movieId: videoItem.localId,
+            resumeDirectly: true,
+            sourceName: 'Telegram',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+      if (mounted) {
+        setState(() => _searching = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Telegram Resolve Error: $e'),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -374,6 +471,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         _selectingEpisode = false;
         _downloadedLocalPath = null;
         _isDownloaded = false;
+        _hasSearchedTelegramGroup = false;
+        _isSearchingTelegramGroup = false;
+        _selectedTelegramQuality = null;
       });
 
       // Check if this title is already downloaded locally
@@ -606,6 +706,22 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         }
       }
 
+      // Resolve Telegram Premium
+      if (_showTelegramPremium && title.isNotEmpty) {
+        tasks.add(_resolveTelegramPremium(
+          title,
+          movieYear,
+          imdbId: imdbId,
+          isSeries: _isSeriesSearch,
+          season: season,
+          episode: episode,
+        ));
+      }
+
+      if (_showTelegram && title.isNotEmpty) {
+        tasks.add(_resolveTelegram(title, movieYear));
+      }
+
       // No Superembed and FilmU
       await Future.wait(tasks);
     } catch (e) {
@@ -616,6 +732,131 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           _resolvingStreams = false;
         });
       }
+    }
+  }
+
+  int _rankTelegramQuality(String quality, String name) {
+    final text = '$quality $name'.toLowerCase();
+    if (text.contains('4k') || text.contains('2160p') || text.contains('ultra hd') || text.contains('uhd')) {
+      return 4;
+    }
+    if (text.contains('1080p') || text.contains('full hd') || text.contains('fhd')) {
+      return 3;
+    }
+    if (text.contains('720p') || text.contains('hdrip') || text.contains('720') || text.contains('hd')) {
+      return 2;
+    }
+    if (text.contains('480p') || text.contains('360p') || text.contains('sd')) {
+      return 1;
+    }
+    return 0;
+  }
+
+  Future<void> _resolveTelegram(String title, String year) async {
+    try {
+      if (!await TelegramService.instance.hasSession) return;
+      final query = '$title ${year.isNotEmpty ? year : ''}'.trim();
+      final hits = await TelegramService.instance.search(query);
+      final sources = TelegramSources.toStreamSources(hits).cast<StreamSource>().toList();
+
+      if (sources.isNotEmpty && mounted) {
+        sources.sort((a, b) {
+          final rankA = _rankTelegramQuality(a.quality ?? '', a.name);
+          final rankB = _rankTelegramQuality(b.quality ?? '', b.name);
+          return rankB.compareTo(rankA);
+        });
+
+        setState(() {
+          for (final s in sources) {
+            _resolvedSources.add(
+              StreamSourceInfo(
+                name: s.name,
+                url: s.url,
+                type: StreamSourceType.telegram,
+                quality: s.quality,
+              ),
+            );
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('[SpecialSearch] Telegram resolve error: $e');
+    }
+  }
+
+  Future<void> _ensureTelegramGroupSearched(String title) async {
+    if (_hasSearchedTelegramGroup || _isSearchingTelegramGroup) return;
+    _isSearchingTelegramGroup = true;
+    if (mounted) setState(() {});
+
+    try {
+      if (!await TelegramService.instance.hasSession) return;
+      final groupResults = await TelegramService.instance.searchMovieInConfiguredGroup(title);
+      _hasSearchedTelegramGroup = true;
+
+      final List<StreamSourceInfo> newSources = [];
+      for (final gr in groupResults) {
+        if (!_resolvedSources.any((s) => s.url == gr.botStartUrl)) {
+          newSources.add(
+            StreamSourceInfo(
+              name: 'TG • ${gr.title}',
+              url: gr.botStartUrl,
+              type: StreamSourceType.telegram,
+              quality: gr.qualityOrSize,
+            ),
+          );
+        }
+      }
+
+      if (newSources.isNotEmpty && mounted) {
+        setState(() {
+          _resolvedSources.addAll(newSources);
+        });
+      }
+    } catch (e) {
+      debugPrint('[SpecialSearch] Telegram group search note: $e');
+    } finally {
+      _isSearchingTelegramGroup = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _resolveTelegramPremium(
+    String title,
+    String year, {
+    String? imdbId,
+    bool isSeries = false,
+    int? season,
+    int? episode,
+  }) async {
+    try {
+      final yearVal = int.tryParse(year);
+      final sources = await TelegramPremiumResolver.search(
+        title,
+        year: yearVal,
+        imdbId: imdbId,
+        isSeries: isSeries,
+        season: season,
+        episode: episode,
+      );
+      if (mounted && sources.isNotEmpty) {
+        setState(() {
+          for (final s in sources) {
+            _resolvedSources.add(
+              StreamSourceInfo(
+                name: s.name,
+                url: s.url,
+                type: StreamSourceType.telegramPremium,
+                headers: s.headers,
+                quality: s.quality,
+                size: s.size,
+              ),
+            );
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('[SpecialSearch] Telegram Premium resolve error: $e');
     }
   }
 
@@ -1521,6 +1762,88 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             movieId: 'special_search_${_selectedMovie['id']}',
             resumeDirectly: false,
             headers: headers.isNotEmpty ? headers : null,
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(source.url)) {
+      if (TelegramBotResolver.instance.canHandle(source.url)) {
+        final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
+        bool dialogOpen = true;
+
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => TelegramAutoJoinDialog(
+            initialStatus: 'Connecting to Telegram Bot...',
+            statusNotifier: statusNotifier,
+            onCancel: () {
+              dialogOpen = false;
+              Navigator.of(ctx).pop();
+            },
+          ),
+        );
+
+        try {
+          final videoItem = await TelegramBotResolver.instance.resolveLink(
+            source.url,
+            onStatus: (st) => statusNotifier.value = st,
+          );
+          if (!dialogOpen) return;
+          if (videoItem == null) throw Exception('No playable video was returned by bot.');
+
+          statusNotifier.value = 'Preparing video player...';
+          final streamUrl = await TelegramService.instance.resolveStream(videoItem);
+
+          if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+            Navigator.of(context, rootNavigator: true).pop();
+            dialogOpen = false;
+          }
+
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => VideoPlayerScreen(
+                videoSource: streamUrl,
+                title: movieTitle,
+                subtitle: 'Telegram • ${videoItem.sizeLabel ?? ''}',
+                movieId: videoItem.localId,
+                resumeDirectly: false,
+                sourceName: 'Telegram',
+              ),
+            ),
+          );
+        } catch (e) {
+          if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+            Navigator.of(context, rootNavigator: true).pop();
+            dialogOpen = false;
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Telegram Resolve Error: $e'), backgroundColor: Colors.redAccent),
+            );
+          }
+        }
+        return;
+      }
+    }
+
+    if (source.type == StreamSourceType.telegramPremium) {
+      final Map<String, String> headers = {};
+      if (source.headers != null) {
+        headers.addAll(source.headers!);
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: source.url,
+            title: movieTitle,
+            subtitle: 'Telegram Premium',
+            movieId: 'special_search_${_selectedMovie?['id'] ?? DateTime.now().millisecondsSinceEpoch}',
+            resumeDirectly: false,
+            headers: headers.isNotEmpty ? headers : null,
+            sourceName: source.name,
           ),
         ),
       );
@@ -2479,6 +2802,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                                   _resolvingStreams = false;
                                   _activeGroupType = null;
                                   _selectedAddonSubGroup = null;
+                                  _hasSearchedTelegramGroup = false;
+                                  _isSearchingTelegramGroup = false;
+                                  _selectedTelegramQuality = null;
                                 });
                                 // Resolve streams now!
                                 _resolveMovieStreams(
@@ -2889,6 +3215,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final telegramStreams = filteredSources
         .where((s) => s.type == StreamSourceType.telegram)
         .toList();
+    final telegramPremiumStreams = filteredSources
+        .where((s) => s.type == StreamSourceType.telegramPremium)
+        .toList();
     final directLinkStreams = filteredSources
         .where((s) => s.type == StreamSourceType.directLink)
         .toList();
@@ -3256,20 +3585,45 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Telegram Card
-      if (_showTelegram && (_resolvingStreams || telegramStreams.isNotEmpty) && enabledKeys.contains('telegram')) {
+      if (_showTelegram && enabledKeys.contains('telegram')) {
+        final isSearchingGroup = _isSearchingTelegramGroup;
         sourceWidgets['telegram'] = _buildServerGroupCard(
           title: '${pos('telegram')}. Telegram Server',
-          subtitle: _resolvingStreams && telegramStreams.isEmpty
-              ? 'Searching Telegram...'
-              : (telegramStreams.isNotEmpty
-                    ? '${telegramStreams.length} links available'
-                    : 'Not available'),
+          subtitle: isSearchingGroup
+              ? 'Searching Telegram Group...'
+              : (_resolvingStreams && telegramStreams.isEmpty
+                  ? 'Checking Saved Messages...'
+                  : (telegramStreams.isNotEmpty
+                        ? '${telegramStreams.length} links available'
+                        : (_hasSearchedTelegramGroup ? 'No files found' : 'Tap to search Telegram'))),
           icon: Icons.send_rounded,
           accentColor: Colors.lightBlue,
-          onTap: telegramStreams.isEmpty
+          onTap: () async {
+            setState(() {
+              _activeGroupType = StreamSourceType.telegram;
+            });
+            if (!_hasSearchedTelegramGroup && !_isSearchingTelegramGroup) {
+              await _ensureTelegramGroupSearched(movieTitle);
+            }
+          },
+        );
+      }
+
+      // Telegram Premium Card
+      if (_showTelegramPremium && (_resolvingStreams || telegramPremiumStreams.isNotEmpty) && enabledKeys.contains('telegram_premium')) {
+        sourceWidgets['telegram_premium'] = _buildServerGroupCard(
+          title: '${pos('telegram_premium')}. Telegram Premium',
+          subtitle: _resolvingStreams && telegramPremiumStreams.isEmpty
+              ? 'Searching Telegram Premium...'
+              : (telegramPremiumStreams.isNotEmpty
+                    ? '${telegramPremiumStreams.length} files available'
+                    : 'Not available'),
+          icon: Icons.star_rounded,
+          accentColor: const Color(0xFFF59E0B),
+          onTap: telegramPremiumStreams.isEmpty
               ? null
               : () => setState(() {
-                    _activeGroupType = StreamSourceType.telegram;
+                    _activeGroupType = StreamSourceType.telegramPremium;
                   }),
         );
       }
@@ -3430,6 +3784,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         activeList = netmirrorOttStreams;
       } else if (_activeGroupType == StreamSourceType.telegram) {
         activeList = telegramStreams;
+      } else if (_activeGroupType == StreamSourceType.telegramPremium) {
+        activeList = telegramPremiumStreams;
       } else if (_activeGroupType == StreamSourceType.directLink) {
         activeList = directLinkStreams;
       } else {
@@ -3437,6 +3793,40 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       if (activeList.isEmpty && _activeGroupType != StreamSourceType.stremioAddon && _activeGroupType != StreamSourceType.nuveoAddon) {
+        if (_activeGroupType == StreamSourceType.telegram && _isSearchingTelegramGroup) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: CircularProgressIndicator(
+                    color: Color(0xFF00E5FF),
+                    strokeWidth: 3,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Searching Telegram Group...',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Looking for video files and streams',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.45),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         return Center(
           child: Text(
             'No links found in this server.',
@@ -3630,41 +4020,151 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               }
             }
 
-      final sortedActiveList = sortStreamsByQuality<StreamSourceInfo>(
-        activeList,
-        getName: (s) => s.name,
-        getUrl: (s) => s.url,
-        getQuality: (s) => s.quality,
-        getSize: (s) => s.size,
-      );
+      final bool isTelegramType = _activeGroupType == StreamSourceType.telegram || _activeGroupType == StreamSourceType.telegramPremium;
 
-      return ListView.builder(
-        itemCount: sortedActiveList.length,
-        itemBuilder: (context, idx) {
-          final source = sortedActiveList[idx];
-          return StreamMetadataTile(
-            name: source.name,
-            url: source.url,
-            headers: source.headers,
-            explicitQuality: source.quality,
-            explicitSize: source.size,
-            explicitLanguages: source.languages,
-            onTap: () => _playStream(source, movieTitle, posterPath),
-            onDownload: () => _handleStreamDownload(source, movieTitle, posterPath),
-            onLongPress: () {
-              Clipboard.setData(ClipboardData(text: source.url));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Copied Link: ${source.url}'),
-                  duration: const Duration(seconds: 2),
+      String getQualityBucket(StreamSourceInfo s) {
+        final q = (s.quality ?? '').toUpperCase();
+        final n = s.name.toUpperCase();
+        if (q.contains('4K') || q.contains('2160') || n.contains('4K') || n.contains('2160P')) return '4K';
+        if (q.contains('1080') || n.contains('1080P')) return '1080p';
+        if (q.contains('720') || n.contains('720P')) return '720p';
+        if (q.contains('480') || n.contains('480P') || q.contains('SD')) return '480p';
+        return 'Other';
+      }
+
+      final Map<String, int> tgQualityCounts = {};
+      final List<String> tgQualityOptions = [];
+      if (isTelegramType) {
+        for (final s in activeList) {
+          final b = getQualityBucket(s);
+          tgQualityCounts[b] = (tgQualityCounts[b] ?? 0) + 1;
+        }
+        for (final b in ['4K', '1080p', '720p', '480p', 'Other']) {
+          if (tgQualityCounts.containsKey(b) && tgQualityCounts[b]! > 0) {
+            tgQualityOptions.add(b);
+          }
+        }
+        if (_selectedTelegramQuality == null || !tgQualityOptions.contains(_selectedTelegramQuality)) {
+          _selectedTelegramQuality = tgQualityOptions.isNotEmpty ? tgQualityOptions.first : null;
+        }
+      }
+
+      final List<StreamSourceInfo> sortedActiveList;
+      if (_activeGroupType == StreamSourceType.telegram) {
+        final filteredList = (_selectedTelegramQuality != null)
+            ? activeList.where((s) => getQualityBucket(s) == _selectedTelegramQuality).toList()
+            : activeList;
+        sortedActiveList = List<StreamSourceInfo>.from(filteredList)
+          ..sort((a, b) {
+            final rankA = _rankTelegramQuality(a.quality ?? '', a.name);
+            final rankB = _rankTelegramQuality(b.quality ?? '', b.name);
+            return rankB.compareTo(rankA);
+          });
+      } else if (_activeGroupType == StreamSourceType.telegramPremium) {
+        final filteredList = (_selectedTelegramQuality != null)
+            ? activeList.where((s) => getQualityBucket(s) == _selectedTelegramQuality).toList()
+            : activeList;
+        sortedActiveList = sortStreamsByQuality<StreamSourceInfo>(
+          filteredList,
+          getName: (s) => s.name,
+          getUrl: (s) => s.url,
+          getQuality: (s) => s.quality,
+          getSize: (s) => s.size,
+        );
+      } else {
+        sortedActiveList = sortStreamsByQuality<StreamSourceInfo>(
+          activeList,
+          getName: (s) => s.name,
+          getUrl: (s) => s.url,
+          getQuality: (s) => s.quality,
+          getSize: (s) => s.size,
+        );
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (isTelegramType && tgQualityOptions.length > 1) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: tgQualityOptions.map((q) {
+                    final isSel = _selectedTelegramQuality == q;
+                    final count = tgQualityCounts[q] ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(
+                          '$q ($count)',
+                          style: TextStyle(
+                            color: isSel ? Colors.white : Colors.white70,
+                            fontSize: 12,
+                            fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        selected: isSel,
+                        onSelected: (val) {
+                          if (val) setState(() => _selectedTelegramQuality = q);
+                        },
+                        selectedColor: AppColors.accentBright,
+                        backgroundColor: const Color(0xFF1E2433),
+                        side: BorderSide(
+                          color: isSel
+                              ? AppColors.accentBright
+                              : Colors.white.withValues(alpha: 0.1),
+                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                    );
+                  }).toList(),
                 ),
-              );
-            },
-          );
-        },
+              ),
+            ),
+          ],
+          Expanded(
+            child: sortedActiveList.isEmpty
+                ? Center(
+                    child: Text(
+                      'No links found in this quality section.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontSize: 13,
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: sortedActiveList.length,
+                    itemBuilder: (context, idx) {
+                      final source = sortedActiveList[idx];
+                      return StreamMetadataTile(
+                        name: source.name,
+                        url: source.url,
+                        headers: source.headers,
+                        explicitQuality: source.quality,
+                        explicitSize: source.size,
+                        explicitLanguages: source.languages,
+                        onTap: () => _playStream(source, movieTitle, posterPath),
+                        onDownload: () => _handleStreamDownload(source, movieTitle, posterPath),
+                        onLongPress: () {
+                          Clipboard.setData(ClipboardData(text: source.url));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Copied Link: ${source.url}'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+          ),
+        ],
       );
     }
   }
+
 
   Future<void> _handleStreamDownload(StreamSourceInfo source, String movieTitle, String? posterPath) async {
     final movie = Movie(
@@ -3685,6 +4185,65 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final lowerName = source.name.toLowerCase();
 
       if (source.type == StreamSourceType.moviebox) {
+        final Map<String, String> headers = {};
+        if (source.headers != null) {
+          headers.addAll(source.headers!);
+        }
+        await DownloadManager.downloadMovie(movie, url, headers: headers.isNotEmpty ? headers : null);
+        return;
+      }
+
+      if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(url)) {
+        if (TelegramBotResolver.instance.canHandle(url)) {
+          final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
+          bool dialogOpen = true;
+
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => TelegramAutoJoinDialog(
+              initialStatus: 'Connecting to Telegram Bot...',
+              statusNotifier: statusNotifier,
+              onCancel: () {
+                dialogOpen = false;
+                Navigator.of(ctx).pop();
+              },
+            ),
+          );
+
+          try {
+            final videoItem = await TelegramBotResolver.instance.resolveLink(
+              url,
+              onStatus: (st) => statusNotifier.value = st,
+            );
+            if (!dialogOpen) return;
+            if (videoItem == null) throw Exception('No video file returned by bot.');
+
+            statusNotifier.value = 'Preparing download stream...';
+            final resolved = await TelegramService.instance.resolveStream(videoItem);
+
+            if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+              Navigator.of(context, rootNavigator: true).pop();
+              dialogOpen = false;
+            }
+
+            await DownloadManager.downloadMovie(movie, resolved);
+          } catch (e) {
+            if (mounted && dialogOpen && Navigator.of(context, rootNavigator: true).canPop()) {
+              Navigator.of(context, rootNavigator: true).pop();
+              dialogOpen = false;
+            }
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Telegram download error: $e'), backgroundColor: Colors.redAccent),
+              );
+            }
+          }
+          return;
+        }
+      }
+
+      if (source.type == StreamSourceType.telegramPremium) {
         final Map<String, String> headers = {};
         if (source.headers != null) {
           headers.addAll(source.headers!);
@@ -3850,6 +4409,7 @@ enum StreamSourceType {
   netmirrorCenter,
   netmirrorOtt,
   telegram,
+  telegramPremium,
   movieshunt,
   directLink,
   modular,

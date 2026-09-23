@@ -16,6 +16,8 @@ class StreamSource {
     this.quality,
     this.qualityBadgeColor,
     this.qualityBadgeText,
+    this.size,
+    this.languages,
   });
   final String name;
   final String url;
@@ -25,6 +27,8 @@ class StreamSource {
   final String? quality;
   final Color? qualityBadgeColor;
   final String? qualityBadgeText;
+  final String? size;
+  final List<String>? languages;
 }
 
 class Movie {
