@@ -52,7 +52,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   String? _tgPremTestResult;
   bool? _tgPremTestSuccess;
 
-
   final _blockedGroupsCtrl = TextEditingController();
 
   final _torrentioUrlCtrl = TextEditingController();
@@ -86,11 +85,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _nuveoInputCtrl.dispose();
     _tgApiIdCtrl.dispose();
     _tgApiHashCtrl.dispose();
-    _tgPremKoyebUrlCtrl.dispose();
-    _tgPremKoyebTokenCtrl.dispose();
-    _tgPremLocalUrlCtrl.dispose();
-    _tgPremLocalTokenCtrl.dispose();
-
     _blockedGroupsCtrl.dispose();
     _torrentioUrlCtrl.dispose();
     _stravoUrlCtrl.dispose();
@@ -107,6 +101,10 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _tmdbApiKeyCtrl.dispose();
     _fanartApiKeyCtrl.dispose();
     _simklClientIdCtrl.dispose();
+    _tgPremKoyebUrlCtrl.dispose();
+    _tgPremKoyebTokenCtrl.dispose();
+    _tgPremLocalUrlCtrl.dispose();
+    _tgPremLocalTokenCtrl.dispose();
     super.dispose();
   }
 
@@ -216,6 +214,21 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         }
       }
 
+      // If telegram_premium is not in the saved source_order yet, insert it right after telegram!
+      if (!orderedSources.contains('telegram_premium')) {
+        final tgIdx = orderedSources.indexOf('telegram');
+        if (tgIdx != -1) {
+          orderedSources.insert(tgIdx + 1, 'telegram_premium');
+        } else {
+          final sIdx = orderedSources.indexOf('stremioAddon');
+          if (sIdx != -1) {
+            orderedSources.insert(sIdx + 1, 'telegram_premium');
+          } else {
+            orderedSources.add('telegram_premium');
+          }
+        }
+      }
+
       // Append any other missing sources from allSources
       for (final s in allSources) {
         if (!orderedSources.contains(s)) {
@@ -303,7 +316,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       // 9b. Parse Telegram Premium (PencariMovie Server)
       _telegramPremiumEnabled = settingsMap.containsKey('source_show_telegram_premium')
           ? (settingsMap['source_show_telegram_premium'] == 'true')
-          : (await TelegramPremiumResolver.isEnabled());
+          : true;
       _tgPremServerMode = settingsMap['tg_prem_server_mode'] ?? 'koyeb';
       _tgPremAutoDetect = settingsMap.containsKey('tg_prem_auto_detect')
           ? (settingsMap['tg_prem_auto_detect'] == 'true')
@@ -323,7 +336,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       }
       _tgPremLocalUrlCtrl.text = settingsMap['tg_prem_local_url'] ?? TelegramPremiumResolver.defaultLocalUrl;
       _tgPremLocalTokenCtrl.text = settingsMap['tg_prem_local_token'] ?? '';
-
 
       // 10. Parse Provider Addons, EPG & External API Keys
       _torrentioUrlCtrl.text = settingsMap['torrentio_addon_url'] ?? '';
@@ -401,7 +413,11 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
 
   void _toggleSourceVisibility(int index) {
     setState(() {
-      _sources[index]['enabled'] = !(_sources[index]['enabled'] as bool);
+      final newVal = !(_sources[index]['enabled'] as bool);
+      _sources[index]['enabled'] = newVal;
+      if (_sources[index]['key'] == 'telegram_premium') {
+        _telegramPremiumEnabled = newVal;
+      }
     });
   }
 
@@ -507,7 +523,6 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'tg_prem_koyeb_token': _tgPremKoyebTokenCtrl.text.trim(),
         'tg_prem_local_url': _tgPremLocalUrlCtrl.text.trim(),
         'tg_prem_local_token': _tgPremLocalTokenCtrl.text.trim(),
-
         'torrentio_addon_url': _torrentioUrlCtrl.text.trim(),
         'stravo_addon_url': _stravoUrlCtrl.text.trim(),
         'domain_vegamovies': _vegamoviesUrlCtrl.text.trim(),
@@ -532,20 +547,18 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         await SimklService.saveClientId(simklKey);
       }
       
-      for (final s in _sources) {
-        newSettings['source_show_${s['key']}'] = s['enabled'] == true ? 'true' : 'false';
-      }
-      
-      await ref.read(settingsProvider.notifier).bulkSaveSettings(newSettings);
-
-      await TelegramPremiumResolver.setEnabled(_telegramPremiumEnabled);
       await TelegramPremiumResolver.setServerMode(_tgPremServerMode);
       await TelegramPremiumResolver.setAutoDetect(_tgPremAutoDetect);
       await TelegramPremiumResolver.setKoyebUrl(_tgPremKoyebUrlCtrl.text.trim());
       await TelegramPremiumResolver.setKoyebToken(_tgPremKoyebTokenCtrl.text.trim());
       await TelegramPremiumResolver.setLocalUrl(_tgPremLocalUrlCtrl.text.trim());
       await TelegramPremiumResolver.setLocalToken(_tgPremLocalTokenCtrl.text.trim());
-
+      
+      for (final s in _sources) {
+        newSettings['source_show_${s['key']}'] = s['enabled'] == true ? 'true' : 'false';
+      }
+      
+      await ref.read(settingsProvider.notifier).bulkSaveSettings(newSettings);
       
       if (mounted) {
         setState(() => _isSaving = false);
@@ -1441,7 +1454,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     );
   }
 
-Widget _buildTelegramPremiumSection() {
+  Widget _buildTelegramPremiumSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1498,7 +1511,13 @@ Widget _buildTelegramPremiumSection() {
                   ),
                   Switch(
                     value: _telegramPremiumEnabled,
-                    onChanged: (val) => setState(() => _telegramPremiumEnabled = val),
+                    onChanged: (val) => setState(() {
+                      _telegramPremiumEnabled = val;
+                      final idx = _sources.indexWhere((s) => s['key'] == 'telegram_premium');
+                      if (idx != -1) {
+                        _sources[idx]['enabled'] = val;
+                      }
+                    }),
                     activeThumbColor: const Color(0xFFF59E0B),
                     activeTrackColor: const Color(0xFFF59E0B).withValues(alpha: 0.4),
                     inactiveThumbColor: Colors.white60,

@@ -570,18 +570,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         }
       }
 
+      final lowerUrl = widget.videoSource.toLowerCase();
+      final isTelegramStream = lowerUrl.contains(':8088') ||
+                               lowerUrl.contains('68.233.107.119') ||
+                               lowerUrl.contains('/api/download/') ||
+                               lowerUrl.contains('/api/stream/') ||
+                               (widget.sourceName?.toLowerCase().contains('telegram') ?? false) ||
+                               (widget.subtitle?.toLowerCase().contains('telegram') ?? false);
+
       final Map<String, String> playHeaders = {};
       final isLocalStream = widget.videoSource.contains('127.0.0.1') || 
                             widget.videoSource.contains('localhost') || 
                             widget.videoSource.contains('/f/');
-
-      final _lowerUrl = widget.videoSource.toLowerCase();
-      final isTelegramStream = _lowerUrl.contains(':8088') ||
-                               _lowerUrl.contains('68.233.107.119') ||
-                               _lowerUrl.contains('/api/download/') ||
-                               _lowerUrl.contains('/api/stream/') ||
-                               (widget.sourceName?.toLowerCase().contains('telegram') ?? false) ||
-                               (widget.subtitle?.toLowerCase().contains('telegram') ?? false);
 
       if (!isLocalStream) {
         if (widget.headers != null) {
@@ -715,23 +715,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0,reconnect=0');
           } else {
             // =========================================================================
-            // ORIGINAL CONFIGURATION FOR ALL OTHER SOURCES
+            // ORIGINAL CONFIGURATION FOR ALL OTHER SOURCES (NetMirror, Vegamovies, Alist, etc.)
             // =========================================================================
             await nativePlayer.setProperty('network-timeout', '30');
             await nativePlayer.setProperty('cache', 'yes');
             await nativePlayer.setProperty('cache-on-disk', 'no');
-            await nativePlayer.setProperty('demuxer-max-bytes', '134217728'); // 128 MB RAM buffer
-            await nativePlayer.setProperty('demuxer-max-back-bytes', '33554432'); // 32 MB back buffer
-            await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // Buffer up to 30 seconds ahead
-            await nativePlayer.setProperty('cache-secs', '30');
-            await nativePlayer.setProperty('cache-pause', 'yes');
-            await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer at least 2s before resuming to prevent frame stutter
-            await nativePlayer.setProperty('cache-pause-initial', 'yes');
-            await nativePlayer.setProperty('demuxer-lavf-buffersize', '1048576');
-            await nativePlayer.setProperty('stream-buffer-size', '2097152');
+            await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+            await nativePlayer.setProperty('demuxer-max-back-bytes', '4194304');
+            await nativePlayer.setProperty('demuxer-readahead-secs', '8');
+            await nativePlayer.setProperty('cache-secs', '8');
+            await nativePlayer.setProperty('demuxer-lavf-buffersize', '131072');
+            await nativePlayer.setProperty('stream-buffer-size', '131072');
             await nativePlayer.setProperty('stream-live', 'no');
-            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
+            await nativePlayer.setProperty('hr-seek', 'no');
+            await nativePlayer.setProperty('hr-seek-framedrop', 'yes');
+            await nativePlayer.setProperty('demuxer-seekable-cache', 'yes');
+            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=2');
           }
+        } else {
+          // Local/loopback stream seeking optimizations
+          await nativePlayer.setProperty('hr-seek', 'no');
+          await nativePlayer.setProperty('hr-seek-framedrop', 'yes');
+          await nativePlayer.setProperty('demuxer-seekable-cache', 'yes');
         }
         
         await nativePlayer.setProperty('force-seekable', 'yes');
@@ -788,6 +793,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
               lowerUrl.contains('/f/') ||
+              lowerUrl.contains('/api/download/') ||
+              lowerUrl.contains('/api/stream/') ||
+              lowerUrl.contains('koyeb.app') ||
+              lowerUrl.contains('68.233.107.119') ||
+              lowerUrl.contains(':8088') ||
               hasStalkerCookie) {
             shouldProxy = false;
           }
@@ -980,12 +990,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         ? Duration.zero
         : (_duration > Duration.zero && target > _duration ? _duration : target);
 
-    setState(() {
-      _isSeeking = true;
-      _buffering = true;
-    });
-
-    await _player.seek(clamped);
+    if (_player.platform is NativePlayer) {
+      final nativePlayer = _player.platform as NativePlayer;
+      await nativePlayer.command([
+        'seek',
+        (clamped.inMilliseconds / 1000).toStringAsFixed(3),
+        'absolute+keyframes'
+      ]);
+    } else {
+      await _player.seek(clamped);
+    }
 
     await Future.delayed(const Duration(milliseconds: 300));
     if (mounted) {
@@ -2976,12 +2990,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _seekToAbsolute(Duration position) async {
-    setState(() {
-      _isSeeking = true;
-      _buffering = true;
-    });
-
-    await _player.seek(position);
+    if (_player.platform is NativePlayer) {
+      final nativePlayer = _player.platform as NativePlayer;
+      await nativePlayer.command([
+        'seek',
+        (position.inMilliseconds / 1000).toStringAsFixed(3),
+        'absolute+keyframes'
+      ]);
+    } else {
+      await _player.seek(position);
+    }
 
     await Future.delayed(const Duration(milliseconds: 300));
     if (mounted) {

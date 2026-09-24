@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_colors.dart';
+import 'marquee_text.dart';
 
 class SpecialBadge {
   final String label;
@@ -358,9 +359,9 @@ class StreamMetadataTile extends StatelessWidget {
   final String? explicitQuality;
   final String? explicitSize;
   final List<String>? explicitLanguages;
-  final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
+  final VoidCallback onTap;
   final VoidCallback? onDownload;
+  final VoidCallback? onLongPress;
   final bool isSelected;
 
   const StreamMetadataTile({
@@ -371,9 +372,9 @@ class StreamMetadataTile extends StatelessWidget {
     this.explicitQuality,
     this.explicitSize,
     this.explicitLanguages,
-    this.onTap,
-    this.onLongPress,
+    required this.onTap,
     this.onDownload,
+    this.onLongPress,
     this.isSelected = false,
   });
 
@@ -387,8 +388,7 @@ class StreamMetadataTile extends StatelessWidget {
       explicitLanguages: explicitLanguages,
     );
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+    final mainTile = Expanded(
       child: Material(
         color: isSelected ? AppColors.accent.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.035),
         borderRadius: BorderRadius.circular(14),
@@ -468,35 +468,33 @@ class StreamMetadataTile extends StatelessWidget {
                               ),
                             ),
                           Expanded(
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              physics: const BouncingScrollPhysics(),
-                              child: Text(
-                                meta.cleanTitle,
-                                style: GoogleFonts.outfit(
-                                  color: Colors.white,
-                                  fontSize: 13.5,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                            child: MarqueeText(
+                              text: meta.cleanTitle,
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
                               ),
+                              velocity: 32.0,
+                              pauseDuration: const Duration(milliseconds: 1400),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      // Metadata badges: Special formats (Dolby Vision, Atmos, HDR, 10-bit) + Languages + Size
+                      const SizedBox(height: 5),
+                      // Meta Chips Row
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         physics: const BouncingScrollPhysics(),
                         child: Row(
                           children: [
-                            // Special Format Badges
+                            // Special Badges
                             for (final badge in meta.specialBadges)
                               Container(
                                 margin: const EdgeInsets.only(right: 5),
                                 padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 1.5),
                                 decoration: BoxDecoration(
-                                  color: badge.bg.withValues(alpha: 0.85),
+                                  color: badge.bg,
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Row(
@@ -565,19 +563,49 @@ class StreamMetadataTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 6),
-                if (onDownload != null)
-                  IconButton(
-                    icon: const Icon(Icons.file_download_rounded, size: 20),
-                    color: Colors.white70,
-                    tooltip: 'Download Stream',
-                    onPressed: onDownload,
-                  )
-                else
-                  const Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 18),
+                const Icon(Icons.play_arrow_rounded, color: Colors.white38, size: 20),
               ],
             ),
           ),
         ),
+      ),
+    );
+
+    if (onDownload == null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(children: [mainTile]),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          mainTile,
+          const SizedBox(width: 8),
+          Material(
+            color: Colors.white.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: onDownload,
+              child: Container(
+                height: 52,
+                width: 48,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                ),
+                child: const Icon(
+                  Icons.file_download_rounded,
+                  size: 20,
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

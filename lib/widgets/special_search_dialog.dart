@@ -3975,44 +3975,75 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                       ),
                     ),
                     for (final s in filtered)
-                      Card(
-                        color: Colors.white.withValues(alpha: 0.04),
-                        margin: const EdgeInsets.only(bottom: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                          title: Text(
-                            s.name,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          subtitle: Text(
-                            (s.quality != null && s.quality!.isNotEmpty) ? s.quality! : (s.addonName ?? 'Direct Stream'),
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.4),
-                              fontSize: 11,
-                            ),
-                          ),
-                          trailing: const Icon(
-                            Icons.play_circle_fill_rounded,
-                            color: Colors.white30,
-                          ),
-                          onTap: () => _playStream(s, movieTitle, posterPath),
-                          onLongPress: () {
-                            Clipboard.setData(ClipboardData(text: s.url));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Copied Link: ${s.url}'),
-                                duration: const Duration(seconds: 2),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Card(
+                                color: Colors.white.withValues(alpha: 0.04),
+                                margin: EdgeInsets.zero,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                  title: Text(
+                                    s.name,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    (s.quality != null && s.quality!.isNotEmpty) ? s.quality! : (s.addonName ?? 'Direct Stream'),
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.4),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.play_circle_fill_rounded,
+                                    color: Colors.white30,
+                                  ),
+                                  onTap: () => _playStream(s, movieTitle, posterPath),
+                                  onLongPress: () {
+                                    Clipboard.setData(ClipboardData(text: s.url));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Copied Link: ${s.url}'),
+                                        duration: const Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
-                            );
-                          },
+                            ),
+                            const SizedBox(width: 8),
+                            Material(
+                              color: Colors.white.withValues(alpha: 0.04),
+                              borderRadius: BorderRadius.circular(14),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () => _handleStreamDownload(s, movieTitle, posterPath),
+                                child: Container(
+                                  height: 52,
+                                  width: 48,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                                  ),
+                                  child: const Icon(
+                                    Icons.file_download_rounded,
+                                    size: 20,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                   ],
@@ -4045,7 +4076,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           }
         }
         if (_selectedTelegramQuality == null || !tgQualityOptions.contains(_selectedTelegramQuality)) {
-          _selectedTelegramQuality = tgQualityOptions.isNotEmpty ? tgQualityOptions.first : null;
+          _selectedTelegramQuality = tgQualityOptions.contains('1080p')
+              ? '1080p'
+              : (tgQualityOptions.isNotEmpty ? tgQualityOptions.first : null);
         }
       }
 

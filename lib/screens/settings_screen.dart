@@ -19,6 +19,7 @@ import 'package:private_cinema_mobile/data/tmdb_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:private_cinema_mobile/screens/telegram_login_screen.dart';
+import 'package:private_cinema_mobile/data/telegram_premium_resolver.dart';
 import 'package:private_cinema_mobile/screens/simkl_login_screen.dart';
 import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
@@ -47,7 +48,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _syncMessage = '';
   final TextEditingController _seedrTokenController = TextEditingController();
 
-
+  // Telegram Stream Server (PencariMovie) Settings
+  String _tgServerMode = 'koyeb';
+  bool _tgAutoDetect = true;
+  late final TextEditingController _tgCloudUrlController;
+  late final TextEditingController _tgCloudTokenController;
+  late final TextEditingController _tgLocalUrlController;
+  bool _isTestingTgServer = false;
+  String? _tgServerStatusMessage;
+  bool? _tgServerStatusSuccess;
 
   @override
   void initState() {
@@ -55,11 +64,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _torrentioUrlController = TextEditingController();
     _stravoUrlController = TextEditingController();
     _netmirrorDomainsController = TextEditingController();
+    _tgCloudUrlController = TextEditingController();
+    _tgCloudTokenController = TextEditingController();
+    _tgLocalUrlController = TextEditingController();
     _loadDeviceId();
     _loadTorrentioUrl();
     _loadStravoUrl();
     _loadNetmirrorDomains();
     _loadSeedrToken();
+    _loadTelegramServerSettings();
     _loadExternalPlayerSetting();
     _loadClearLogosSetting();
     _loadCastPhotosSetting();
@@ -147,7 +160,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _stravoUrlController.dispose();
     _netmirrorDomainsController.dispose();
     _seedrTokenController.dispose();
+    _tgCloudUrlController.dispose();
+    _tgCloudTokenController.dispose();
+    _tgLocalUrlController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadTelegramServerSettings() async {
+    final mode = await TelegramPremiumResolver.getServerMode();
+    final autoDetect = await TelegramPremiumResolver.getAutoDetect();
+    final cloudUrl = await TelegramPremiumResolver.getKoyebUrl();
+    final cloudToken = await TelegramPremiumResolver.getKoyebToken();
+    final localUrl = await TelegramPremiumResolver.getLocalUrl();
+    if (mounted) {
+      setState(() {
+        _tgServerMode = mode;
+        _tgAutoDetect = autoDetect;
+        _tgCloudUrlController.text = cloudUrl;
+        _tgCloudTokenController.text = cloudToken;
+        _tgLocalUrlController.text = localUrl;
+      });
+    }
+  }
+
+  Future<void> _testTelegramServer() async {
+    setState(() {
+      _isTestingTgServer = true;
+      _tgServerStatusMessage = 'Testing connection...';
+      _tgServerStatusSuccess = null;
+    });
+    final targetUrl = _tgServerMode == 'local'
+        ? _tgLocalUrlController.text.trim()
+        : _tgCloudUrlController.text.trim();
+    final targetToken = _tgServerMode == 'local'
+        ? ''
+        : _tgCloudTokenController.text.trim();
+    final res = await TelegramPremiumResolver.testServer(url: targetUrl, token: targetToken);
+    if (mounted) {
+      setState(() {
+        _isTestingTgServer = false;
+        if (res['success'] == true) {
+          _tgServerStatusSuccess = true;
+          _tgServerStatusMessage =
+              'Connected (${res['latencyMs']}ms) • ${res['name']} v${res['version']}';
+        } else {
+          _tgServerStatusSuccess = false;
+          _tgServerStatusMessage = res['error']?.toString() ?? 'Connection failed';
+        }
+      });
+    }
+  }
+
+  Future<void> _saveTelegramServerSettings() async {
+    await TelegramPremiumResolver.setServerMode(_tgServerMode);
+    await TelegramPremiumResolver.setAutoDetect(_tgAutoDetect);
+    await TelegramPremiumResolver.setKoyebUrl(_tgCloudUrlController.text.trim());
+    await TelegramPremiumResolver.setKoyebToken(_tgCloudTokenController.text.trim());
+    await TelegramPremiumResolver.setLocalUrl(_tgLocalUrlController.text.trim());
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Telegram Stream Server settings saved!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   Future<void> _loadDeviceId() async {
@@ -1775,6 +1852,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                 ),
                               ),
+                              const SizedBox(height: 10),
+                              FutureBuilder<String?>(
+                                future: TelegramService.instance.getConfiguredMovieGroupTitle(),
+                                builder: (context, snapshot) {
+                                  final groupTitle = snapshot.data;
+                                  return Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.04),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: groupTitle != null
+                                            ? const Color(0xFF29B6F6).withValues(alpha: 0.4)
+                                            : Colors.white12,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Icon(Icons.hub_rounded, size: 18, color: Color(0xFF29B6F6)),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Movie Search Group',
+                                                style: GoogleFonts.outfit(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14,
+                                                ),
+                                              ),
+                                            ),
+                                            if (groupTitle != null)
+                                              IconButton(
+                                                icon: const Icon(Icons.clear, size: 16, color: Colors.white54),
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(),
+                                                onPressed: () async {
+                                                  await TelegramService.instance.clearConfiguredMovieGroup();
+                                                  if (mounted) setState(() {});
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          groupTitle != null
+                                              ? 'Selected: $groupTitle'
+                                              : 'No group selected. Pick below to search automatically.',
+                                          style: TextStyle(
+                                            color: groupTitle != null ? const Color(0xFF81D4FA) : Colors.white54,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        SizedBox(
+                                          width: double.infinity,
+                                          child: ElevatedButton.icon(
+                                            onPressed: () => _showTelegramGroupPickerDialog(context),
+                                            icon: const Icon(Icons.search_rounded, size: 15),
+                                            label: Text(groupTitle != null ? 'Change Group' : 'Select Movie Group'),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFF0288D1),
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(vertical: 10),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(8),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
                             ],
                           ],
                         );
@@ -1782,6 +1936,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+
+
 
                   // Send to TV
                   _buildSectionHeader('Share Files'),
@@ -2280,6 +2436,218 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                 ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showTelegramGroupPickerDialog(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        String searchQuery = '';
+        final manualController = TextEditingController();
+        bool loading = true;
+        List<Map<String, dynamic>> allGroups = [];
+
+        return StatefulBuilder(
+          builder: (ctx, setMState) {
+            if (loading) {
+              TelegramService.instance.getJoinedGroups().then((groups) {
+                if (ctx.mounted) {
+                  setMState(() {
+                    allGroups = groups;
+                    loading = false;
+                  });
+                }
+              }).catchError((_) {
+                if (ctx.mounted) setMState(() => loading = false);
+              });
+            }
+
+            final filtered = allGroups.where((g) {
+              final title = (g['title'] ?? '').toString().toLowerCase();
+              final username = (g['username'] ?? '').toString().toLowerCase();
+              final q = searchQuery.toLowerCase();
+              return title.contains(q) || username.contains(q);
+            }).toList();
+
+            return Container(
+              height: MediaQuery.of(ctx).size.height * 0.8,
+              decoration: const BoxDecoration(
+                color: Color(0xFF161622),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Header
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.hub_rounded, color: Color(0xFF29B6F6), size: 24),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Select Movie Group / Channel',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white54),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Manual ID / Username Input Bar
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: manualController,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            decoration: InputDecoration(
+                              hintText: 'Or enter ID / @group (e.g. 4460753442)',
+                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                              isDense: true,
+                              filled: true,
+                              fillColor: Colors.white.withValues(alpha: 0.05),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final raw = manualController.text.trim();
+                            if (raw.isEmpty) return;
+                            final id = int.tryParse(raw.replaceAll(RegExp(r'[^0-9]'), ''));
+                            if (id != null) {
+                              await TelegramService.instance.setConfiguredMovieGroup(
+                                id: id,
+                                title: 'Custom Group ($id)',
+                              );
+                              if (mounted) setState(() {});
+                              if (ctx.mounted) Navigator.of(ctx).pop();
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0288D1),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text('Set'),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // Search Filter
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: TextField(
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      onChanged: (val) => setMState(() => searchQuery = val),
+                      decoration: InputDecoration(
+                        hintText: 'Filter your joined groups...',
+                        hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
+                        prefixIcon: const Icon(Icons.search, color: Colors.white38, size: 18),
+                        isDense: true,
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.04),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  // List of groups
+                  Expanded(
+                    child: loading
+                        ? const Center(child: CircularProgressIndicator(color: Color(0xFF29B6F6)))
+                        : filtered.isEmpty
+                            ? Center(
+                                child: Text(
+                                  searchQuery.isEmpty ? 'No joined groups found.' : 'No matching groups.',
+                                  style: const TextStyle(color: Colors.white38),
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                itemCount: filtered.length,
+                                itemBuilder: (ctx, idx) {
+                                  final g = filtered[idx];
+                                  final title = g['title'] ?? 'Unknown Group';
+                                  final isGroup = g['isGroup'] == true;
+                                  final username = g['username'];
+
+                                  return Card(
+                                    color: Colors.white.withValues(alpha: 0.03),
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                                    ),
+                                    child: ListTile(
+                                      leading: CircleAvatar(
+                                        backgroundColor: const Color(0xFF0288D1).withValues(alpha: 0.2),
+                                        child: Icon(
+                                          isGroup ? Icons.groups_rounded : Icons.campaign_rounded,
+                                          color: const Color(0xFF29B6F6),
+                                          size: 20,
+                                        ),
+                                      ),
+                                      title: Text(
+                                        title,
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      subtitle: Text(
+                                        username != null ? '@$username • ID: ${g['id']}' : 'ID: ${g['id']}',
+                                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                      ),
+                                      onTap: () async {
+                                        await TelegramService.instance.setConfiguredMovieGroup(
+                                          id: g['id'],
+                                          title: title,
+                                          accessHash: g['accessHash'] ?? 0,
+                                        );
+                                        if (mounted) setState(() {});
+                                        if (ctx.mounted) Navigator.of(ctx).pop();
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                  ),
+                ],
               ),
             );
           },
