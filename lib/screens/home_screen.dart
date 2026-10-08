@@ -24,6 +24,7 @@ import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
 import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/screens/watched_timeline_screen.dart';
 import 'package:private_cinema_mobile/widgets/special_search_dialog.dart';
+import 'package:private_cinema_mobile/screens/mega_movie_search_screen.dart';
 import 'package:private_cinema_mobile/widgets/ott_badge.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -521,9 +522,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (tab == 'Live TV') {
       widget.onSwitchTab?.call(2);
     } else if (tab == 'Series') {
-      showDialog<void>(
-        context: context,
-        builder: (context) => const SpecialSearchDialog(isSeriesSearch: true),
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const MegaMovieSearchScreen(initialSeriesSearch: true)),
       );
     } else if (tab == 'Vault') {
       Navigator.of(context).push(
@@ -559,10 +559,8 @@ class _HomeScreenState extends State<HomeScreen> {
               // Special Live Search Button (Catchy gradient design)
               GestureDetector(
                 onTap: () {
-                  showDialog<void>(
-                    context: context,
-                    barrierDismissible: true,
-                    builder: (context) => const SpecialSearchDialog(),
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const MegaMovieSearchScreen()),
                   );
                 },
                 child: Container(

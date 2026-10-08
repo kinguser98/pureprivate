@@ -380,6 +380,7 @@ class CustomDnsProxy {
         }
       }
 
+
       final pathSegments = request.uri.pathSegments;
       if (pathSegments.length >= 3 && pathSegments[0] == 'proxy') {
         final targetScheme = pathSegments[1];
@@ -490,12 +491,28 @@ class CustomDnsProxy {
             }
 
             if (targetHostLower.contains('imgcdn.kim') || targetHostLower.contains('freecdn') || targetHostLower.contains('net77.cc') || targetHostLower.contains('net52.cc')) {
-              req.headers.set('Referer', 'https://tv.imgcdn.kim/');
+              final ref = extraHeaders['Referer'] ?? extraHeaders['referer'] ?? (targetHostLower.contains('imgcdn.kim') ? 'https://tv.imgcdn.kim/' : 'https://net52.cc');
+              req.headers.set('Referer', ref);
               req.headers.set('Cookie', 'hd=on');
-              final usertoken = await NetmirrorOttResolver.getSavedUsertoken();
+              final usertoken = extraHeaders['Usertoken'] ?? extraHeaders['usertoken'] ?? await NetmirrorOttResolver.getSavedUsertoken();
               if (usertoken != null && usertoken.isNotEmpty) {
                 req.headers.set('Usertoken', usertoken);
               }
+            }
+
+            // Auto-inject iStream / OKCDN / X7Flix / DonMKV headers (ensures DASH segments and chunks never 400)
+            if (targetHostLower.contains('okcdn.ru') ||
+                targetHostLower.contains('ok.ru') ||
+                targetHostLower.contains('x7flix.com') ||
+                targetHostLower.contains('istreamflare') ||
+                targetHostLower.contains('istreamcdn') ||
+                targetHostLower.contains('istream') ||
+                targetHostLower.contains('iasbase.net') ||
+                targetHostLower.contains('donmkv.com') ||
+                targetHostLower.contains('molop.art')) {
+              req.headers.set('Referer', 'https://istreamflare.in/');
+              req.headers.set('Origin', 'https://istreamflare.in');
+              req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             }
             
             if (request.contentLength > 0 || request.headers.value('transfer-encoding') == 'chunked') {

@@ -13,6 +13,7 @@ import '../../utils/drawer_helper.dart';
 import '../../utils/tmdb_service.dart';
 import '../../widgets/common/loading_widget.dart';
 import '../../../widgets/image_picker_gallery_dialog.dart';
+import '../../../data/skip_intro_service.dart';
 
 class EditMovieScreen extends ConsumerStatefulWidget {
   final String movieId;
@@ -41,6 +42,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
   final _directorPhotoCtrl = TextEditingController();
   final _releaseCtrl = TextEditingController();
   final _runtimeCtrl = TextEditingController();
+  final _skipIntroCtrl = TextEditingController();
   final _trailerCtrl = TextEditingController();
   final _posterCtrl = TextEditingController();
   final _backdropCtrl = TextEditingController();
@@ -89,6 +91,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
     _directorPhotoCtrl.dispose();
     _releaseCtrl.dispose();
     _runtimeCtrl.dispose();
+    _skipIntroCtrl.dispose();
     _trailerCtrl.dispose();
     _posterCtrl.dispose();
     _backdropCtrl.dispose();
@@ -114,6 +117,10 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         _directorPhotoCtrl.text = movie.directorPhoto ?? '';
         _releaseCtrl.text = movie.releaseDate ?? '';
         _runtimeCtrl.text = movie.runtime ?? '';
+        final introSec = movie.skipIntroSeconds ?? SkipIntroService.getSkipIntro(movieId: widget.movieId, title: movie.title);
+        if (introSec != null && introSec > 0) {
+          _skipIntroCtrl.text = SkipIntroService.formatTimestamp(introSec);
+        }
         _trailerCtrl.text = movie.trailerUrl ?? '';
         _quality = movie.qualityTag ?? '1080p';
         _posterCtrl.text = movie.posterUrl;
@@ -239,6 +246,7 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
     setState(() => _isSaving = true);
     try {
       final streamSourcesJson = _streamSources.where((s) => s.urlCtrl.text.trim().isNotEmpty).map((s) => '{"name":"${s.nameCtrl.text.trim()}","url":"${s.urlCtrl.text.trim()}"}').join(',');
+      final skipIntroSec = SkipIntroService.parseTimestamp(_skipIntroCtrl.text.trim());
       final data = <String, dynamic>{
         'title': _titleCtrl.text, 'description': _overviewCtrl.text, 'language_id': _languageId?.toString() ?? '',
         'release_date': _releaseCtrl.text, 'runtime': _runtimeCtrl.text, 'trailer_url': _trailerCtrl.text,
@@ -249,7 +257,21 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
         'custom_created_at': _ingestionDate?.toIso8601String().substring(0, 16) ?? '',
         'stream_sources_json': streamSourcesJson.isNotEmpty ? '[$streamSourcesJson]' : '[]',
         'stream_url': _streamSources.where((s) => s.urlCtrl.text.trim().isNotEmpty).firstOrNull?.urlCtrl.text ?? '',
+        'skip_intro': skipIntroSec != null && skipIntroSec > 0 ? skipIntroSec.toString() : '',
+        'skip_intro_seconds': skipIntroSec != null && skipIntroSec > 0 ? skipIntroSec.toString() : '',
       };
+      if (skipIntroSec != null && skipIntroSec > 0) {
+        await SkipIntroService.setSkipIntro(
+          movieId: widget.movieId,
+          seconds: skipIntroSec,
+          title: _titleCtrl.text.trim(),
+        );
+      } else {
+        await SkipIntroService.removeSkipIntro(
+          movieId: widget.movieId,
+          title: _titleCtrl.text.trim(),
+        );
+      }
       final result = await _adminApi.updateMovie(int.parse(widget.movieId), data);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -312,11 +334,12 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
             ]),
             const SizedBox(height: 12),
             Row(children: [
-              Expanded(child: _field('Release Date', _releaseCtrl, Icons.calendar_today, hint: 'YYYY-MM-DD')),
+              Expanded(flex: 3, child: _field('Release Date', _releaseCtrl, Icons.calendar_today, hint: 'YYYY-MM-DD')),
               const SizedBox(width: 8),
-              Expanded(child: _field('Runtime', _runtimeCtrl, Icons.timer, inputType: TextInputType.number)),
+              Expanded(flex: 2, child: _field('Runtime', _runtimeCtrl, Icons.timer, inputType: TextInputType.number)),
               const SizedBox(width: 8),
               Expanded(
+                flex: 2,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
@@ -336,6 +359,71 @@ class _EditMovieScreenState extends ConsumerState<EditMovieScreen> {
                 ),
               ),
             ]),
+            const SizedBox(height: 12),
+            // Dedicated, clear Skip Intro card
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1F2E).withOpacity(0.6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE50914).withOpacity(0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.fast_forward_rounded, color: Color(0xFFE50914), size: 18),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Skip Intro Timestamp',
+                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      if (_skipIntroCtrl.text.isNotEmpty)
+                        Builder(
+                          builder: (context) {
+                            final parsed = SkipIntroService.parseTimestamp(_skipIntroCtrl.text.trim());
+                            return Text(
+                              parsed != null ? 'Active: ${SkipIntroService.formatTimestamp(parsed)} (${parsed}s)' : 'Format: 00:45 or 45s',
+                              style: TextStyle(
+                                color: parsed != null ? const Color(0xFF10B981) : Colors.orangeAccent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _skipIntroCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. 00:45 or 00.45 or 45s (mm:ss)',
+                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 13),
+                      filled: true,
+                      fillColor: const Color(0xFF0F131D),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                      suffixIcon: _skipIntroCtrl.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear_rounded, color: Colors.white54, size: 18),
+                              onPressed: () => setState(() => _skipIntroCtrl.clear()),
+                            )
+                          : null,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Exact format: Enter when actual movie begins (e.g. 00:45 or 00.45 for 45 seconds, 01:30 for 1m 30s).',
+                    style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 12),
             Row(children: [
               Expanded(flex: 3, child: _field('Trailer URL', _trailerCtrl, Icons.videocam)),

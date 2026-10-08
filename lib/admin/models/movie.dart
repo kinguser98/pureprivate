@@ -33,6 +33,7 @@ class Movie {
   @HiveField(25) final String? runtime;
   @HiveField(26) final int ottId;
   @HiveField(27) final String? logoUrl;
+  final int? skipIntroSeconds;
 
   Movie({
     required this.id,
@@ -63,6 +64,7 @@ class Movie {
     this.runtime,
     this.ottId = 0,
     this.logoUrl,
+    this.skipIntroSeconds,
   });
 
   factory Movie.fromJson(Map<String, dynamic> json) {
@@ -95,6 +97,25 @@ class Movie {
       return value.toString();
     }
 
+    int? _parseSkipIntro(dynamic value) {
+      if (value == null) return null;
+      if (value is int) return value > 0 ? value : null;
+      if (value is double) return value.toInt() > 0 ? value.toInt() : null;
+      final str = value.toString().trim();
+      if (str.isEmpty) return null;
+      if (str.contains(':')) {
+        final parts = str.split(':');
+        if (parts.length == 2) {
+          final m = int.tryParse(parts[0]) ?? 0;
+          final s = int.tryParse(parts[1]) ?? 0;
+          final tot = m * 60 + s;
+          return tot > 0 ? tot : null;
+        }
+      }
+      final parsed = int.tryParse(str);
+      return (parsed != null && parsed > 0) ? parsed : null;
+    }
+
     return Movie(
       id: _parseInt(json['id']),
       title: _parseString(json['title']),
@@ -124,6 +145,7 @@ class Movie {
       runtime: _parseString(json['runtime']),
       ottId: _parseInt(json['ott_id']),
       logoUrl: _parseString(json['logo_url']),
+      skipIntroSeconds: _parseSkipIntro(json['skip_intro'] ?? json['skip_intro_seconds']),
     );
   }
 

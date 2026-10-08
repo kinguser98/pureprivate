@@ -63,6 +63,7 @@ class Movie {
     this.ottLogo,
     this.ottId,
     this.logoUrl,
+    this.skipIntroSeconds,
   });
 
   final String id;
@@ -96,6 +97,7 @@ class Movie {
   final String? ottLogo;
   final int? ottId;
   final String? logoUrl;
+  final int? skipIntroSeconds;
 
   String get displayBackdrop => backdropUrl ?? posterUrl;
 }

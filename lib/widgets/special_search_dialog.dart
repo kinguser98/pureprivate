@@ -40,6 +40,7 @@ import 'package:private_cinema_mobile/data/cinejoy_resolver.dart';
 import 'package:private_cinema_mobile/data/movy_resolver.dart';
 import 'package:private_cinema_mobile/data/moviesdrive_resolver.dart';
 import 'package:private_cinema_mobile/data/hdhub4u_resolver.dart';
+import 'package:private_cinema_mobile/data/castle_resolver.dart';
 import 'package:private_cinema_mobile/data/modular_source_service.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/widgets/resolving_dialog.dart';
@@ -49,7 +50,16 @@ import 'dart:io';
 
 class SpecialSearchDialog extends StatefulWidget {
   final bool isSeriesSearch;
-  const SpecialSearchDialog({super.key, this.isSeriesSearch = false});
+  final bool isEmbedded;
+  final bool detailMode;
+  final dynamic initialMovieData;
+  const SpecialSearchDialog({
+    super.key,
+    this.isSeriesSearch = false,
+    this.isEmbedded = false,
+    this.detailMode = false,
+    this.initialMovieData,
+  });
 
   @override
   State<SpecialSearchDialog> createState() => _SpecialSearchDialogState();
@@ -198,6 +208,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     super.initState();
     _isSeriesSearch = widget.isSeriesSearch;
     _loadSourceVisibilitySettings();
+    if (widget.initialMovieData != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _onMovieSelected(widget.initialMovieData);
+        }
+      });
+    }
   }
 
   @override
@@ -1257,6 +1274,73 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _resolveExtraScraper(String providerName, String tmdbId) async {
     try {
+      if (providerName == 'castle') {
+        debugPrint(
+          'CastleResolver: Resolving native streams for TMDB: $tmdbId...',
+        );
+        final streams = await CastleResolver.resolveStreams(
+          title: _selectedMovie != null
+              ? (_selectedMovie['title']?.toString() ??
+                  _selectedMovie['name']?.toString() ??
+                  '')
+              : '',
+          year: _selectedMovie != null && _selectedMovie['release_date'] != null
+              ? int.tryParse(
+                  _selectedMovie['release_date'].toString().split('-').first,
+                )
+              : null,
+          tmdbId: tmdbId,
+        );
+        if (mounted && streams.isNotEmpty) {
+          setState(() {
+            _resolvedSources.addAll(streams);
+          });
+        }
+        return;
+      }
+      if (providerName == 'netmirror_ott' || providerName == 'netmirror') {
+        final title = _selectedMovie != null
+            ? (_selectedMovie['title']?.toString() ??
+                _selectedMovie['name']?.toString() ??
+                '')
+            : '';
+        final year = _selectedMovie != null && _selectedMovie['release_date'] != null
+            ? _selectedMovie['release_date'].toString().split('-').first
+            : null;
+        final res = await NetmirrorOttResolver.resolveStreams(
+          title: title,
+          year: year,
+        );
+        if (mounted && res.streams.isNotEmpty) {
+          setState(() {
+            _resolvedSources.addAll(res.streams);
+          });
+        }
+        return;
+      }
+      if (providerName == 'netmirror_center') {
+        final title = _selectedMovie != null
+            ? (_selectedMovie['title']?.toString() ??
+                _selectedMovie['name']?.toString() ??
+                '')
+            : '';
+        final year = _selectedMovie != null && _selectedMovie['release_date'] != null
+            ? _selectedMovie['release_date'].toString().split('-').first
+            : '2026';
+        final infos = await NetmirrorCenterResolver.resolveStreams(title, year);
+        if (mounted && infos.isNotEmpty) {
+          setState(() {
+            _resolvedSources.addAll(infos.map((info) => StreamSourceInfo(
+              name: info.name,
+              url: info.url,
+              type: StreamSourceType.netmirror,
+              quality: info.quality,
+              headers: info.headers,
+            )));
+          });
+        }
+        return;
+      }
       debugPrint(
         'WebViewScraperExecutor: Resolving streams for $providerName (TMDB: $tmdbId)...',
       );
@@ -2207,6 +2291,43 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.detailMode) {
+      return Container(
+        color: const Color(0xFF0C0E1A),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          child: _selectedMovie != null
+              ? (_isSeriesSearch && _selectingEpisode
+                  ? _buildEpisodeSelectionView()
+                  : _buildMovieDetailsView())
+              : const Center(
+                  child: CircularProgressIndicator(),
+                ),
+        ),
+      );
+    }
+
+    if (widget.isEmbedded) {
+      return Container(
+        color: const Color(0xFF0C0E1A),
+        child: Column(
+          children: [
+            if (!widget.detailMode) _buildHeader(),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: _selectedMovie != null
+                    ? (_isSeriesSearch && _selectingEpisode
+                        ? _buildEpisodeSelectionView()
+                        : _buildMovieDetailsView())
+                    : _buildSearchView(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final media = MediaQuery.of(context);
 
     return BackdropFilter(
@@ -2829,12 +2950,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: () {
-                  setState(() {
-                    _selectedMovie = null;
-                  });
+                  if (widget.detailMode) {
+                    Navigator.of(context).pop();
+                  } else {
+                    setState(() {
+                      _selectedMovie = null;
+                    });
+                  }
                 },
                 icon: const Icon(Icons.arrow_back_rounded, size: 16),
-                label: const Text('BACK TO SEARCH'),
+                label: Text(widget.detailMode ? 'CLOSE' : 'BACK TO SEARCH'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white70,
                   side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
@@ -2859,6 +2984,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     final year = rawYear.isNotEmpty ? rawYear : 'N/A';
     final lang =
         _selectedMovie['original_language']?.toString().toUpperCase() ?? 'EN';
+    final overview = _selectedMovie['overview']?.toString() ?? '';
+    final rating = (_selectedMovie['vote_average'] as num?)?.toStringAsFixed(1) ?? '-';
 
     return Padding(
       key: const ValueKey('details_view'),
@@ -2867,7 +2994,165 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Movie summary block
-          Row(
+          if (widget.detailMode)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131728),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 105,
+                    height: 155,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.black26,
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          posterPath != null
+                              ? Image.network(
+                                  'https://image.tmdb.org/t/p/w342$posterPath',
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _buildFallbackPoster(),
+                                )
+                              : _buildFallbackPoster(),
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(color: Colors.amber.withValues(alpha: 0.6), width: 0.8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.star_rounded, color: Colors.amber, size: 10),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    rating,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 6,
+                            left: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.6), width: 0.8),
+                              ),
+                              child: Text(
+                                lang,
+                                style: const TextStyle(
+                                  color: Color(0xFF10B981),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              padding: const EdgeInsets.fromLTRB(6, 16, 6, 6),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.bottomCenter,
+                                  end: Alignment.topCenter,
+                                  colors: [
+                                    Colors.black.withValues(alpha: 0.9),
+                                    Colors.transparent,
+                                  ],
+                                ),
+                              ),
+                              child: Text(
+                                year,
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white70,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.outfit(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            height: 1.2,
+                          ),
+                        ),
+                        if (_isSeriesSearch && _selectedEpisodeData != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'S$_selectedSeasonNumber E${_selectedEpisodeData['episode_number']}: ${_selectedEpisodeData['name']}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.outfit(
+                              color: AppColors.accentBright,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                        if (overview.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            overview,
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.outfit(
+                              color: Colors.white60,
+                              fontSize: 11.5,
+                              height: 1.35,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ClipRRect(
@@ -3031,7 +3316,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                     _activeGroupType = null;
                     _activeDynamicModuleKey = null;
                   } else {
-                    if (_isSeriesSearch) {
+                    if (widget.detailMode) {
+                      if (_isSeriesSearch && !_selectingEpisode) {
+                        _selectingEpisode = true;
+                      } else {
+                        Navigator.of(context).pop();
+                      }
+                    } else if (_isSeriesSearch) {
                       _selectingEpisode = true;
                     } else {
                       _selectedMovie = null;
@@ -3045,7 +3336,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                     ? 'BACK TO ADDONS'
                     : (_activeGroupType != null || _activeDynamicModuleKey != null
                         ? 'BACK TO SERVERS'
-                        : (_isSeriesSearch ? 'BACK TO EPISODES' : 'BACK TO SEARCH')),
+                        : (widget.detailMode
+                            ? (_isSeriesSearch && !_selectingEpisode ? 'BACK TO EPISODES' : 'CLOSE')
+                            : (_isSeriesSearch ? 'BACK TO EPISODES' : 'BACK TO SEARCH'))),
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white70,

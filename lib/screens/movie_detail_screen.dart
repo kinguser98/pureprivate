@@ -43,6 +43,7 @@ import 'package:private_cinema_mobile/data/netmirror_resolver.dart';
 import 'package:private_cinema_mobile/data/stremio_addon_resolver.dart';
 import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/data/webview_scraper_executor.dart';
+import 'package:private_cinema_mobile/data/castle_resolver.dart';
 import 'package:private_cinema_mobile/data/hls_preflight.dart';
 import 'package:private_cinema_mobile/data/webtorrent_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
@@ -477,9 +478,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     if (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null') {
       _resolveLiveNuveoAddons(movie.tmdbId!);
-      if (_showCastle) {
-        _resolveLiveCastle(movie.tmdbId!);
-      }
+    }
+
+    if (_showCastle) {
+      _resolveLiveCastle(movie.tmdbId);
     }
 
     if (_showTelegram) {
@@ -1262,21 +1264,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     }
   }
 
-  Future<void> _resolveLiveCastle(String tmdbId) async {
+  Future<void> _resolveLiveCastle(String? tmdbId) async {
     if (mounted) setState(() => _resolvingCastle = true);
     try {
-      debugPrint('Castle: Resolving streams for TMDB: $tmdbId...');
-      final streams = await WebViewScraperExecutor.runScraper(
-        'castle',
-        tmdbId,
-        'movie',
+      debugPrint('Castle: Resolving streams for title: ${movie.title} TMDB: $tmdbId...');
+      final streams = await CastleResolver.resolveStreams(
+        title: movie.title,
+        year: movie.year,
+        tmdbId: tmdbId,
       );
       final List<StreamSource> resolved = [];
       for (final s in streams) {
         resolved.add(StreamSource(
-          name: 'Castle TV - ${s.name}${s.quality != null ? ' - ${s.quality}' : ''}',
+          name: s.name,
           url: s.url,
           headers: s.headers,
+          quality: s.quality,
         ));
       }
       if (mounted) {
@@ -2397,6 +2400,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           headers: headers,
           sourceName: sourceName,
           logoUrl: _clearLogoUrl ?? movie.logoUrl,
+          year: movie.year,
+          genre: movie.genre,
+          contentRating: movie.contentRating,
+          skipIntroSeconds: movie.skipIntroSeconds,
         ),
       ),
     );
@@ -3357,6 +3364,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               headers: finalHeaders.isEmpty ? null : finalHeaders,
               sourceName: sourceName,
               logoUrl: _clearLogoUrl ?? movie.logoUrl,
+              year: movie.year,
+              genre: movie.genre,
+              contentRating: movie.contentRating,
+              skipIntroSeconds: movie.skipIntroSeconds,
             ),
           ),
         );
@@ -3783,15 +3794,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
  
             // Castle Server
-            if ((_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
+            if ((_resolvingCastle || _liveCastleSources.isNotEmpty || _showCastle) && enabledKeys.contains('castle')) {
               sourceWidgets['castle'] = _buildSourceTile(
                 icon: Icons.castle_rounded,
                 title: '${pos('castle')}. Castle TV Server',
                 subtitle: _resolvingCastle
                     ? 'Searching Castle...'
-                    : '${_liveCastleSources.length} links available',
+                    : (_liveCastleSources.isEmpty
+                        ? 'No links found (Tap to retry)'
+                        : '${_liveCastleSources.length} links available'),
                 disabled: _resolvingCastle,
                 onTap: () {
+                  if (_liveCastleSources.isEmpty) {
+                    _resolveLiveCastle(movie.tmdbId);
+                    return;
+                  }
                   Navigator.of(context).pop();
                   if (_liveCastleSources.length == 1) {
                     _playWithResolution(
@@ -4515,6 +4532,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             resumeDirectly: resumeDirectly,
             headers: headers.isNotEmpty ? headers : null,
             logoUrl: _clearLogoUrl ?? movie.logoUrl,
+            year: movie.year,
+            genre: movie.genre,
+            contentRating: movie.contentRating,
+            skipIntroSeconds: movie.skipIntroSeconds,
           ),
         ),
       );

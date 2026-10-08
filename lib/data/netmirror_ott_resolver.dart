@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/special_search_dialog.dart';
+import 'dns_proxy.dart';
 
 /// NetMirror OTT Resolver -- mirrors CNCVerse (normal) CloudStream plugin logic.
 /// Handles Netflix (nf), Prime Video (pv), and Hotstar (hs) streams with per-OTT Usertokens.
@@ -12,10 +13,10 @@ class NetmirrorOttResolver {
   static const String _prefApiBase          = 'netmirror_ott_api_base';
   static const Duration _tokenTtl           = Duration(hours: 23);
 
-  // Active verified fallback tokens from CloudStream
-  static const String _fallbackNfToken = '0071c1f56cba693a6b4cce0ece6df232::4eae4e810ce622019143ed0d7bfb58b5::1789884245::ni';
-  static const String _fallbackPvToken = '2af06c575e64959eeb5b1d45f7f47e2a::f8ee3b3d4f6cd34e3b0a9fad764ecad9::1789884246::ni';
-  static const String _fallbackHsToken = '9b6887c289e0d4a7516ad3f2b427d33f::9e99c77d87d5e60cea267a30669dad12::1789884247::ni';
+  // Active verified fallback tokens from NetMirror API
+  static const String _fallbackNfToken = '87fc5e8a962674221bab59108ab32382::3af144bb3072eb82581c031e2b4ecbe5::1790961190::ni';
+  static const String _fallbackPvToken = '6217dc34308096e5f27d9d5530013014::3af144bb3072eb82581c031e2b4ecbe5::1790961190::ni';
+  static const String _fallbackHsToken = '5825a4c83dd03d2e7a5e2f7bfe6fea67::3af144bb3072eb82581c031e2b4ecbe5::1790961190::ni';
 
   static const List<String> _detectionDomains = [
     'https://mobiledetects.com',
@@ -27,6 +28,7 @@ class NetmirrorOttResolver {
   ];
 
   static const String _defaultApiBase = 'https://tv.imgcdn.kim';
+  static const String universalOtp   = '111111';
   static const String verifyUrl       = 'https://net52.cc/verify.php';
 
   static const Map<String, String> _baseHeaders = {
@@ -43,10 +45,55 @@ class NetmirrorOttResolver {
     return t.isNotEmpty && t != '{}' && t != 'null' && t != 'undefined' && t != '0' && t.length > 10;
   }
 
+  static Future<String?> fetchUsertokenWithOtp(
+    String otp, {
+    String ott = 'nf',
+  }) async {
+    final cleanOtp = otp.trim().replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleanOtp.isEmpty) return null;
+
+    final apiBase = await _resolveApiBase();
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 8);
+    client.badCertificateCallback = (cert, host, port) => true;
+    try {
+      final url = '$apiBase/newtv/otp.php';
+      final req = await client.getUrl(Uri.parse(url));
+      req.headers.set('otp', cleanOtp);
+      req.headers.set('Ott', ott);
+      _baseHeaders.forEach((k, v) => req.headers.set(k, v));
+      req.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      req.headers.set('Pragma', 'no-cache');
+      req.headers.set('Expires', '0');
+
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final body = await res.transform(utf8.decoder).join();
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        final status = json['status']?.toString() ?? '';
+        final usertoken = json['usertoken']?.toString() ?? json['otp']?.toString() ?? '';
+
+        debugPrint('NetmirrorOtt: fetchUsertokenWithOtp [$ott] status=$status, usertoken=$usertoken');
+        if (status == 'ok' || (status != 'error' && _isValidToken(usertoken))) {
+          final tokenToSave = _isValidToken(usertoken) ? usertoken : cleanOtp;
+          await saveUsertoken(tokenToSave, ott: ott);
+          client.close();
+          return tokenToSave;
+        }
+      }
+    } catch (e) {
+      debugPrint('NetmirrorOtt: fetchUsertokenWithOtp error for [$ott]: $e');
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
   static Future<String?> getSavedUsertoken({String ott = 'nf'}) async {
     // 1. Always try importing freshest token from CloudStream shared_prefs if root is available
     final imported = await tryImportFromCloudStream(ott: ott);
     if (_isValidToken(imported)) {
+      await saveUsertoken(imported!, ott: ott);
       return imported;
     }
 
@@ -63,7 +110,13 @@ class NetmirrorOttResolver {
       }
     }
 
-    // 3. Fallback
+    // 3. Try auto-OTP generation with universal OTP (111111)
+    final otpToken = await fetchUsertokenWithOtp(universalOtp, ott: ott);
+    if (_isValidToken(otpToken)) {
+      return otpToken;
+    }
+
+    // 4. Fallback
     if (ott == 'pv') return _fallbackPvToken;
     if (ott == 'hs') return _fallbackHsToken;
     return _fallbackNfToken;
@@ -126,51 +179,7 @@ class NetmirrorOttResolver {
     return null;
   }
 
-  // ─── Fetch Usertoken via OTP ───────────────────────────────────────────────
 
-  static Future<String?> fetchUsertokenWithOtp(String otp, {String ott = 'nf'}) async {
-    final cleanOtp = otp.trim().replaceAll(RegExp(r'[^0-9]'), '');
-    if (cleanOtp.isEmpty) return null;
-
-    final apiBase = await _resolveApiBase();
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 8);
-    client.badCertificateCallback = (_, __, ___) => true;
-
-    try {
-      final uri = Uri.parse('$apiBase/newtv/otp.php');
-      final req = await client.getUrl(uri);
-      req.headers.set('otp', cleanOtp);
-      req.headers.set('Ott', ott);
-      req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.Gatu v1.0');
-      req.headers.set('X-Requested-With', 'NetmirrorNewTV v1.0');
-      req.headers.set('Accept', 'application/json, text/plain, */*');
-      req.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-      req.headers.set('Pragma', 'no-cache');
-      req.headers.set('Expires', '0');
-      req.headers.set('Connection', 'Keep-Alive');
-
-      final res = await req.close().timeout(const Duration(seconds: 10));
-      if (res.statusCode == 200) {
-        final body = await res.transform(utf8.decoder).join();
-        final data = jsonDecode(body) as Map<String, dynamic>;
-        final status = data['status']?.toString() ?? '';
-        final usertoken = data['usertoken']?.toString() ?? data['otp']?.toString() ?? '';
-        
-        debugPrint('NetmirrorOtt: fetchUsertokenWithOtp [$ott] status=$status, usertoken=$usertoken');
-        if (status == 'ok' || (status != 'error' && _isValidToken(usertoken))) {
-          final tokenToSave = _isValidToken(usertoken) ? usertoken : cleanOtp;
-          await saveUsertoken(tokenToSave, ott: ott);
-          client.close();
-          return tokenToSave;
-        }
-      }
-    } catch (e) {
-      debugPrint('NetmirrorOtt: fetchUsertokenWithOtp error: $e');
-    }
-    client.close();
-    return null;
-  }
 
   // ─── API Base Resolution ───────────────────────────────────────────────────
 
@@ -178,36 +187,6 @@ class NetmirrorOttResolver {
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString(_prefApiBase) ?? '';
     if (cached.isNotEmpty) return cached;
-
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 4);
-    client.badCertificateCallback = (_, __, ___) => true;
-
-    for (final domain in _detectionDomains) {
-      try {
-        final uri = Uri.parse('$domain/checknewtv.php');
-        final req = await client.getUrl(uri);
-        _baseHeaders.forEach((k, v) => req.headers.set(k, v));
-        final res = await req.close().timeout(const Duration(seconds: 5));
-        if (res.statusCode == 200) {
-          final body = await res.transform(utf8.decoder).join();
-          final data = jsonDecode(body) as Map<String, dynamic>;
-          final tokenHash = data['token_hash']?.toString() ?? '';
-          if (tokenHash.isNotEmpty) {
-            final apiBase = utf8.decode(base64.decode(tokenHash)).trim().replaceAll(RegExp(r'/$'), '');
-            if (apiBase.startsWith('http')) {
-              await prefs.setString(_prefApiBase, apiBase);
-              debugPrint('NetmirrorOtt: apiBase resolved to $apiBase');
-              client.close();
-              return apiBase;
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint('NetmirrorOtt: checknewtv.php failed for $domain: $e');
-      }
-    }
-    client.close();
     return _defaultApiBase;
   }
 
@@ -220,7 +199,7 @@ class NetmirrorOttResolver {
   }) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 8);
-    client.badCertificateCallback = (_, __, ___) => true;
+    client.badCertificateCallback = (cert, host, port) => true;
     try {
       final req = await client.getUrl(Uri.parse(url));
       _baseHeaders.forEach((k, v) => req.headers.set(k, v));
@@ -281,118 +260,124 @@ class NetmirrorOttResolver {
       final results = (searchData['searchResult'] as List? ?? []);
       if (results.isEmpty) continue;
 
-      // 2. Find best match with strict criteria (never fallback to results.first)
-      final normTarget = _norm(searchTitle);
-      final cleanTarget = _norm(_clean(searchTitle));
-      Map<String, dynamic>? best;
+      final matchedItems = <Map<String, dynamic>>[];
+      final targetBase = searchTitle
+          .split(RegExp(r'[:\-(]'))
+          .first
+          .replaceAll(RegExp(r'[^a-zA-Z0-9\s]'), '')
+          .trim()
+          .toLowerCase();
+      final normTarget = _norm(targetBase);
 
-      // Exact match
       for (final r in results) {
-        final item = r as Map<String, dynamic>;
-        final itemTitle = item['t']?.toString() ?? '';
-        if (_norm(itemTitle) == normTarget) {
-          best = item;
-          break;
+        if (r is! Map) continue;
+        final item = Map<String, dynamic>.from(r);
+        final rawTitle = item['t']?.toString() ?? '';
+        if (rawTitle.isEmpty) continue;
+
+        final baseTitle = rawTitle
+            .split(RegExp(r'[:\-(]'))
+            .first
+            .replaceAll(RegExp(r'[^a-zA-Z0-9\s]'), '')
+            .trim()
+            .toLowerCase();
+        final normBase = _norm(baseTitle);
+
+        if (normBase == normTarget || _norm(rawTitle) == _norm(searchTitle)) {
+          matchedItems.add(item);
         }
       }
 
-      // Cleaned match without parentheticals (e.g. "(Tamil)", "(Season 1)")
-      if (best == null && cleanTarget.isNotEmpty) {
-        for (final r in results) {
-          final item = r as Map<String, dynamic>;
-          final itemTitle = item['t']?.toString() ?? '';
-          if (_norm(_clean(itemTitle)) == cleanTarget) {
-            best = item;
-            break;
-          }
-        }
-      }
+      if (matchedItems.isEmpty) continue;
 
-      // Strong containment with close length (length difference <= 8 characters)
-      if (best == null && normTarget.length >= 3) {
-        for (final r in results) {
-          final item = r as Map<String, dynamic>;
-          final itemTitle = item['t']?.toString() ?? '';
-          final normItem = _norm(itemTitle);
-          if (normItem.contains(normTarget) && (normItem.length - normTarget.length) <= 8) {
-            best = item;
-            break;
-          } else if (normTarget.contains(normItem) && (normTarget.length - normItem.length) <= 8) {
-            best = item;
-            break;
-          }
-        }
-      }
+      for (final matchedObj in matchedItems) {
+        final contentId = matchedObj['id']?.toString() ?? '';
+        final matchedTitle = matchedObj['t']?.toString() ?? searchTitle;
+        if (contentId.isEmpty) continue;
 
-      // If no valid title match found for this provider, skip it
-      if (best == null) continue;
+        debugPrint('NetmirrorOtt: [$testOtt] Matched "$matchedTitle" (id=$contentId)');
 
-      final contentId = best['id']?.toString() ?? '';
-      if (contentId.isEmpty) continue;
-      debugPrint('NetmirrorOtt: [$testOtt] Matched "${best["t"]}" (id=$contentId)');
-
-      // 3. Resolve series episode
-      String resolvedId = contentId;
-      if (isSeries && season != null && episode != null) {
-        final postData = await _getJson('$apiBase/newtv/post.php?id=$contentId', ott: testOtt);
-        if (postData != null && postData.isNotEmpty) {
-          final epId = _findEpisodeId(postData, season, episode);
-          if (epId != null && epId.isNotEmpty) {
-            resolvedId = epId;
-            debugPrint('NetmirrorOtt: [$testOtt] Resolved S${season}E$episode → id=$resolvedId');
-          }
-        } else if (testOtt != 'nf') {
-          final epData = await _getJson('https://net52.cc/mobile/$testOtt/episodes.php?s=$contentId', ott: testOtt);
-          if (epData != null && epData.isNotEmpty) {
-            final epId = _findEpisodeId(epData, season, episode);
+        // 3. Resolve series episode if needed
+        String resolvedId = contentId;
+        if (isSeries && season != null && episode != null) {
+          final postData = await _getJson('$apiBase/newtv/post.php?id=$contentId', ott: testOtt);
+          if (postData != null && postData.isNotEmpty) {
+            final epId = _findEpisodeId(postData, season, episode);
             if (epId != null && epId.isNotEmpty) {
               resolvedId = epId;
-              debugPrint('NetmirrorOtt: [$testOtt] Resolved S${season}E$episode from episodes.php → id=$resolvedId');
+              debugPrint('NetmirrorOtt: [$testOtt] Resolved S${season}E$episode → id=$resolvedId');
+            }
+          } else if (testOtt != 'nf') {
+            final epData = await _getJson('https://net52.cc/mobile/$testOtt/episodes.php?s=$contentId', ott: testOtt);
+            if (epData != null && epData.isNotEmpty) {
+              final epId = _findEpisodeId(epData, season, episode);
+              if (epId != null && epId.isNotEmpty) {
+                resolvedId = epId;
+                debugPrint('NetmirrorOtt: [$testOtt] Resolved S${season}E$episode from episodes.php → id=$resolvedId');
+              }
             }
           }
         }
-      }
 
-      // 4. Resolve player link with Usertoken
-      final usertoken = await getSavedUsertoken(ott: testOtt);
-      debugPrint('NetmirrorOtt: Calling player testOtt=$testOtt, id=$resolvedId, token=${usertoken != null && usertoken.length > 15 ? usertoken.substring(0, 15) : usertoken}...');
-      
-      final playerData = await _getJson(
-        '$apiBase/newtv/player.php?id=$resolvedId',
-        usertoken: usertoken,
-        ott: testOtt,
-      );
+        // 4. Resolve player link with Usertoken
+        var usertoken = await getSavedUsertoken(ott: testOtt);
+        debugPrint('NetmirrorOtt: Calling player testOtt=$testOtt, id=$resolvedId, token=${usertoken != null && usertoken.length > 15 ? usertoken.substring(0, 15) : usertoken}...');
 
-      if (playerData != null) {
-        final status    = playerData['status']?.toString() ?? '';
-        final videoLink = playerData['video_link']?.toString() ?? '';
-        final referer   = playerData['referer']?.toString() ?? 'https://net52.cc';
-        final ottLabel  = (playerData['ott']?.toString() ?? testOtt).toUpperCase();
+        var playerData = await _getJson(
+          '$apiBase/newtv/player.php?id=$resolvedId',
+          usertoken: usertoken,
+          ott: testOtt,
+        );
 
-        debugPrint('NetmirrorOtt: player testOtt=$testOtt, status=$status, video_link=$videoLink');
-
+        var status = playerData?['status']?.toString() ?? '';
         if (status == 'otp') {
           encounteredOtp = true;
           await invalidateUsertoken(ott: testOtt);
+          final refreshed = await fetchUsertokenWithOtp(universalOtp, ott: testOtt);
+          if (refreshed != null) {
+            usertoken = refreshed;
+            playerData = await _getJson(
+              '$apiBase/newtv/player.php?id=$resolvedId',
+              usertoken: usertoken,
+              ott: testOtt,
+            );
+            status = playerData?['status']?.toString() ?? '';
+          }
         }
 
-        if (status == 'ok' && videoLink.isNotEmpty && !videoLink.contains('error')) {
-          final hasVideo = await _hasVideoStreams(videoLink, referer);
-          if (hasVideo) {
-            sources.add(StreamSourceInfo(
-              name   : 'NetMirror OTT [$ottLabel] • HD',
-              url    : videoLink,
-              type   : StreamSourceType.netmirrorOtt,
-              quality: 'HD',
-              headers: {
-                'Referer'   : referer,
-                'Cookie'    : 'hd=on',
-                'Usertoken' : usertoken ?? '',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              },
-            ));
-          } else {
-            debugPrint('NetmirrorOtt: Skipping $testOtt because master playlist has no video streams');
+        if (playerData != null) {
+          final videoLink = playerData['video_link']?.toString() ?? '';
+          final referer   = playerData['referer']?.toString() ?? 'https://net52.cc';
+          final ottLabel  = (playerData['ott']?.toString() ?? testOtt).toUpperCase();
+
+          debugPrint('NetmirrorOtt: player testOtt=$testOtt, status=$status, video_link=$videoLink');
+
+          if (status == 'ok' && videoLink.isNotEmpty && !videoLink.contains('error')) {
+            final hasVideo = await _hasVideoStreams(videoLink, referer);
+            if (hasVideo) {
+              final displayName = matchedTitle != searchTitle
+                  ? 'NetMirror OTT [$ottLabel] • $matchedTitle • HD'
+                  : 'NetMirror OTT [$ottLabel] • HD';
+              // Bypass nested reverse-proxy bottlenecks (e.g. s00021.freecdn4.top/s22... -> s22...)
+              var finalPlayUrl = videoLink.replaceAllMapped(
+                RegExp(r'https?://[^/\s]+/(s\d+\.[^/\s]+)/files/'),
+                (m) => 'https://${m.group(1)}/files/',
+              );
+              sources.add(StreamSourceInfo(
+                name   : displayName,
+                url    : finalPlayUrl,
+                type   : StreamSourceType.netmirrorOtt,
+                quality: 'HD',
+                headers: {
+                  'Referer'   : referer,
+                  'Cookie'    : 'hd=on',
+                  'Usertoken' : usertoken ?? '',
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+              ));
+            } else {
+              debugPrint('NetmirrorOtt: Skipping $testOtt $matchedTitle because playlist has no video streams or is inaccessible');
+            }
           }
         }
       }
@@ -408,7 +393,7 @@ class NetmirrorOttResolver {
   static Future<bool> _hasVideoStreams(String m3u8Url, String referer) async {
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 5);
-    client.badCertificateCallback = (_, __, ___) => true;
+    client.badCertificateCallback = (cert, host, port) => true;
     try {
       final req = await client.getUrl(Uri.parse(m3u8Url));
       req.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
@@ -417,6 +402,41 @@ class NetmirrorOttResolver {
       final res = await req.close().timeout(const Duration(seconds: 6));
       if (res.statusCode == 200) {
         final body = await res.transform(utf8.decoder).join();
+        if (body.contains('File Has been Removed') || body.contains('Error') || body.isEmpty) {
+          client.close();
+          return false;
+        }
+
+        // If this is a master playlist, verify at least one child stream is alive and not removed
+        if (body.contains('#EXT-X-STREAM-INF')) {
+          final lines = body.split('\n');
+          final childUrl = lines.firstWhere(
+            (l) => l.trim().startsWith('http'),
+            orElse: () => '',
+          ).trim();
+          if (childUrl.isNotEmpty) {
+            try {
+              final cReq = await client.getUrl(Uri.parse(childUrl));
+              cReq.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+              cReq.headers.set('Referer', referer);
+              cReq.headers.set('Cookie', 'hd=on');
+              final cRes = await cReq.close().timeout(const Duration(seconds: 4));
+              if (cRes.statusCode != 200) {
+                client.close();
+                return false;
+              }
+              final cBody = await cRes.transform(utf8.decoder).join();
+              if (cBody.contains('File Has been Removed') || cBody.contains('Website Access Blocked') || !cBody.contains('#EXT')) {
+                client.close();
+                return false;
+              }
+            } catch (_) {
+              client.close();
+              return false;
+            }
+          }
+        }
+
         client.close();
         return body.contains('#EXT-X-STREAM-INF') || body.contains('.m3u8') || body.contains('.jpg') || body.contains('.ts');
       }

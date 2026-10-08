@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -20,6 +21,40 @@ class ModularSourceService {
     'filmu': 'https://ot.goprivate.fun/sources/filmu.php',
     'istreamflare': 'https://ot.goprivate.fun/sources/istreamflare.php',
   };
+
+  /// Resolves client-side HTTP 302 redirects for providers like iStream / OKCDN / X7Flix
+  /// to ensure client IP binding and avoid cross-domain header dropping by video decoders.
+  static Future<String> resolveStreamRedirect(String rawUrl, {Map<String, String>? headers}) async {
+    final lower = rawUrl.toLowerCase();
+    if (lower.contains('ox.php') ||
+        lower.contains('/ox/') ||
+        lower.contains('istreamcdn') ||
+        lower.contains('exposeworld.art') ||
+        lower.contains('x7flix.com') ||
+        lower.contains('iasbase.net') ||
+        lower.contains('mflare.php')) {
+      try {
+        final client = HttpClient();
+        client.badCertificateCallback = (cert, host, port) => true;
+        final uri = Uri.parse(rawUrl);
+        final req = await client.getUrl(uri).timeout(const Duration(seconds: 4));
+        req.followRedirects = false;
+        req.headers.set('User-Agent', headers?['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        req.headers.set('Referer', headers?['Referer'] ?? 'https://istreamflare.in/');
+        final resp = await req.close().timeout(const Duration(seconds: 4));
+        final loc = resp.headers.value('location');
+        client.close();
+        if (loc != null && loc.isNotEmpty) {
+          final resolved = uri.resolve(loc).toString();
+          debugPrint('ModularSourceService: Resolved redirect $rawUrl -> $resolved');
+          return resolved;
+        }
+      } catch (e) {
+        debugPrint('ModularSourceService: Error resolving direct redirect: $e');
+      }
+    }
+    return rawUrl;
+  }
 
   /// Fetches installed modules list from cloud settings with local fallbacks
   static Future<List<Map<String, dynamic>>> fetchActiveModules({bool forceRefresh = false}) async {
@@ -142,9 +177,25 @@ class ModularSourceService {
                 continue;
               }
 
+              // Auto-inject and ensure iStream / OKCDN headers
+              if (moduleKey == 'istreamflare' ||
+                  lowerUrl.contains('okcdn.ru') ||
+                  lowerUrl.contains('ok.ru') ||
+                  lowerUrl.contains('istreamcdn') ||
+                  lowerUrl.contains('ox.php') ||
+                  lowerUrl.contains('x7flix.com')) {
+                headers ??= {};
+                if (!headers.containsKey('Referer')) headers['Referer'] = 'https://istreamflare.in/';
+                if (!headers.containsKey('Origin')) headers['Origin'] = 'https://istreamflare.in';
+                if (!headers.containsKey('User-Agent')) headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+              }
+
+              // Resolve 302 redirect on client if applicable (for iStream ox.php)
+              final finalUrl = await resolveStreamRedirect(url, headers: headers);
+
               streamsList.add(StreamSourceInfo(
                 name: name,
-                url: url,
+                url: finalUrl,
                 type: StreamSourceType.movieshunt,
                 quality: quality,
                 size: size,

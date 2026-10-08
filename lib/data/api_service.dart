@@ -5,6 +5,7 @@ import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/models/language_item.dart';
 import 'package:private_cinema_mobile/data/playback_tracker.dart';
 import 'package:private_cinema_mobile/data/dio_client.dart';
+import 'package:private_cinema_mobile/data/skip_intro_service.dart';
 import 'package:dio/dio.dart' as dio_pkg;
 
 class ApiService {
@@ -245,6 +246,8 @@ class ApiService {
         ottLogo: json['ott_logo']?.toString(),
         ottId: json['ott_id'] != null ? int.tryParse(json['ott_id'].toString()) : null,
         logoUrl: json['logo_url']?.toString() ?? json['logoUrl']?.toString(),
+        skipIntroSeconds: SkipIntroService.parseTimestamp(json['skip_intro'] ?? json['skip_intro_seconds']) ??
+            SkipIntroService.getSkipIntro(movieId: idStr, title: title),
       );
     }).toList();
 
