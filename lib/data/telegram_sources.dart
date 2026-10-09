@@ -10,10 +10,10 @@ class TelegramSources {
     return items
         .map(
           (i) => StreamSource(
-            name: 'TG • ${i.displayTitle}',
+            name: '💾 TG • ${i.displayTitle}',
             url: buildUrl(i.localId),
             quality: i.sizeLabel,
-            qualityBadgeText: 'TG',
+            qualityBadgeText: '💾 SAVED',
           ),
         )
         .toList();

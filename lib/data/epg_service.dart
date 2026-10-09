@@ -17,19 +17,72 @@ class EpgProgram {
   });
 }
 
+class EpgSourceDef {
+  final String id;
+  final String name;
+  final String url;
+  const EpgSourceDef({required this.id, required this.name, required this.url});
+}
+
 class EpgService {
+  static const List<EpgSourceDef> defaultSources = [
+    EpgSourceDef(
+      id: 'aio',
+      name: 'AIO (All-in-One)',
+      url: 'https://avkb.short.gy/epg.xml.gz',
+    ),
+    EpgSourceDef(
+      id: 'jio',
+      name: 'JioTV',
+      url: 'https://avkb.short.gy/jioepg.xml.gz',
+    ),
+    EpgSourceDef(
+      id: 'tataplay',
+      name: 'Tata Play',
+      url: 'https://avkb.short.gy/tsepg.xml.gz',
+    ),
+    EpgSourceDef(
+      id: 'epgshare',
+      name: 'EPGShare India',
+      url: 'https://epgshare01.online/epgshare01/epg_ripper_IN1.xml.gz',
+    ),
+  ];
+
   // Cache of all future programs: channelId/normalizedName -> list of EpgPrograms
   static final Map<String, List<EpgProgram>> _channelPrograms = {};
   // Cached channel logos extracted from EPG: channelId -> logo URL
   static final Map<String, String> _channelLogos = {};
-  // Cached channel display names: channelId -> display name (e.g., "Surya TV HD")
+  // Cached channel display names: channelId -> display name (e.g., "Asianet Movies HD")
   static final Map<String, String> _channelDisplayNames = {};
+  // Cached channel source names: channelId -> Set of source names (e.g. {"AIO (All-in-One)", "JioTV"})
+  static final Map<String, Set<String>> _channelSourceNames = {};
+  // Genuine channel IDs in loaded order
+  static final List<String> _allChannelIds = [];
+
   static bool _isLoaded = false;
   static bool _isLoading = false;
 
   static bool get isLoaded => _isLoaded;
   static bool get isLoading => _isLoading;
   static Map<String, String> get channelDisplayNames => _channelDisplayNames;
+  static Map<String, Set<String>> get channelSourceNames => _channelSourceNames;
+
+  static List<String> get availableSources => [
+    'ALL',
+    'AIO (All-in-One)',
+    'JioTV',
+    'Tata Play',
+    'EPGShare India',
+  ];
+
+  static final Map<String, String> _aliases = {
+    'flowerstv': 'flowertv',
+    'suryatv': 'sunsurya',
+    'suryamovies': 'sunsuryamovies',
+    'suryamusic': 'sunsuryamusic',
+    'suryacomedy': 'sunsuryacomedy',
+    'mazhavil': 'mazhavilmanorama',
+  };
 
   /// Fetches EPG files, decompresses using GZip, and parses active programs.
   /// Caches current and future programs to keep memory footprint light.
@@ -39,30 +92,38 @@ class EpgService {
     _channelPrograms.clear();
     _channelLogos.clear();
     _channelDisplayNames.clear();
+    _channelSourceNames.clear();
+    _allChannelIds.clear();
 
-    final urls = (customUrls != null && customUrls.where((u) => u.trim().isNotEmpty).isNotEmpty)
-        ? customUrls.where((u) => u.trim().isNotEmpty).toList()
-        : [
-            'https://avkb.short.gy/jioepg.xml.gz',
-            'https://avkb.short.gy/tsepg.xml.gz',
-          ];
+    final List<EpgSourceDef> sourcesToLoad;
+    if (customUrls != null && customUrls.where((u) => u.trim().isNotEmpty).isNotEmpty) {
+      sourcesToLoad = customUrls.where((u) => u.trim().isNotEmpty).map((url) {
+        final match = defaultSources.cast<EpgSourceDef?>().firstWhere(
+          (s) => s?.url == url,
+          orElse: () => null,
+        );
+        return match ?? EpgSourceDef(id: url, name: _deriveSourceName(url), url: url);
+      }).toList();
+    } else {
+      sourcesToLoad = defaultSources;
+    }
 
     final now = DateTime.now();
 
-    for (final url in urls) {
+    for (final src in sourcesToLoad) {
       try {
-        debugPrint('EPGService: Fetching $url...');
-        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 25));
+        debugPrint('EPGService: Fetching ${src.name} (${src.url})...');
+        final res = await http.get(Uri.parse(src.url)).timeout(const Duration(seconds: 30));
         if (res.statusCode == 200) {
-          debugPrint('EPGService: Decompressing gzip...');
+          debugPrint('EPGService: Decompressing gzip from ${src.name}...');
           final decompressedBytes = gzip.decode(res.bodyBytes);
           final xmlContent = utf8.decode(decompressedBytes);
-          
-          debugPrint('EPGService: Parsing xml content (Length: ${xmlContent.length} chars)...');
-          _parseActivePrograms(xmlContent, now);
+
+          debugPrint('EPGService: Parsing xml content for ${src.name} (Length: ${xmlContent.length} chars)...');
+          _parseActivePrograms(xmlContent, now, src.name);
         }
       } catch (e) {
-        debugPrint('EPGService: Error loading EPG from $url: $e');
+        debugPrint('EPGService: Error loading EPG from ${src.url}: $e');
       }
     }
 
@@ -73,11 +134,19 @@ class EpgService {
 
     _isLoaded = true;
     _isLoading = false;
-    debugPrint('EPGService: Finished loading EPG. Cached ${_channelPrograms.length} channel guides.');
+    debugPrint('EPGService: Finished loading EPG. Cached ${_allChannelIds.length} channels from ${sourcesToLoad.length} sources.');
   }
 
-  static void _parseActivePrograms(String xml, DateTime now) {
-    // EPG date format: "20260704100000 +0530" or "20260704100000"
+  static String _deriveSourceName(String url) {
+    if (url.contains('jio')) return 'JioTV';
+    if (url.contains('tsepg')) return 'Tata Play';
+    if (url.contains('epgshare')) return 'EPGShare India';
+    if (url.contains('epg.')) return 'AIO (All-in-One)';
+    final uri = Uri.tryParse(url);
+    return uri?.host.isNotEmpty == true ? uri!.host : 'Custom';
+  }
+
+  static void _parseActivePrograms(String xml, DateTime now, String sourceName) {
     DateTime? parseEpgTime(String? timeStr) {
       if (timeStr == null || timeStr.length < 14) return null;
       try {
@@ -87,8 +156,7 @@ class EpgService {
         final hour = int.parse(timeStr.substring(8, 10));
         final minute = int.parse(timeStr.substring(10, 12));
         final second = int.parse(timeStr.substring(12, 14));
-        
-        // Handle timezone offset if present (e.g. "+0530")
+
         var dt = DateTime.utc(year, month, day, hour, minute, second);
         if (timeStr.contains('+') || timeStr.contains('-')) {
           final parts = timeStr.split(' ');
@@ -98,19 +166,13 @@ class EpgService {
               final sign = offsetStr[0] == '+' ? 1 : -1;
               final offsetHours = int.parse(offsetStr.substring(1, 3));
               final offsetMins = int.parse(offsetStr.substring(3, 5));
-              final totalOffsetMins = (offsetHours * 60 + offsetMins) * sign;
-              
-              // Convert to local time offset
-              final utcTime = dt.subtract(Duration(minutes: totalOffsetMins));
-              dt = utcTime.toLocal();
+              final totalOffsetMins = sign * (offsetHours * 60 + offsetMins);
+              dt = dt.subtract(Duration(minutes: totalOffsetMins));
             }
           }
-        } else {
-          // If no offset is specified, treat as UTC and convert to local time
-          dt = dt.toLocal();
         }
-        return dt;
-      } catch (e) {
+        return dt.toLocal();
+      } catch (_) {
         return null;
       }
     }
@@ -135,14 +197,21 @@ class EpgService {
           if (dName != null && dName.isNotEmpty) {
             channelNames[channelId] = dName;
             _channelDisplayNames[channelId] = dName;
-            
-            // Store logo by channel ID and by normalized channel name
+            _channelSourceNames.putIfAbsent(channelId, () => {}).add(sourceName);
+            if (!_allChannelIds.contains(channelId)) {
+              _allChannelIds.add(channelId);
+            }
+
             final iconMatch = iconExp.firstMatch(content);
             if (iconMatch != null) {
               final iconUrl = iconMatch.group(1);
               if (iconUrl != null && iconUrl.isNotEmpty) {
                 _channelLogos[channelId] = iconUrl;
-                _channelLogos[dName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')] = iconUrl;
+                _channelLogos[_normalize(dName)] = iconUrl;
+                final clean = _cleanChannelName(dName);
+                if (clean.isNotEmpty) {
+                  _channelLogos[clean] = iconUrl;
+                }
               }
             }
           }
@@ -150,7 +219,7 @@ class EpgService {
       }
     }
 
-    // 2. Extract programme tags using RegExp.
+    // 2. Extract programme tags
     final exp = RegExp(
       r'<programme\s+start="([^"]+)"\s+stop="([^"]+)"\s+channel="([^"]+)"[^>]*>([\s\S]*?)<\/programme>',
       caseSensitive: false,
@@ -172,7 +241,6 @@ class EpgService {
 
       if (start == null || stop == null) continue;
 
-      // Cache any future programmes (which stop after the current time)
       if (stop.isAfter(now)) {
         final titleMatch = titleExp.firstMatch(content);
         final descMatch = descExp.firstMatch(content);
@@ -190,11 +258,15 @@ class EpgService {
         // Store by EPG channel ID
         _channelPrograms.putIfAbsent(channelId, () => []).add(prog);
 
-        // Also store by normalized display name for fuzzy text matches
+        // Also store by normalized and cleaned display name for instant fuzzy matching
         final displayName = channelNames[channelId];
         if (displayName != null) {
           final normalized = _normalize(displayName);
           _channelPrograms.putIfAbsent(normalized, () => []).add(prog);
+          final clean = _cleanChannelName(displayName);
+          if (clean.isNotEmpty && clean != normalized) {
+            _channelPrograms.putIfAbsent(clean, () => []).add(prog);
+          }
         }
       }
     }
@@ -205,18 +277,14 @@ class EpgService {
   }
 
   static String _cleanChannelName(String s) {
-    return s.toLowerCase()
-        .replaceAll('hd', '')
-        .replaceAll('sd', '')
-        .replaceAll('fhd', '')
-        .replaceAll('uhd', '')
-        .replaceAll('4k', '')
-        .replaceAll(' +1', '')
-        .replaceAll('+1', '')
-        .replaceAll('in', '')
-        .replaceAll('temp', '')
-        .replaceAll(RegExp(r'[^a-z0-9]'), '')
-        .trim();
+    var str = s.toLowerCase();
+    // Strip bracket expressions e.g. [MAL], (HD), [4K]
+    str = str.replaceAll(RegExp(r'\[.*?\]|\(.*?\)', caseSensitive: false), ' ');
+    // Strip common IPTV category/language prefixes e.g. "MAL: ", "MALAYALAM - ", "KL: "
+    str = str.replaceFirst(RegExp(r'^(mal|malayalam|kl|in|ind|south|tam|tamil|tel|telugu|kan|kannada|hin|hindi)\s*[:|\-]?\s*', caseSensitive: false), '');
+    // Strip quality tokens
+    str = str.replaceAll(RegExp(r'\b(fhd|uhd|hd|sd|4k|hevc|h265|h264|\+1|temp)\b', caseSensitive: false), ' ');
+    return str.replaceAll(RegExp(r'[^a-z0-9]'), '').trim();
   }
 
   /// Get current program info for a channel by ID or Channel Name
@@ -229,7 +297,7 @@ class EpgService {
         return p;
       }
     }
-    // Fallback: if none is currently active, check if there's one starting in the next 15 mins
+    // Fallback: next 15 minutes
     for (final p in list) {
       if (now.isBefore(p.startTime) && p.startTime.difference(now).inMinutes <= 15) {
         return p;
@@ -243,8 +311,7 @@ class EpgService {
     final list = _getProgramList(channelId, channelName);
     if (list == null || list.isEmpty) return null;
     final now = DateTime.now();
-    
-    // Find index of current program
+
     int currentIdx = -1;
     for (int i = 0; i < list.length; i++) {
       final p = list[i];
@@ -253,12 +320,11 @@ class EpgService {
         break;
       }
     }
-    
+
     if (currentIdx != -1 && currentIdx + 1 < list.length) {
       return list[currentIdx + 1];
     }
-    
-    // If no active program found, find the first program that starts in the future
+
     for (final p in list) {
       if (p.startTime.isAfter(now)) {
         return p;
@@ -272,29 +338,36 @@ class EpgService {
     final list = _getProgramList(channelId, channelName);
     if (list == null || list.isEmpty) return [];
     final now = DateTime.now();
-    
-    // Filter programs where stopTime is after now
+
     return list.where((p) => p.stopTime.isAfter(now)).toList()
       ..sort((a, b) => a.startTime.compareTo(b.startTime));
   }
 
   static List<EpgProgram>? _getProgramList(String? channelId, String? channelName) {
-    if (channelId != null) {
+    if (channelId != null && channelId.isNotEmpty) {
       if (_channelPrograms.containsKey(channelId)) return _channelPrograms[channelId];
       if (_channelPrograms.containsKey('ts$channelId')) return _channelPrograms['ts$channelId'];
+      final cleanId = _cleanChannelName(channelId);
+      if (_channelPrograms.containsKey(cleanId)) return _channelPrograms[cleanId];
     }
-    if (channelName != null) {
+    if (channelName != null && channelName.isNotEmpty) {
       final normalized = _normalize(channelName);
       if (_channelPrograms.containsKey(normalized)) return _channelPrograms[normalized];
-      
-      // Try exact clean match
+
       final cleanName = _cleanChannelName(channelName);
       if (_channelPrograms.containsKey(cleanName)) return _channelPrograms[cleanName];
-      
+
+      // Check aliases
+      final alias = _aliases[cleanName] ?? _aliases[normalized];
+      if (alias != null && _channelPrograms.containsKey(alias)) {
+        return _channelPrograms[alias];
+      }
+
       // Fuzzy prefix/contains matching
-      for (final key in _channelPrograms.keys) {
-        if (key.length > 3 && (normalized.contains(key) || key.contains(normalized))) {
-          return _channelPrograms[key];
+      for (final entry in _channelPrograms.entries) {
+        final key = entry.key;
+        if (key.length > 3 && (normalized.contains(key) || key.contains(normalized) || (cleanName.length > 3 && (cleanName.contains(key) || key.contains(cleanName))))) {
+          return entry.value;
         }
       }
     }
@@ -303,20 +376,25 @@ class EpgService {
 
   /// Get channel logo extracted from EPG by channel ID or Name
   static String? getChannelLogo(String? channelId, String? channelName) {
-    if (channelId != null) {
+    if (channelId != null && channelId.isNotEmpty) {
       if (_channelLogos.containsKey(channelId)) return _channelLogos[channelId];
       if (_channelLogos.containsKey('ts$channelId')) return _channelLogos['ts$channelId'];
+      final cleanId = _cleanChannelName(channelId);
+      if (_channelLogos.containsKey(cleanId)) return _channelLogos[cleanId];
     }
-    
-    if (channelName != null) {
+
+    if (channelName != null && channelName.isNotEmpty) {
       final normalized = _normalize(channelName);
       if (_channelLogos.containsKey(normalized)) return _channelLogos[normalized];
-      
-      // Try with HD/SD stripped version
+
       final cleanName = _cleanChannelName(channelName);
       if (_channelLogos.containsKey(cleanName)) return _channelLogos[cleanName];
-      
-      // Loop for exact matches of clean names
+
+      final alias = _aliases[cleanName] ?? _aliases[normalized];
+      if (alias != null && _channelLogos.containsKey(alias)) {
+        return _channelLogos[alias];
+      }
+
       for (final entry in _channelLogos.entries) {
         final keyClean = _cleanChannelName(entry.key);
         if (keyClean == cleanName && cleanName.length > 2) {
@@ -328,5 +406,5 @@ class EpgService {
   }
 
   /// Returns list of all unique channel IDs loaded in EPG
-  static List<String> get availableEpgChannelIds => _channelPrograms.keys.toList();
+  static List<String> get availableEpgChannelIds => _allChannelIds.isNotEmpty ? _allChannelIds : _channelDisplayNames.keys.toList();
 }

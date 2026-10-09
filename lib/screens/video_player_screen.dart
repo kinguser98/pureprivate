@@ -16,28 +16,13 @@ import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/glass_panel.dart';
 import 'package:private_cinema_mobile/data/epg_service.dart';
 import 'package:private_cinema_mobile/data/external_player_service.dart';
-import 'package:private_cinema_mobile/data/skip_intro_service.dart';
-import 'package:video_player/video_player.dart' as vp;
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:private_cinema_mobile/widgets/marquee_text.dart';
+import 'package:private_cinema_mobile/data/skip_intro_service.dart';
+import 'package:private_cinema_mobile/data/modular_source_service.dart';
 import '../widgets/stream_metadata_tile.dart';
-
-enum PlayerEngine { exoPlayer, mediaKit }
-
-class _HlsVariant {
-  final String name;
-  final String url;
-  final int? height;
-  _HlsVariant({required this.name, required this.url, this.height});
-}
-
-class _HlsAudio {
-  final String name;
-  final String language;
-  final String? url;
-  _HlsAudio({required this.name, required this.language, this.url});
-}
+import 'package:private_cinema_mobile/widgets/netflix_intro_badge.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -74,21 +59,18 @@ class VideoPlayerScreen extends StatefulWidget {
   final int? season;
   final int? episode;
   final bool isTvShow;
-  final int? year;
-  final String? genre;
-  final String? contentRating;
+  final dynamic year;
+  final dynamic genre;
+  final dynamic contentRating;
   final int? skipIntroSeconds;
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
 }
 
-class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProviderStateMixin {
+class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
-  vp.VideoPlayerController? _exoController;
-  PlayerEngine _playerEngine = PlayerEngine.mediaKit;
-  bool get _isExoPlayer => _playerEngine == PlayerEngine.exoPlayer;
   int _lastSavedMs = 0;
 
   bool _ready = false;
@@ -100,10 +82,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
   bool _showInitialTrackSelector = false;
   AudioTrack? _selectedAudioTrack;
   VideoTrack? _selectedVideoTrack;
-  List<_HlsVariant> _hlsVariants = [];
-  _HlsVariant? _selectedHlsVariant;
-  List<_HlsAudio> _hlsAudios = [];
-  _HlsAudio? _selectedHlsAudio;
+  bool _initialVideoQualityAdjusted = false;
   bool _trackSelectorScheduled = false;
   bool _hasStartedPlaying = false;
   bool _hasError = false;
@@ -112,6 +91,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
   
   Timer? _clockTimer;
   String _timeString = '';
+  
+  // Netflix-Style Metadata Intro state
+  bool _hasTriggeredNetflixIntro = false;
+  bool _isNetflixMetaVisible = false;
+  Timer? _netflixMetaDismissTimer;
+
+  // Skip Intro Feature state
+  bool _hasTriggeredSkipIntro = false;
+  bool _hasDismissedSkipIntro = false;
+  bool _isSkipIntroVisible = false;
+  int _skipIntroCountdown = 10;
+  Timer? _skipIntroCountdownTimer;
   
   // Zoom & Pan variables
   double _videoScale = 1.0;
@@ -136,21 +127,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
 
   // Lock Controls State
   bool _controlsLocked = false;
-
-  // Netflix-style opening intro badge
-  late final AnimationController _netflixBadgeAnimController;
-  late final Animation<double> _badgeLineAnimation;
-  late final Animation<Offset> _badgeTextSlideAnimation;
-  late final Animation<double> _badgeTextFadeAnimation;
-  bool _netflixBadgeVisible = false;
-  bool _netflixBadgeTriggered = false;
-  Timer? _netflixBadgeTimer;
-
-  // Skip Intro button
-  bool _showSkipIntroButton = false;
-  bool _skipIntroTriggered = false;
-  int _skipIntroCountdown = 5;
-  Timer? _skipIntroTimer;
 
   Timer? _hideControlsTimer;
   Timer? _playerLogoTimer;
@@ -300,11 +276,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
       _playbackSpeed = nextSpeed;
     });
     
-    if (_isExoPlayer && _exoController != null) {
-      _exoController!.setPlaybackSpeed(nextSpeed);
-    } else {
-      _player.setRate(nextSpeed);
-    }
+    _player.setRate(nextSpeed);
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Playback speed: ${nextSpeed}x')),
@@ -344,12 +316,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     _player = Player();
     _controller = VideoController(
       _player,
-      configuration: VideoControllerConfiguration(
-        hwdec: Platform.isAndroid ? 'mediacodec' : 'auto-safe',
+      configuration: const VideoControllerConfiguration(
+        hwdec: 'auto-safe',
       ),
     );
     _bindStreams();
-    _initEngineAndOpen();
+    _open();
     
     _loadEPG();
     _epgRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) => _loadEPG());
@@ -359,42 +331,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     _startProxyStatsTimer();
     _startPlayerLogoTimer();
     _initSystemBrightnessAndVolume();
-
-    // Initialize Netflix Intro badge animations
-    _netflixBadgeAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 650),
-    );
-    _badgeLineAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _netflixBadgeAnimController,
-        curve: const Interval(0.0, 0.45, curve: Curves.easeOutCubic),
-      ),
-    );
-    _badgeTextSlideAnimation = Tween<Offset>(
-      begin: const Offset(-0.25, 0.0),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(
-        parent: _netflixBadgeAnimController,
-        curve: const Interval(0.30, 1.0, curve: Curves.easeOutCubic),
-      ),
-    );
-    _badgeTextFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _netflixBadgeAnimController,
-        curve: const Interval(0.30, 0.85, curve: Curves.easeOut),
-      ),
-    );
-  }
-
-  Future<void> _initEngineAndOpen() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final enginePref = prefs.getString('preferred_player_engine') ?? 'mediakit';
-      _playerEngine = (enginePref == 'exoplayer') ? PlayerEngine.exoPlayer : PlayerEngine.mediaKit;
-    } catch (_) {}
-    await _open();
   }
 
   Future<void> _initSystemBrightnessAndVolume() async {
@@ -466,7 +402,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     });
   }
 
-
   @override
   void dispose() {
     try {
@@ -477,13 +412,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     _hudTimer?.cancel();
     _clockTimer?.cancel();
     _epgRefreshTimer?.cancel();
-    _playerLogoTimer?.cancel();
-    _netflixBadgeTimer?.cancel();
-    _netflixBadgeAnimController.dispose();
-    _skipIntroTimer?.cancel();
-    _exoController?.removeListener(_onExoListener);
-    _exoController?.dispose();
-    _exoController = null;
+    _netflixMetaDismissTimer?.cancel();
+    _skipIntroCountdownTimer?.cancel();
     _player.dispose();
     
     // Lock back to portrait mode when exiting player
@@ -508,7 +438,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         final lastMs = _position.inMilliseconds;
         final currentMs = v.inMilliseconds;
         _position = v;
-        _checkIntroTriggers(v);
 
         if (currentMs > 0 && !_hasStartedPlaying) {
           _hasStartedPlaying = true;
@@ -521,6 +450,51 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
               }
             });
           }
+        }
+
+        // Reset triggers if user seeks back to absolute start (< 1.5s)
+        if (currentMs < 1500) {
+          _hasTriggeredNetflixIntro = false;
+          _hasTriggeredSkipIntro = false;
+          _hasDismissedSkipIntro = false;
+        }
+
+        // Trigger Netflix-Style Metadata Intro at >= 2000ms
+        if (!widget.isLive && !_hasTriggeredNetflixIntro && currentMs >= 2000) {
+          _hasTriggeredNetflixIntro = true;
+          _isNetflixMetaVisible = true;
+          _netflixMetaDismissTimer?.cancel();
+          _netflixMetaDismissTimer = Timer(const Duration(milliseconds: 8500), () {
+            if (mounted) setState(() => _isNetflixMetaVisible = false);
+          });
+          setState(() {});
+        }
+
+        // Trigger Skip Intro at >= 4000ms if configured intro seconds exists
+        final effectiveIntroSec = widget.skipIntroSeconds ?? SkipIntroService.getSkipIntro(movieId: widget.movieId, title: widget.title);
+        if (!widget.isLive && effectiveIntroSec != null && effectiveIntroSec > 0 &&
+            !_hasTriggeredSkipIntro && !_hasDismissedSkipIntro &&
+            currentMs >= 4000 && currentMs < (effectiveIntroSec - 2) * 1000) {
+          _hasTriggeredSkipIntro = true;
+          _isSkipIntroVisible = true;
+          _skipIntroCountdown = 10;
+          _skipIntroCountdownTimer?.cancel();
+          _skipIntroCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+            if (!mounted || _hasDismissedSkipIntro) {
+              t.cancel();
+              return;
+            }
+            if (_skipIntroCountdown > 1) {
+              setState(() => _skipIntroCountdown--);
+            } else {
+              t.cancel();
+              setState(() {
+                _isSkipIntroVisible = false;
+                _hasDismissedSkipIntro = true;
+              });
+            }
+          });
+          setState(() {});
         }
 
         // Automatic fallback watchdog: if audio is playing but video frames failed to render with hardware decoding
@@ -575,6 +549,56 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         }
       }
     });
+    _player.stream.tracks.listen((tracks) async {
+      if (mounted) {
+        if (_showControls) setState(() {});
+
+        // Auto-select 1080p on initial load for multi-quality / 4K streams to prevent long buffer times & decoding lag
+        if (!_initialVideoQualityAdjusted && tracks.video.isNotEmpty) {
+          final realVideoTracks = tracks.video.where((t) => t.id != 'auto' && t.id != 'no').toList();
+          if (realVideoTracks.length > 1) {
+            final has4kOrHigher = realVideoTracks.any((t) =>
+                (t.h != null && t.h! > 1080) ||
+                (t.w != null && t.w! > 1920) ||
+                (t.title?.toLowerCase().contains('4k') == true) ||
+                (t.title?.toLowerCase().contains('2160') == true) ||
+                (t.title?.toLowerCase().contains('3840') == true) ||
+                (t.title?.toLowerCase().contains('ultrahd') == true) ||
+                (t.title?.toLowerCase().contains('quadhd') == true) ||
+                (t.title?.toLowerCase().contains('1440') == true));
+
+            if (has4kOrHigher) {
+              VideoTrack? track1080;
+              for (final t in realVideoTracks) {
+                if ((t.h != null && t.h == 1080) ||
+                    (t.w != null && t.w == 1920) ||
+                    (t.title?.toLowerCase().contains('1080') == true) ||
+                    (t.title?.toLowerCase().contains('fullhd') == true) ||
+                    (t.title?.toLowerCase().contains('1920x1080') == true)) {
+                  track1080 = t;
+                  break;
+                }
+              }
+              if (track1080 == null) {
+                for (final t in realVideoTracks) {
+                  if ((t.h != null && t.h! <= 1080 && t.h! >= 720) ||
+                      (t.title?.toLowerCase().contains('720') == true)) {
+                    track1080 = t;
+                    break;
+                  }
+                }
+              }
+
+              if (track1080 != null && _player.state.track.video.id != track1080.id) {
+                _initialVideoQualityAdjusted = true;
+                debugPrint('VideoPlayerScreen: Multi-quality stream detected with 4K. Auto-switching initial load to 1080p: ${track1080.title ?? track1080.h}');
+                await _player.setVideoTrack(track1080);
+              }
+            }
+          }
+        }
+      }
+    });
     _player.stream.error.listen((e) async {
       debugPrint('VideoPlayerScreen player error: $e');
       if (mounted) {
@@ -599,6 +623,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
           if (_player.platform is NativePlayer) {
             final nativePlayer = _player.platform as NativePlayer;
             await nativePlayer.setProperty('hwdec', 'no');
+            if (_resolvedSourceUrl!.contains('.mpd') || _resolvedSourceUrl!.contains('okcdn') || _resolvedSourceUrl!.contains('vkuser')) {
+              await nativePlayer.setProperty('demuxer-lavf-format', 'dash');
+            }
             await _player.open(
               Media(_resolvedSourceUrl!, httpHeaders: _resolvedSourceHeaders),
               play: true,
@@ -628,7 +655,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     });
   }
 
-  Future<void> _open({int seekToMs = 0}) async {
+  Future<void> _open() async {
     try {
       final shouldExternal = await ExternalPlayerService.shouldPlayInExternalPlayer(
         url: widget.videoSource,
@@ -650,7 +677,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         }
       }
 
-      if (seekToMs <= 0 && widget.movieId != null) {
+      int seekToMs = 0;
+      if (widget.movieId != null) {
         final savedMs = await PlaybackTracker.getSavedPosition(widget.movieId!);
         if (savedMs > 10000) {
           if (widget.resumeDirectly) {
@@ -666,33 +694,64 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         }
       }
 
-      final lowerUrl = widget.videoSource.toLowerCase();
-      final isTelegramStream = lowerUrl.contains(':8088') ||
-                               lowerUrl.contains('68.233.107.119') ||
-                               lowerUrl.contains('/api/download/') ||
-                               lowerUrl.contains('/api/stream/') ||
-                               (widget.sourceName?.toLowerCase().contains('telegram') ?? false) ||
-                               (widget.subtitle?.toLowerCase().contains('telegram') ?? false);
-
+      var rawSource = widget.videoSource;
       final Map<String, String> playHeaders = {};
-      final isLocalStream = widget.videoSource.contains('127.0.0.1') || 
-                            widget.videoSource.contains('localhost') || 
-                            widget.videoSource.contains('/f/');
 
-      if (widget.headers != null) {
-        playHeaders.addAll(widget.headers!);
-      } else if (!isLocalStream && widget.videoSource.startsWith('http')) {
-        playHeaders.addAll({
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          if (widget.videoSource.contains('.m3u8') || widget.videoSource.contains('/hls/'))
-            'Referer': 'https://streamimdb.ru/',
-        });
+      // Handle piped URL headers (e.g. url|Referer=...&user_agent=...)
+      if (rawSource.contains('|')) {
+        final parts = rawSource.split('|');
+        rawSource = parts[0].trim();
+        for (int p = 1; p < parts.length; p++) {
+          final subParts = parts[p].split('&');
+          for (final sp in subParts) {
+            final eqIdx = sp.indexOf('=');
+            if (eqIdx != -1) {
+              final k = sp.substring(0, eqIdx).trim();
+              final v = Uri.decodeComponent(sp.substring(eqIdx + 1).trim());
+              if (k.toLowerCase() == 'referer') {
+                playHeaders['Referer'] = v;
+              } else if (k.toLowerCase() == 'user_agent' || k.toLowerCase() == 'user-agent') {
+                playHeaders['User-Agent'] = v;
+              } else {
+                playHeaders[k] = v;
+              }
+            }
+          }
+        }
+      }
+
+      final isLocalStream = rawSource.contains('127.0.0.1') || 
+                            rawSource.contains('localhost') || 
+                            rawSource.contains('/f/');
+
+      if (!isLocalStream) {
+        if (widget.headers != null) {
+          playHeaders.addAll(widget.headers!);
+        } else if (rawSource.startsWith('http')) {
+          playHeaders.addAll({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            if (rawSource.contains('.m3u8') || rawSource.contains('/hls/'))
+              'Referer': 'https://streamimdb.ru/',
+          });
+        }
+      }
+
+      // Auto-inject headers for iStream / OKCDN / VKUser / X7Flix / Molop providers
+      final lowerRaw = rawSource.toLowerCase();
+      if (lowerRaw.contains('x7flix') || lowerRaw.contains('molop.art')) {
+        playHeaders['Referer'] ??= 'https://molop.art/';
+        playHeaders['Origin'] ??= 'https://molop.art';
+        playHeaders['User-Agent'] ??= 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+      } else if (lowerRaw.contains('okcdn') || lowerRaw.contains('vkuser') || lowerRaw.contains('istream') || lowerRaw.contains('ox.php')) {
+        playHeaders['Referer'] ??= 'https://istreamflare.in/';
+        playHeaders['Origin'] ??= 'https://istreamflare.in';
+        playHeaders['User-Agent'] ??= 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
       }
       
       // Parse inline headers from the stream URL if present
-      if (!isLocalStream && widget.videoSource.startsWith('http')) {
+      if (!isLocalStream && rawSource.startsWith('http')) {
         try {
-          final uri = Uri.parse(widget.videoSource);
+          final uri = Uri.parse(rawSource);
           if (uri.queryParameters.containsKey('headers')) {
             final jsonHeaders = jsonDecode(uri.queryParameters['headers']!);
             if (jsonHeaders is Map) {
@@ -706,18 +765,49 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         }
       }
 
+      _initialVideoQualityAdjusted = false;
+
+      // Pre-resolve client-side redirectors (e.g. iStream ox.php, mflare, istreamcdn)
+      // to obtain the final direct media URL (e.g., vkuser.net DASH MPD) before player initialization.
+      if (!isLocalStream && (rawSource.contains('ox.php') || rawSource.contains('/ox/') || rawSource.contains('mflare') || rawSource.contains('istreamcdn'))) {
+        try {
+          final resolved = await ModularSourceService.resolveStreamRedirect(rawSource, headers: playHeaders);
+          if (resolved.isNotEmpty && resolved != rawSource) {
+            rawSource = resolved;
+            debugPrint('VideoPlayerScreen: Pre-resolved redirector -> $rawSource');
+          }
+        } catch (e) {
+          debugPrint('VideoPlayerScreen: Pre-resolve note: $e');
+        }
+      }
+
+      rawSource = ModularSourceService.ensureMpdExtension(rawSource);
+
       if (_player.platform is NativePlayer) {
         final nativePlayer = _player.platform as NativePlayer;
         
         // Disable SSL/TLS verification to prevent Cloudflare certificate trust chain issues
         await nativePlayer.setProperty('tls-verify', 'no');
         
+        // Auto-favor 1080p maximum default resolution for adaptive / DASH streams so initial load is swift
+        await nativePlayer.setProperty('ytdl-format', 'bestvideo[height<=?1080]+bestaudio/best[height<=?1080]/best');
+        
+        final isDashStream = rawSource.contains('.mpd') ||
+                             rawSource.contains('okcdn.ru') ||
+                             rawSource.contains('vkuser.net') ||
+                             rawSource.contains('mycdn.me');
+        if (isDashStream) {
+          await nativePlayer.setProperty('demuxer-lavf-format', 'dash');
+        } else {
+          await nativePlayer.setProperty('demuxer-lavf-format', '');
+        }
+        
         if (!Platform.isIOS) {
           // Force IPv4 DNS lookups to avoid broken/blocked IPv6 routing on some carriers/ISPs
           await nativePlayer.setProperty('dns-lookup-family', 'ipv4');
         }
         
-        if (isLocalStream && playHeaders.isEmpty) {
+        if (isLocalStream) {
           // Exact diagnostic configuration for local/loopback Telegram streams
           await nativePlayer.setProperty('network-timeout', '60');
           await nativePlayer.setProperty('demuxer-max-bytes', '32MiB');
@@ -734,8 +824,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
           }
           final headerList = <String>[];
           playHeaders.forEach((key, value) {
-            final lk = key.toLowerCase();
-            if (lk != 'user-agent') {
+            final kLower = key.toLowerCase();
+            if (kLower != 'user-agent' && kLower != 'referer') {
               headerList.add('$key: $value');
             }
           });
@@ -744,95 +834,57 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
           }
         }
         // Hardware decoding configuration
-        // Hardware decoding configuration
-        // On Android, mediacodec gives smooth native decoding without surface texture corruption.
+        // 'auto-safe' selects safe copy-back hwdec (mediacodec-copy on Android, videotoolbox-copy on iOS)
+        // and enables seamless fallback to FFmpeg software decoding for non-compliant MKV Annex-B streams.
         if (_isSoftwareDecoding) {
           await nativePlayer.setProperty('hwdec', 'no');
         } else {
-          if (Platform.isAndroid) {
-            await nativePlayer.setProperty('hwdec', 'mediacodec');
-          } else if (Platform.isIOS) {
-            await nativePlayer.setProperty('hwdec', 'videotoolbox');
-          } else {
-            await nativePlayer.setProperty('hwdec', 'auto-safe');
-          }
+          await nativePlayer.setProperty('hwdec', 'auto');
           await nativePlayer.setProperty('hwdec-codecs', 'all');
         }
         await nativePlayer.setProperty('video-sync', 'audio');
         await nativePlayer.setProperty('vd-lavc-threads', '0');
         await nativePlayer.setProperty('ad-lavc-downmix', 'yes');
-        if (Platform.isAndroid) {
-          await nativePlayer.setProperty('audio-pitch-correction', 'yes');
-          await nativePlayer.setProperty('ad-lavc-downmix', 'yes');
-          await nativePlayer.setProperty('ad-lavc-threads', '2');
-          await nativePlayer.setProperty('vd-lavc-fast', 'yes');
-          await nativePlayer.setProperty('vd-lavc-skiploopfilter', 'nonref');
-          await nativePlayer.setProperty('profile', 'fast');
-          await nativePlayer.setProperty('framedrop', 'vo');
-        }
+        await nativePlayer.setProperty('audio-pitch-correction', 'yes');
+        await nativePlayer.setProperty('vd-lavc-dr', 'yes');
+        await nativePlayer.setProperty('vd-lavc-fast', 'yes');
+        await nativePlayer.setProperty('vd-lavc-skiploopfilter', 'nonref');
+        await nativePlayer.setProperty('profile', 'fast');
+        await nativePlayer.setProperty('opengl-pbo', 'yes');
+        await nativePlayer.setProperty('framedrop', 'vo');
         
         if (widget.isLive) {
-          await nativePlayer.setProperty('keep-open', 'yes');
-          await nativePlayer.setProperty('stream-live', 'yes');
-          await nativePlayer.setProperty('framedrop', 'vo');
-          await nativePlayer.setProperty('autosync', '0');
-          await nativePlayer.setProperty('correct-pts', 'yes');
           await nativePlayer.setProperty('cache', 'yes');
           await nativePlayer.setProperty('cache-on-disk', 'no');
           await nativePlayer.setProperty('demuxer-readahead-secs', '4');
           await nativePlayer.setProperty('cache-secs', '10');
-          await nativePlayer.setProperty('demuxer-max-bytes', '20971520'); // 20 MB
-          await nativePlayer.setProperty('demuxer-max-back-bytes', '4194304'); // 4 MB
+          await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '8388608');
           await nativePlayer.setProperty('cache-pause', 'no');
           await nativePlayer.setProperty('cache-pause-wait', '0');
           await nativePlayer.setProperty('cache-pause-initial', 'no');
           await nativePlayer.setProperty('network-timeout', '20');
           await nativePlayer.setProperty('hr-seek', 'no');
+          await nativePlayer.setProperty('framedrop', 'vo');
+          await nativePlayer.setProperty('autosync', '0');
+          await nativePlayer.setProperty('correct-pts', 'yes');
           await nativePlayer.setProperty('audio-pitch-correction', 'yes');
           await nativePlayer.setProperty('demuxer-lavf-probesize', '65536');
           await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1');
         } else if (!isLocalStream) {
-          await nativePlayer.setProperty('keep-open', 'no');
+          await nativePlayer.setProperty('network-timeout', '30');
+          await nativePlayer.setProperty('cache', 'yes');
+          await nativePlayer.setProperty('cache-on-disk', 'no');
+          await nativePlayer.setProperty('demuxer-max-bytes', '134217728'); // 128 MB RAM buffer
+          await nativePlayer.setProperty('demuxer-max-back-bytes', '33554432'); // 32 MB back buffer
+          await nativePlayer.setProperty('demuxer-readahead-secs', '30'); // Buffer up to 30 seconds ahead
+          await nativePlayer.setProperty('cache-secs', '30');
+          await nativePlayer.setProperty('cache-pause', 'yes');
+          await nativePlayer.setProperty('cache-pause-wait', '2'); // Buffer at least 2s before resuming to prevent frame stutter
+          await nativePlayer.setProperty('cache-pause-initial', 'yes');
+          await nativePlayer.setProperty('demuxer-lavf-buffersize', '1048576');
+          await nativePlayer.setProperty('stream-buffer-size', '2097152');
           await nativePlayer.setProperty('stream-live', 'no');
-          if (isTelegramStream) {
-            // =========================================================================
-            // DEDICATED TELEGRAM PREMIUM FAST-SEEK & NO-STALL CONFIGURATION
-            // =========================================================================
-            await nativePlayer.setProperty('network-timeout', '10');
-            await nativePlayer.setProperty('cache', 'yes');
-            await nativePlayer.setProperty('cache-on-disk', 'no');
-            await nativePlayer.setProperty('demuxer-max-bytes', '25165824'); // 24 MB forward buffer
-            await nativePlayer.setProperty('demuxer-max-back-bytes', '4194304'); // 4 MB back buffer
-            await nativePlayer.setProperty('demuxer-readahead-secs', '20');
-            await nativePlayer.setProperty('cache-secs', '20');
-            await nativePlayer.setProperty('cache-pause', 'no');
-            await nativePlayer.setProperty('cache-pause-wait', '0');
-            await nativePlayer.setProperty('cache-pause-initial', 'no');
-            await nativePlayer.setProperty('hr-seek', 'no'); // Keyframe seek
-            await nativePlayer.setProperty('hr-seek-framedrop', 'yes');
-            await nativePlayer.setProperty('demuxer-seekable-cache', 'no');
-            await nativePlayer.setProperty('demuxer-lavf-probesize', '1048576');
-            await nativePlayer.setProperty('demuxer-lavf-analyzeduration', '1.5');
-            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0,reconnect=0');
-          } else {
-            // =========================================================================
-            // ORIGINAL CONFIGURATION FOR ALL OTHER SOURCES (NetMirror, Vegamovies, Alist, etc.)
-            // =========================================================================
-            await nativePlayer.setProperty('network-timeout', '30');
-            await nativePlayer.setProperty('cache', 'yes');
-            await nativePlayer.setProperty('cache-on-disk', 'no');
-            await nativePlayer.setProperty('demuxer-max-bytes', '20971520');
-            await nativePlayer.setProperty('demuxer-max-back-bytes', '4194304');
-            await nativePlayer.setProperty('demuxer-readahead-secs', '10');
-            await nativePlayer.setProperty('cache-secs', '10');
-            await nativePlayer.setProperty('cache-pause-wait', '0');
-            await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
-          }
-        } else {
-          // Local/loopback stream seeking optimizations
-          await nativePlayer.setProperty('hr-seek', 'no');
-          await nativePlayer.setProperty('hr-seek-framedrop', 'yes');
-          await nativePlayer.setProperty('demuxer-seekable-cache', 'yes');
         }
         
         await nativePlayer.setProperty('force-seekable', 'yes');
@@ -843,48 +895,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         // For live streams, use persistent HTTP connections and resilient reconnect options
         if (widget.isLive) {
           await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=1,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_http_error=4xx,5xx,reconnect_on_network_error=1');
+        } else {
+          await nativePlayer.setProperty('demuxer-lavf-o', 'http_persistent=0');
         }
       }
 
-      var resolvedSource = widget.videoSource;
+      var resolvedSource = rawSource;
       bool isProxied = false;
-
-      // Resolve client-side 302 redirect for iStream / OKCDN to prevent mpv/libavformat dropping Referer on cross-origin redirect
-      final lowerCheck = resolvedSource.toLowerCase();
-      if (lowerCheck.contains('ox.php') || lowerCheck.contains('istreamcdn.com') || lowerCheck.contains('/ox/')) {
-        try {
-          final client = HttpClient();
-          client.badCertificateCallback = (cert, host, port) => true;
-          final uri = Uri.parse(resolvedSource);
-          final req = await client.getUrl(uri).timeout(const Duration(seconds: 4));
-          req.followRedirects = false;
-          req.headers.set('User-Agent', playHeaders['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-          req.headers.set('Referer', playHeaders['Referer'] ?? 'https://istreamflare.in/');
-          final resp = await req.close().timeout(const Duration(seconds: 4));
-          final loc = resp.headers.value('location');
-          client.close();
-          if (loc != null && loc.isNotEmpty) {
-            resolvedSource = uri.resolve(loc).toString();
-            debugPrint('VideoPlayerScreen: Direct resolved iStream redirect: $resolvedSource');
-          }
-        } catch (e) {
-          debugPrint('VideoPlayerScreen: Error direct resolving iStream redirect: $e');
-        }
-      }
-
-      final lowerCheck2 = resolvedSource.toLowerCase();
-      if (lowerCheck2.contains('okcdn.ru') ||
-          lowerCheck2.contains('ok.ru') ||
-          lowerCheck2.contains('x7flix.com') ||
-          lowerCheck2.contains('istreamflare') ||
-          lowerCheck2.contains('istreamcdn') ||
-          lowerCheck2.contains('iasbase.net') ||
-          lowerCheck2.contains('donmkv.com') ||
-          lowerCheck2.contains('molop.art')) {
-        playHeaders['Referer'] = 'https://istreamflare.in/';
-        playHeaders['Origin'] = 'https://istreamflare.in';
-        playHeaders['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-      }
       
       if (resolvedSource.startsWith('http')) {
         try {
@@ -900,6 +917,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
           final hasStalkerCookie = playHeaders.entries.any(
             (e) => e.key.toLowerCase() == 'cookie' && e.value.toLowerCase().contains('mac='),
           );
+          final isDirectMpdOrOkcdn = lowerUrl.contains('okcdn.ru') ||
+                                     lowerUrl.contains('vkuser.net') ||
+                                     lowerUrl.contains('istreamcdn.com') ||
+                                     lowerUrl.contains('ox.php') ||
+                                     lowerUrl.contains('/ox/') ||
+                                     lowerUrl.contains('mflare') ||
+                                     lowerUrl.contains('.mpd');
           if (widget.isLive ||
               lowerSubtitle.contains('stalker') ||
               lowerSubtitle.contains('castle') ||
@@ -907,37 +931,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
               lowerSubtitle.contains('streamplay') ||
               lowerSubtitle.contains('moviebox') ||
               lowerSubtitle.contains('netmirror') ||
-              lowerSubtitle.contains('vegamovies') ||
-              lowerSubtitle.contains('cinejoy') ||
-              lowerSubtitle.contains('moviesdrive') ||
-              lowerSubtitle.contains('hdhub4u') ||
-              lowerSubtitle.contains('movy') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerSourceName.contains('streamplay') ||
               lowerSourceName.contains('moviebox') ||
               lowerSourceName.contains('netmirror') ||
-              lowerSourceName.contains('vegamovies') ||
-              lowerSourceName.contains('cinejoy') ||
-              lowerSourceName.contains('moviesdrive') ||
-              lowerSourceName.contains('hdhub4u') ||
-              lowerSourceName.contains('movy') ||
-              lowerUrl.contains('castle') ||
+              isDirectMpdOrOkcdn ||
+              lowerUrl.contains('exposeworld.art') ||
+              lowerUrl.contains('vidlink.pro') ||
+              lowerUrl.contains('hlowb.com') ||
+              lowerUrl.contains('imgcdn.kim') ||
               lowerUrl.contains('freecdn') ||
-              lowerUrl.contains('imgcdn') ||
-              lowerUrl.contains('net52.cc') ||
-              lowerUrl.contains('net77.cc') ||
-              lowerUrl.contains('netmirror') ||
+              lowerUrl.contains('castle') ||
               lowerUrl.contains('127.0.0.1') ||
               lowerUrl.contains('localhost') ||
               lowerUrl.contains('/tg/') ||
               lowerUrl.contains('/f/') ||
-              lowerUrl.contains('/api/download/') ||
-              lowerUrl.contains('/api/stream/') ||
-              lowerUrl.contains('koyeb.app') ||
-              lowerUrl.contains('68.233.107.119') ||
-              lowerUrl.contains(':8088') ||
               hasStalkerCookie) {
             shouldProxy = false;
           }
@@ -990,90 +1000,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
       _resolvedSourceUrl = resolvedSource;
       _resolvedSourceHeaders = playHeaders;
       _hasAttemptedFallback = false;
-
-      if (resolvedSource.contains('.m3u8')) {
-        _parseHlsManifest(resolvedSource, playHeaders);
-      }
-
-      if (_isExoPlayer) {
-        try {
-          _exoController?.removeListener(_onExoListener);
-          try {
-            await _exoController?.dispose();
-          } catch (_) {}
-          _exoController = null;
-
-          final isLocalFile = resolvedSource.startsWith('/') || resolvedSource.startsWith('file://');
-          if (isLocalFile) {
-            final filePath = resolvedSource.startsWith('file://') ? resolvedSource.substring(7) : resolvedSource;
-            _exoController = vp.VideoPlayerController.file(
-              File(filePath),
-              videoPlayerOptions: vp.VideoPlayerOptions(
-                mixWithOthers: false,
-                allowBackgroundPlayback: false,
-              ),
-            );
-          } else {
-            _exoController = vp.VideoPlayerController.networkUrl(
-              Uri.parse(resolvedSource),
-              httpHeaders: playHeaders,
-              videoPlayerOptions: vp.VideoPlayerOptions(
-                mixWithOthers: false,
-                allowBackgroundPlayback: false,
-              ),
-            );
-          }
-
-          _exoController!.addListener(_onExoListener);
-          await _exoController!.initialize();
-          await _exoController!.setVolume(_volume / 100.0);
-
-          if (seekToMs > 0) {
-            await _exoController!.seekTo(Duration(milliseconds: seekToMs));
-          }
-
-          await _exoController!.play();
-
-          if (mounted) {
-            setState(() {
-              _ready = true;
-              _playing = true;
-              _hasStartedPlaying = true;
-              _duration = _exoController!.value.duration;
-              _position = _exoController!.value.position;
-            });
-          }
-          _armHideControls();
-          return;
-        } catch (exoErr) {
-          debugPrint('ExoPlayer initialization failed ($exoErr), falling back to MediaKit...');
-          _exoController?.removeListener(_onExoListener);
-          try {
-            await _exoController?.dispose();
-          } catch (_) {}
-          _exoController = null;
-          if (mounted) {
-            setState(() {
-              _playerEngine = PlayerEngine.mediaKit;
-            });
-          }
-        }
-      }
-
-      if (_player.platform is NativePlayer && playHeaders.isNotEmpty) {
-        final nativePlayer = _player.platform as NativePlayer;
-        final headerList = <String>[];
-        playHeaders.forEach((key, value) {
-          final lk = key.toLowerCase();
-          if (lk != 'user-agent') {
-            headerList.add('$key: $value');
-          }
-        });
-        if (headerList.isNotEmpty) {
-          await nativePlayer.setProperty('http-header-fields', headerList.join(','));
-        }
-      }
-
       await _player.open(Media(resolvedSource, httpHeaders: playHeaders), play: true);
       
       if (seekToMs > 0) {
@@ -1096,227 +1022,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
       _armHideControls();
     } catch (e) {
       if (!mounted) return;
-      if (_isExoPlayer && !_hasAttemptedFallback) {
-        _hasAttemptedFallback = true;
-        debugPrint('ExoPlayer open failed ($e), falling back to MediaKit...');
-        _switchEngine(PlayerEngine.mediaKit);
-        return;
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not play stream: $e')),
-      );
-    }
-  }
-
-  void _onExoListener() {
-    if (_exoController == null || !mounted) return;
-    final value = _exoController!.value;
-
-    if (value.hasError) {
-      debugPrint('ExoPlayer runtime error: ${value.errorDescription}');
-      if (!_hasError) {
-        if (!_hasAttemptedFallback) {
-          _hasAttemptedFallback = true;
-          debugPrint('ExoPlayer error. Falling back to MediaKit...');
-          _switchEngine(PlayerEngine.mediaKit);
-          return;
-        }
-        setState(() => _hasError = true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Playback Error: ${value.errorDescription}'),
-            backgroundColor: Colors.redAccent,
-            duration: const Duration(seconds: 8),
-          ),
-        );
-      }
-      return;
-    }
-
-    if (value.isInitialized) {
-      final currentPos = value.position;
-      final currentDur = value.duration;
-      final isPlaying = value.isPlaying;
-      final isBuffering = value.isBuffering;
-
-      if (!_ready && currentDur > Duration.zero) {
-        _ready = true;
-      }
-      if (!_hasStartedPlaying && isPlaying) {
-        _hasStartedPlaying = true;
-      }
-
-      _position = currentPos;
-      _duration = currentDur;
-      _playing = isPlaying;
-      _buffering = isBuffering;
-
-      final currentMs = currentPos.inMilliseconds;
-      if (widget.movieId != null && currentDur.inMilliseconds > 0 && (currentMs - _lastSavedMs).abs() > 10000) {
-        _lastSavedMs = currentMs;
-        PlaybackTracker.saveProgress(widget.movieId!, currentMs, currentDur.inMilliseconds);
-      }
-
-      _checkIntroTriggers(currentPos);
-
-      if (_showControls) {
-        setState(() {});
-      }
-    }
-  }
-
-  Future<void> _parseHlsManifest(String masterUrl, Map<String, String> headers) async {
-    try {
-      final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 5);
-      client.badCertificateCallback = (cert, host, port) => true;
-      final req = await client.getUrl(Uri.parse(masterUrl));
-      headers.forEach((k, v) => req.headers.set(k, v));
-      final res = await req.close().timeout(const Duration(seconds: 5));
-      if (res.statusCode == 200) {
-        final body = await res.transform(utf8.decoder).join();
-        client.close();
-        final baseUri = Uri.parse(masterUrl);
-        final lines = body.split('\n');
-        final variants = <_HlsVariant>[];
-        final audios = <_HlsAudio>[];
-
-        variants.add(_HlsVariant(name: 'Auto', url: masterUrl));
-
-        for (int i = 0; i < lines.length; i++) {
-          final line = lines[i].trim();
-          if (line.startsWith('#EXT-X-STREAM-INF')) {
-            int? height;
-            final resMatch = RegExp(r'RESOLUTION=\d+x(\d+)').firstMatch(line);
-            if (resMatch != null) {
-              height = int.tryParse(resMatch.group(1)!);
-            }
-            if (i + 1 < lines.length) {
-              final nextLine = lines[i + 1].trim();
-              if (nextLine.isNotEmpty && !nextLine.startsWith('#')) {
-                final variantUri = baseUri.resolve(nextLine).toString();
-                final label = height != null ? '${height}p' : 'Variant ${variants.length}';
-                variants.add(_HlsVariant(name: label, url: variantUri, height: height));
-              }
-            }
-          } else if (line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
-            final nameMatch = RegExp(r'NAME="([^"]+)"').firstMatch(line);
-            final langMatch = RegExp(r'LANGUAGE="([^"]+)"').firstMatch(line);
-            final uriMatch = RegExp(r'URI="([^"]+)"').firstMatch(line);
-            final name = nameMatch?.group(1) ?? langMatch?.group(1) ?? 'Audio ${audios.length + 1}';
-            final lang = langMatch?.group(1) ?? 'und';
-            String? audioUrl;
-            if (uriMatch != null) {
-              audioUrl = baseUri.resolve(uriMatch.group(1)!).toString();
-            }
-            audios.add(_HlsAudio(name: name, language: lang, url: audioUrl));
-          }
-        }
-
-        if (mounted) {
-          setState(() {
-            _hlsVariants = variants;
-            _hlsAudios = audios;
-            if (_selectedHlsVariant == null && variants.isNotEmpty) {
-              _selectedHlsVariant = variants.first;
-            }
-          });
-        }
-      } else {
-        client.close();
-      }
-    } catch (e) {
-      debugPrint('VideoPlayerScreen: _parseHlsManifest error: $e');
-    }
-  }
-
-  Future<void> _selectHlsVariant(_HlsVariant variant) async {
-    if (_selectedHlsVariant?.url == variant.url) return;
-    final curMs = _isExoPlayer && _exoController != null
-        ? _exoController!.value.position.inMilliseconds
-        : _position.inMilliseconds;
-    setState(() {
-      _selectedHlsVariant = variant;
-      _ready = false;
-      _buffering = true;
-    });
-
-    if (_isExoPlayer) {
-      _exoController?.removeListener(_onExoListener);
-      try {
-        await _exoController?.dispose();
-      } catch (_) {}
-      _exoController = null;
-
-      _exoController = vp.VideoPlayerController.networkUrl(
-        Uri.parse(variant.url),
-        httpHeaders: _resolvedSourceHeaders ?? {},
-        videoPlayerOptions: vp.VideoPlayerOptions(
-          mixWithOthers: false,
-          allowBackgroundPlayback: false,
-        ),
-      );
-      _exoController!.addListener(_onExoListener);
-      await _exoController!.initialize();
-      if (curMs > 0) {
-        await _exoController!.seekTo(Duration(milliseconds: curMs));
-      }
-      await _exoController!.play();
-      if (mounted) {
-        setState(() {
-          _ready = true;
-          _playing = true;
-          _hasStartedPlaying = true;
-          _duration = _exoController!.value.duration;
-          _position = _exoController!.value.position;
-        });
-      }
-    } else {
-      await _player.open(Media(variant.url, httpHeaders: _resolvedSourceHeaders), play: true);
-      if (curMs > 0) {
-        await _player.seek(Duration(milliseconds: curMs));
-      }
-      if (mounted) {
-        setState(() => _ready = true);
-      }
-    }
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Quality switched to: ${variant.name}'), duration: const Duration(seconds: 2)),
-      );
-    }
-  }
-
-  Future<void> _switchEngine(PlayerEngine newEngine) async {
-    if (_playerEngine == newEngine) return;
-    final curMs = _position.inMilliseconds;
-    setState(() {
-      _playerEngine = newEngine;
-      _ready = false;
-      _buffering = true;
-    });
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('preferred_player_engine', newEngine == PlayerEngine.exoPlayer ? 'exoplayer' : 'mediakit');
-    } catch (_) {}
-    if (_isExoPlayer) {
-      try {
-        await _player.pause();
-      } catch (_) {}
-    } else {
-      try {
-        await _exoController?.pause();
-        await _exoController?.dispose();
-      } catch (_) {}
-      _exoController = null;
-    }
-    await _open(seekToMs: curMs);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Switched engine to ${newEngine == PlayerEngine.exoPlayer ? "Google ExoPlayer" : "MediaKit (MPV)"}'),
-          duration: const Duration(seconds: 2),
-        ),
       );
     }
   }
@@ -1397,7 +1104,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     _hideControlsTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && _playing) {
         setState(() => _showControls = false);
-        _onControlsHidden();
       }
     });
   }
@@ -1414,7 +1120,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     if (_showControls) {
       setState(() => _showControls = false);
       _hideControlsTimer?.cancel();
-      _onControlsHidden();
     } else {
       _startPlayerLogoTimer();
       setState(() => _showControls = true);
@@ -1424,50 +1129,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
 
   void _togglePlay() {
     _startPlayerLogoTimer();
-    if (_isExoPlayer && _exoController != null) {
-      if (_exoController!.value.isPlaying) {
-        _exoController!.pause();
-      } else {
-        _exoController!.play();
-      }
-    } else {
-      _player.playOrPause();
-    }
+    _player.playOrPause();
     _keepControlsVisible();
   }
 
   Future<void> _seekRelative(int seconds, {bool showControls = false}) async {
     _startPlayerLogoTimer();
-    final cur = _isExoPlayer && _exoController != null ? _exoController!.value.position : _position;
-    final dur = _isExoPlayer && _exoController != null ? _exoController!.value.duration : _duration;
-    final target = cur + Duration(seconds: seconds);
+    final target = _position + Duration(seconds: seconds);
     final clamped = target < Duration.zero
         ? Duration.zero
-        : (dur > Duration.zero && target > dur ? dur : target);
+        : (_duration > Duration.zero && target > _duration ? _duration : target);
 
-    if (_isExoPlayer && _exoController != null) {
-      await _exoController!.seekTo(clamped);
-      if (mounted) {
-        setState(() {
-          _position = clamped;
-        });
-      }
-    } else if (_player.platform is NativePlayer) {
-      final nativePlayer = _player.platform as NativePlayer;
-      await nativePlayer.command([
-        'seek',
-        (clamped.inMilliseconds / 1000).toStringAsFixed(3),
-        'absolute+keyframes'
-      ]);
-    } else {
-      await _player.seek(clamped);
-    }
+    setState(() {
+      _isSeeking = true;
+      _buffering = true;
+    });
+
+    await _player.seek(clamped);
 
     await Future.delayed(const Duration(milliseconds: 300));
     if (mounted) {
       setState(() {
         _isSeeking = false;
-        _buffering = _isExoPlayer ? (_exoController?.value.isBuffering ?? false) : _player.state.buffering;
+        _buffering = _player.state.buffering;
       });
     }
 
@@ -1475,364 +1159,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     if (showControls) {
       _keepControlsVisible();
     }
-  }
-
-  Future<void> _seekToTimestamp(Duration target) async {
-    _startPlayerLogoTimer();
-    final dur = _isExoPlayer && _exoController != null ? _exoController!.value.duration : _duration;
-    final clamped = target < Duration.zero
-        ? Duration.zero
-        : (dur > Duration.zero && target > dur ? dur : target);
-
-    if (_isExoPlayer && _exoController != null) {
-      await _exoController!.seekTo(clamped);
-      if (mounted) {
-        setState(() {
-          _position = clamped;
-        });
-      }
-    } else if (_player.platform is NativePlayer) {
-      final nativePlayer = _player.platform as NativePlayer;
-      await nativePlayer.command([
-        'seek',
-        (clamped.inMilliseconds / 1000).toStringAsFixed(3),
-        'absolute+keyframes'
-      ]);
-    } else {
-      await _player.seek(clamped);
-    }
-
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (mounted) {
-      setState(() {
-        _isSeeking = false;
-        _buffering = _isExoPlayer ? (_exoController?.value.isBuffering ?? false) : _player.state.buffering;
-      });
-    }
-  }
-
-  void _checkIntroTriggers(Duration pos) {
-    if (widget.isLive) return;
-    final currentMs = pos.inMilliseconds;
-
-    // Reset triggers if user rewinds back near start
-    if (currentMs < 1000) {
-      _netflixBadgeTriggered = false;
-      _skipIntroTriggered = false;
-    }
-
-    // 1. Netflix opening info badge: triggers at ~00:02 (2000ms+) or when controls hide, whichever is later
-    if (currentMs >= 2000 && !_showControls && !_netflixBadgeTriggered && !_netflixBadgeVisible) {
-      _netflixBadgeTriggered = true;
-      _triggerNetflixBadge();
-    }
-
-    // 2. Skip Intro button: triggers at ~00:04 (4000ms)
-    final effectiveSkipSec = widget.skipIntroSeconds ??
-        SkipIntroService.getSkipIntro(
-          movieId: widget.movieId,
-          title: widget.title,
-        );
-
-    if (effectiveSkipSec != null && effectiveSkipSec > 5) {
-      final posSec = pos.inSeconds;
-      if (posSec >= 4 && posSec < effectiveSkipSec && !_skipIntroTriggered && !_showSkipIntroButton) {
-        _skipIntroTriggered = true;
-        _triggerSkipIntro();
-      } else if (posSec >= effectiveSkipSec && _showSkipIntroButton) {
-        _dismissSkipIntro();
-      }
-    }
-  }
-
-  void _onControlsHidden() {
-    if (!mounted) return;
-    final curMs = _position.inMilliseconds;
-    if (curMs >= 2000 && !_netflixBadgeTriggered && !_netflixBadgeVisible) {
-      _netflixBadgeTriggered = true;
-      _triggerNetflixBadge();
-    }
-  }
-
-  void _triggerNetflixBadge() {
-    _netflixBadgeTimer?.cancel();
-    _netflixBadgeAnimController.reset();
-    if (mounted) {
-      setState(() {
-        _netflixBadgeVisible = true;
-      });
-    }
-    _netflixBadgeAnimController.forward();
-    _netflixBadgeTimer = Timer(const Duration(milliseconds: 8500), () {
-      if (mounted) {
-        _netflixBadgeAnimController.reverse().then((_) {
-          if (mounted) {
-            setState(() {
-              _netflixBadgeVisible = false;
-            });
-          }
-        });
-      }
-    });
-  }
-
-  void _triggerSkipIntro() {
-    _skipIntroTimer?.cancel();
-    if (mounted) {
-      setState(() {
-        _showSkipIntroButton = true;
-        _skipIntroCountdown = 10;
-      });
-    }
-    _skipIntroTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      if (_skipIntroCountdown <= 1) {
-        timer.cancel();
-        setState(() {
-          _showSkipIntroButton = false;
-          _skipIntroCountdown = 0;
-        });
-      } else {
-        setState(() {
-          _skipIntroCountdown--;
-        });
-      }
-    });
-  }
-
-  void _dismissSkipIntro() {
-    _skipIntroTimer?.cancel();
-    if (_showSkipIntroButton && mounted) {
-      setState(() {
-        _showSkipIntroButton = false;
-      });
-    }
-  }
-
-  void _onSkipIntroTapped() {
-    final effectiveSkipSec = widget.skipIntroSeconds ??
-        SkipIntroService.getSkipIntro(
-          movieId: widget.movieId,
-          title: widget.title,
-        );
-    if (effectiveSkipSec != null && effectiveSkipSec > 0) {
-      _seekToTimestamp(Duration(seconds: effectiveSkipSec));
-      setState(() {
-        _showSkipIntroButton = false;
-      });
-      _skipIntroTimer?.cancel();
-    }
-  }
-
-  Widget _buildNetflixBadge() {
-    // Strictly show ONLY when controls are hidden
-    final bool shouldRender = !_showControls && _netflixBadgeVisible;
-
-    final topText = (widget.title != null && widget.title!.trim().isNotEmpty)
-        ? widget.title!.trim().toUpperCase()
-        : 'NOW PLAYING';
-
-    final List<String> details = [];
-    if (widget.year != null && widget.year! > 0) {
-      details.add('${widget.year}');
-    }
-    if (widget.genre != null && widget.genre!.trim().isNotEmpty) {
-      details.add(widget.genre!.trim());
-    } else if (widget.subtitle != null && widget.subtitle!.trim().isNotEmpty && !widget.subtitle!.contains('http')) {
-      details.add(widget.subtitle!.trim());
-    }
-    final bottomText = details.join('  •  ');
-
-    return Positioned(
-      top: 28,
-      left: 36,
-      child: AnimatedOpacity(
-        opacity: shouldRender ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-        child: IgnorePointer(
-          ignoring: true,
-          child: SafeArea(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Netflix signature vertical red line (animates down from top)
-                AnimatedBuilder(
-                  animation: _badgeLineAnimation,
-                  builder: (context, child) {
-                    return Container(
-                      width: 3.5,
-                      height: 38.0 * _badgeLineAnimation.value,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE50914),
-                        borderRadius: BorderRadius.circular(2),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFFE50914).withValues(alpha: 0.6),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 12),
-                // Text reveals from behind line
-                ClipRect(
-                  child: SlideTransition(
-                    position: _badgeTextSlideAnimation,
-                    child: FadeTransition(
-                      opacity: _badgeTextFadeAnimation,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            topText,
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.2,
-                              shadows: const [
-                                Shadow(
-                                  color: Colors.black,
-                                  offset: Offset(0, 1.5),
-                                  blurRadius: 6,
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (bottomText.isNotEmpty) ...[
-                            const SizedBox(height: 3),
-                            Text(
-                              bottomText,
-                              style: GoogleFonts.outfit(
-                                color: Colors.white.withValues(alpha: 0.85),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: 0.4,
-                                shadows: const [
-                                  Shadow(
-                                    color: Colors.black,
-                                    offset: Offset(0, 1),
-                                    blurRadius: 4,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSkipIntroButton() {
-    final effectiveSkipSec = widget.skipIntroSeconds ??
-        SkipIntroService.getSkipIntro(
-          movieId: widget.movieId,
-          title: widget.title,
-        );
-
-    if (effectiveSkipSec == null || effectiveSkipSec <= 0) return const SizedBox.shrink();
-
-    final double bottomPos = _showControls ? 95 : 36;
-
-    return AnimatedPositioned(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
-      bottom: bottomPos,
-      right: 32,
-      child: AnimatedOpacity(
-        opacity: _showSkipIntroButton ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 300),
-        child: IgnorePointer(
-          ignoring: !_showSkipIntroButton,
-          child: Material(
-            color: Colors.transparent,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC181818),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.35),
-                      width: 1.2,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(24),
-                    onTap: _onSkipIntroTapped,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.fast_forward_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'SKIP INTRO',
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '${_skipIntroCountdown}s',
-                              style: GoogleFonts.outfit(
-                                color: Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   void _showHud(String type, [int? value]) {
@@ -1905,7 +1231,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
             _volume = (_dragStartVolume! - deltaY / 2.5).clamp(0.0, 100.0);
           }
           _player.setVolume(_volume);
-          _exoController?.setVolume(_volume / 100.0);
         });
         try {
           FlutterVolumeController.setVolume(_volume / 100.0);
@@ -1971,17 +1296,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
               child: Transform.scale(
                 scale: _videoScale,
                 child: AspectRatio(
-                  aspectRatio: selectedAspectRatio ?? 
-                    (_isExoPlayer && _exoController != null && _exoController!.value.aspectRatio > 0
-                        ? _exoController!.value.aspectRatio
-                        : 16 / 9),
-                  child: _isExoPlayer && _exoController != null
-                      ? vp.VideoPlayer(_exoController!)
-                      : Video(
-                          controller: _controller,
-                          controls: NoVideoControls,
-                          subtitleViewConfiguration: const SubtitleViewConfiguration(visible: false),
-                        ),
+                  aspectRatio: selectedAspectRatio ?? 16 / 9,
+                  child: Video(
+                    controller: _controller,
+                    controls: NoVideoControls,
+                    subtitleViewConfiguration: const SubtitleViewConfiguration(visible: false),
+                  ),
                 ),
               ),
             ),
@@ -2054,15 +1374,122 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
           // 5. HUD indicator overlays (Brightness/Volume/Seek)
           if (_hudType != null) _buildHudOverlay(),
 
-          // 5.5 Netflix Signature Opening Badge (shown only when !_showControls)
-          _buildNetflixBadge(),
-
-          // 5.6 Skip Intro Button
-          _buildSkipIntroButton(),
+          // 5.5. Netflix-Style Intro & Skip Intro Overlays
+          _buildNetflixIntroOverlay(),
+          _buildSkipIntroOverlay(),
 
           // 6. UI Overlays (Control Bar controls)
           if (_showControls) _buildControlsLayout(context),
         ],
+      ),
+    );
+  }
+
+  void _onSkipIntroTapped() {
+    final effectiveIntroSec = widget.skipIntroSeconds ?? SkipIntroService.getSkipIntro(movieId: widget.movieId, title: widget.title);
+    if (effectiveIntroSec != null && effectiveIntroSec > 0) {
+      _player.seek(Duration(seconds: effectiveIntroSec));
+    }
+    _skipIntroCountdownTimer?.cancel();
+    setState(() {
+      _isSkipIntroVisible = false;
+      _hasDismissedSkipIntro = true;
+    });
+  }
+
+  Widget _buildNetflixIntroOverlay() {
+    final titleText = widget.title ?? '';
+    if (titleText.isEmpty || widget.isLive) return const SizedBox.shrink();
+
+    final List<String> metaParts = [];
+    if (widget.year != null && widget.year.toString().trim().isNotEmpty) {
+      metaParts.add(widget.year.toString().trim());
+    }
+    if (widget.genre != null && widget.genre.toString().trim().isNotEmpty) {
+      metaParts.add(widget.genre.toString().trim());
+    }
+    if (widget.contentRating != null && widget.contentRating.toString().trim().isNotEmpty) {
+      metaParts.add(widget.contentRating.toString().trim());
+    }
+    final metaText = metaParts.join('  •  ');
+
+    // Display ONLY when player controls are hidden and intro trigger is active
+    final bool isVisible = _isNetflixMetaVisible && !_showControls;
+
+    return Positioned(
+      top: 36,
+      left: 36,
+      child: NetflixIntroBadge(
+        isVisible: isVisible,
+        title: titleText,
+        metaText: metaText,
+      ),
+    );
+  }
+
+  Widget _buildSkipIntroOverlay() {
+    if (widget.isLive) return const SizedBox.shrink();
+
+    return Positioned(
+      bottom: _showControls ? 95 : 36,
+      right: 28,
+      child: AnimatedSlide(
+        offset: _isSkipIntroVisible ? Offset.zero : const Offset(0.3, 0.0),
+        duration: const Duration(milliseconds: 500),
+        curve: _isSkipIntroVisible ? Curves.easeOutCubic : Curves.easeInCubic,
+        child: AnimatedOpacity(
+          opacity: _isSkipIntroVisible ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 450),
+          curve: _isSkipIntroVisible ? Curves.easeOutCubic : Curves.easeInCubic,
+          child: IgnorePointer(
+            ignoring: !_isSkipIntroVisible,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _onSkipIntroTapped,
+                borderRadius: BorderRadius.circular(24),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE61E1E1E),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.fast_forward_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Skip Intro (${_skipIntroCountdown}s)',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2720,42 +2147,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       children: [
-        if (_isExoPlayer) ...[
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.amber.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline_rounded, color: Colors.amber, size: 20),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Multi-track audio and embedded subtitles are rendered via MPV engine.',
-                    style: TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    minimumSize: Size.zero,
-                  ),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _switchEngine(PlayerEngine.mediaKit);
-                  },
-                  child: const Text('Switch to MPV', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-        ],
         // 1. Available Embedded Tracks
         Text(
           'EMBEDDED SUBTITLE TRACKS',
@@ -3268,64 +2659,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
   }
 
   Widget _buildPopupMenuQ() {
-    final tracks = _player.state.tracks.video;
-    final current = _player.state.track.video;
-
-    if (_isExoPlayer && tracks.isEmpty && _hlsVariants.isNotEmpty) {
-      return Theme(
-        data: Theme.of(context).copyWith(cardColor: AppColors.surface),
-        child: PopupMenuButton<_HlsVariant>(
-          child: Padding(
-            padding: const EdgeInsets.only(left: 10),
-            child: _buildTopBarMenuIcon(Icons.tune_rounded),
-          ),
-          color: AppColors.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          onSelected: (v) async {
-            if (_isExoPlayer) {
-              await _switchEngine(PlayerEngine.mediaKit);
-              try {
-                await _player.stream.tracks
-                    .firstWhere((t) => t.video.isNotEmpty)
-                    .timeout(const Duration(seconds: 4));
-              } catch (_) {}
-            }
-            final match = _player.state.tracks.video.firstWhere(
-              (t) => t.h == v.height,
-              orElse: () => _player.state.track.video,
-            );
-            await _player.setVideoTrack(match);
-          },
-          itemBuilder: (context) {
-            return _hlsVariants.map((v) {
-              final isCurrent = (_selectedHlsVariant?.url == v.url) || (_selectedHlsVariant == null && v.name == 'Auto');
-              return PopupMenuItem<_HlsVariant>(
-                value: v,
-                child: Row(
-                  children: [
-                    Icon(
-                      isCurrent ? Icons.check_circle_rounded : Icons.circle_outlined,
-                      color: isCurrent ? AppColors.accentBright : Colors.white54,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      v.name,
-                      style: TextStyle(
-                        color: isCurrent ? Colors.white : Colors.white70,
-                        fontSize: 14,
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList();
-          },
-        ),
-      );
-    }
-
     return Theme(
       data: Theme.of(context).copyWith(
         cardColor: AppColors.surface,
@@ -3337,18 +2670,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         ),
         color: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onSelected: (track) async {
-          if (_isExoPlayer) {
-            await _switchEngine(PlayerEngine.mediaKit);
-            try {
-              await _player.stream.tracks
-                  .firstWhere((t) => t.video.isNotEmpty)
-                  .timeout(const Duration(seconds: 4));
-            } catch (_) {}
-          }
-          await _player.setVideoTrack(track);
+        onSelected: (track) {
+          _player.setVideoTrack(track);
         },
         itemBuilder: (context) {
+          final tracks = _player.state.tracks.video;
+          final current = _player.state.track.video;
           return tracks.map((track) {
             String name = track.h != null ? '${track.h}p' : 'Track ${track.id}';
             if (track.id == 'auto') name = 'Auto';
@@ -3381,64 +2708,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
   }
 
   Widget _buildPopupMenuM() {
-    final tracks = _player.state.tracks.audio;
-    final current = _player.state.track.audio;
-
-    if (_isExoPlayer && tracks.isEmpty && _hlsAudios.isNotEmpty) {
-      return Theme(
-        data: Theme.of(context).copyWith(cardColor: AppColors.surface),
-        child: PopupMenuButton<_HlsAudio>(
-          child: Padding(
-            padding: const EdgeInsets.only(left: 10),
-            child: _buildTopBarMenuIcon(Icons.audiotrack_rounded),
-          ),
-          color: AppColors.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          onSelected: (audio) async {
-            if (_isExoPlayer) {
-              await _switchEngine(PlayerEngine.mediaKit);
-              try {
-                await _player.stream.tracks
-                    .firstWhere((t) => t.audio.isNotEmpty)
-                    .timeout(const Duration(seconds: 4));
-              } catch (_) {}
-            }
-            final match = _player.state.tracks.audio.firstWhere(
-              (t) => (t.language?.toLowerCase() == audio.language.toLowerCase() || t.title?.toLowerCase() == audio.name.toLowerCase()),
-              orElse: () => _player.state.track.audio,
-            );
-            await _player.setAudioTrack(match);
-          },
-          itemBuilder: (context) {
-            return _hlsAudios.map((a) {
-              final isCurrent = _selectedHlsAudio?.name == a.name;
-              return PopupMenuItem<_HlsAudio>(
-                value: a,
-                child: Row(
-                  children: [
-                    Icon(
-                      isCurrent ? Icons.check_circle_rounded : Icons.circle_outlined,
-                      color: isCurrent ? AppColors.accentBright : Colors.white54,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      a.name,
-                      style: TextStyle(
-                        color: isCurrent ? Colors.white : Colors.white70,
-                        fontSize: 14,
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList();
-          },
-        ),
-      );
-    }
-
     return Theme(
       data: Theme.of(context).copyWith(
         cardColor: AppColors.surface,
@@ -3450,18 +2719,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
         ),
         color: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onSelected: (track) async {
-          if (_isExoPlayer) {
-            await _switchEngine(PlayerEngine.mediaKit);
-            try {
-              await _player.stream.tracks
-                  .firstWhere((t) => t.audio.isNotEmpty)
-                  .timeout(const Duration(seconds: 4));
-            } catch (_) {}
-          }
-          await _player.setAudioTrack(track);
+        onSelected: (track) {
+          _player.setAudioTrack(track);
         },
         itemBuilder: (context) {
+          final tracks = _player.state.tracks.audio;
+          final current = _player.state.track.audio;
           return tracks.map((track) {
             String name = track.title ?? track.language ?? 'Track ${track.id}';
             if (track.id == 'auto') name = 'Auto';
@@ -3648,7 +2911,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
                           const Icon(Icons.audiotrack_rounded, color: Colors.white, size: 20),
                           () => _showSettingsSheet(initialPane: 2),
                         ),
-
 
                         // Decoder Mode Toggle (HW / SW)
                         _buildTopBarIcon(
@@ -3987,38 +3249,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> with TickerProvid
   }
 
   Future<void> _seekToAbsolute(Duration position) async {
-    if (_isExoPlayer && _exoController != null) {
-      await _exoController!.seekTo(position);
-      if (mounted) {
-        setState(() {
-          _position = position;
-        });
-      }
-    } else if (_player.platform is NativePlayer) {
-      final nativePlayer = _player.platform as NativePlayer;
-      await nativePlayer.command([
-        'seek',
-        (position.inMilliseconds / 1000).toStringAsFixed(3),
-        'absolute+keyframes'
-      ]);
-    } else {
-      await _player.seek(position);
-    }
+    setState(() {
+      _isSeeking = true;
+      _buffering = true;
+    });
+
+    await _player.seek(position);
 
     await Future.delayed(const Duration(milliseconds: 300));
     if (mounted) {
       setState(() {
         _isSeeking = false;
-        _buffering = _isExoPlayer ? (_exoController?.value.isBuffering ?? false) : _player.state.buffering;
+        _buffering = _player.state.buffering;
       });
     }
     _revealControls();
   }
 
   void _seekTo(double fraction) {
-    final dur = _isExoPlayer && _exoController != null ? _exoController!.value.duration : _duration;
-    if (dur <= Duration.zero) return;
-    final target = Duration(milliseconds: (dur.inMilliseconds * fraction).toInt());
+    if (_duration <= Duration.zero) return;
+    final target = Duration(milliseconds: (_duration.inMilliseconds * fraction).toInt());
     _seekToAbsolute(target);
   }
 

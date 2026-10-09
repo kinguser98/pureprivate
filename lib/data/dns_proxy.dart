@@ -606,7 +606,15 @@ class CustomDnsProxy {
         });
         
         // If it's HLS playlist, rewrite absolute and relative stream URLs to go through our proxy
-        if (targetUrl.contains('.m3u8')) {
+        final bool isProbableHls = cleanTargetUrl.contains('.m3u8') ||
+            cleanTargetUrl.contains('.m3u') ||
+            cleanTargetUrl.contains('hls.php') ||
+            cleanTargetUrl.contains('/hls/') ||
+            cleanTargetUrl.contains('pastebin') ||
+            cleanTargetUrl.contains('master.txt') ||
+            (activeResp.headers.contentType?.value.toLowerCase().contains('mpegurl') ?? false);
+
+        if (isProbableHls) {
           final bodyBytes = await activeResp.fold<List<int>>([], (p, e) => p..addAll(e));
           final contentEncoding = activeResp.headers.value('content-encoding')?.toLowerCase() ?? '';
           List<int> decodedBytes;
@@ -621,7 +629,14 @@ class CustomDnsProxy {
             decodedBytes = bodyBytes;
           }
           
-          var bodyStr = utf8.decode(decodedBytes);
+          var bodyStr = utf8.decode(decodedBytes, allowMalformed: true);
+          if (!bodyStr.trimLeft().startsWith('#EXTM3U') && !cleanTargetUrl.contains('.m3u8')) {
+            // Not actually an HLS playlist, pass raw bytes through
+            ProxyStats.addBytes(decodedBytes.length);
+            request.response.add(decodedBytes);
+            await request.response.close();
+            return;
+          }
           final incomingHeadersParam = request.uri.queryParameters['local_proxy_headers'];
           final selectedAudio = request.uri.queryParameters['selected_audio'];
           final selectedQuality = request.uri.queryParameters['selected_quality'];

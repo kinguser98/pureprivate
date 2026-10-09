@@ -63,6 +63,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
   final _moviesdriveUrlCtrl = TextEditingController();
   final _hdhub4uUrlCtrl = TextEditingController();
   final _movyUrlCtrl = TextEditingController();
+  final _movieshuntUrlCtrl = TextEditingController();
   final _netmirrorDomainsCtrl = TextEditingController();
   final _seedrTokenCtrl = TextEditingController();
   final _epgUrlsCtrl = TextEditingController();
@@ -95,6 +96,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     _moviesdriveUrlCtrl.dispose();
     _hdhub4uUrlCtrl.dispose();
     _movyUrlCtrl.dispose();
+    _movieshuntUrlCtrl.dispose();
     _netmirrorDomainsCtrl.dispose();
     _seedrTokenCtrl.dispose();
     _epgUrlsCtrl.dispose();
@@ -347,6 +349,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
       _moviesdriveUrlCtrl.text = settingsMap['domain_moviesdrive'] ?? 'https://new3.moviesdrive.christmas';
       _hdhub4uUrlCtrl.text = settingsMap['domain_hdhub4u'] ?? 'https://new5.hdhub4u.cl';
       _movyUrlCtrl.text = settingsMap['domain_movy'] ?? 'https://movy.bz';
+      _movieshuntUrlCtrl.text = settingsMap['domain_movieshunt'] ?? 'https://movieshunt.icu';
       _netmirrorDomainsCtrl.text = settingsMap['netmirror_domains'] ?? '';
       _seedrTokenCtrl.text = settingsMap['seedr_token'] ?? '';
       _epgUrlsCtrl.text = settingsMap['live_tv_epg_urls'] ?? 'https://avkb.short.gy/jioepg.xml.gz\nhttps://avkb.short.gy/tsepg.xml.gz';
@@ -532,6 +535,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
         'domain_moviesdrive': _moviesdriveUrlCtrl.text.trim(),
         'domain_hdhub4u': _hdhub4uUrlCtrl.text.trim(),
         'domain_movy': _movyUrlCtrl.text.trim(),
+        'domain_movieshunt': _movieshuntUrlCtrl.text.trim(),
         'netmirror_domains': _netmirrorDomainsCtrl.text.trim(),
         'seedr_token': _seedrTokenCtrl.text.trim(),
         'live_tv_epg_urls': _epgUrlsCtrl.text.trim(),
@@ -1992,6 +1996,13 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
                 label: 'Movy.bz Domain',
                 controller: _movyUrlCtrl,
                 hint: 'https://movy.bz',
+              ),
+              const SizedBox(height: 16),
+              _buildInputRow(
+                icon: Icons.travel_explore_rounded,
+                label: 'MoviesHunt Domain',
+                controller: _movieshuntUrlCtrl,
+                hint: 'https://movieshunt.icu',
               ),
               const SizedBox(height: 16),
               _buildInputRow(

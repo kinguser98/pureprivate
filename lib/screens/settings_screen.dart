@@ -1853,6 +1853,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                               ),
                               const SizedBox(height: 10),
+                              FutureBuilder<bool>(
+                                future: TelegramService.instance.isGroupSearchEnabled(),
+                                builder: (context, enabledSnapshot) {
+                                  final isGroupSearchOn = enabledSnapshot.data ?? true;
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.04),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: isGroupSearchOn ? const Color(0xFF29B6F6).withValues(alpha: 0.3) : Colors.white12,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          isGroupSearchOn ? Icons.groups_rounded : Icons.folder_shared_rounded,
+                                          size: 20,
+                                          color: isGroupSearchOn ? const Color(0xFF29B6F6) : Colors.white38,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Telegram Group Search',
+                                                style: GoogleFonts.outfit(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13.5,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                isGroupSearchOn
+                                                    ? 'Searching selected group & bots for files'
+                                                    : 'Off • Only Saved Messages files will be searched',
+                                                style: TextStyle(
+                                                  color: isGroupSearchOn ? const Color(0xFF81D4FA) : Colors.white38,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Switch(
+                                          value: isGroupSearchOn,
+                                          activeColor: const Color(0xFF29B6F6),
+                                          onChanged: (val) async {
+                                            await TelegramService.instance.setGroupSearchEnabled(val);
+                                            if (mounted) setState(() {});
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 10),
                               FutureBuilder<String?>(
                                 future: TelegramService.instance.getConfiguredMovieGroupTitle(),
                                 builder: (context, snapshot) {

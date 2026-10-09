@@ -772,6 +772,17 @@ class TelegramService {
   static const String keyMovieGroupId = 'tg_movie_group_id';
   static const String keyMovieGroupTitle = 'tg_movie_group_title';
   static const String keyMovieGroupAccessHash = 'tg_movie_group_access_hash';
+  static const String keyGroupSearchEnabled = 'tg_group_search_enabled';
+
+  Future<bool> isGroupSearchEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(keyGroupSearchEnabled) ?? true;
+  }
+
+  Future<void> setGroupSearchEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(keyGroupSearchEnabled, enabled);
+  }
 
   Future<int?> getConfiguredMovieGroupId() async {
     final prefs = await SharedPreferences.getInstance();
@@ -846,6 +857,8 @@ class TelegramService {
 
   /// Searches a movie query inside the user's configured movie group.
   Future<List<TelegramGroupSearchResult>> searchMovieInConfiguredGroup(String query) async {
+    final enabled = await isGroupSearchEnabled();
+    if (!enabled) return [];
     final groupId = await getConfiguredMovieGroupId();
     if (groupId == null) return [];
     final prefs = await SharedPreferences.getInstance();

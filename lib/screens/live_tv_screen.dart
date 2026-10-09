@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -27,7 +28,27 @@ class LiveTvScreen extends StatefulWidget {
   final bool isActive;
   const LiveTvScreen({super.key, this.isActive = true});
 
-  static void stopActivePlayback() {
+  static bool isPipActive = false;
+
+  static Future<bool> isSystemInPip() async {
+    if (isPipActive) return true;
+    for (final channelName in [
+      'com.goxio.mob/pip',
+      'com.privatecinema.private_cinema_mobile/pip',
+    ]) {
+      try {
+        final res = await MethodChannel(channelName).invokeMethod<bool>('isPip');
+        if (res == true) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  static Future<void> stopActivePlayback({bool checkPip = true}) async {
+    if (checkPip) {
+      final inPip = await isSystemInPip();
+      if (inPip) return;
+    }
     _LiveTvScreenState._activeState?.stopPlayback();
   }
 
@@ -35,8 +56,9 @@ class LiveTvScreen extends StatefulWidget {
   State<LiveTvScreen> createState() => _LiveTvScreenState();
 }
 
-class _LiveTvScreenState extends State<LiveTvScreen> {
+class _LiveTvScreenState extends State<LiveTvScreen> with WidgetsBindingObserver {
   static _LiveTvScreenState? _activeState;
+  final GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
   List<dynamic> _allChannels = [];
   Map<String, List<dynamic>> _groupedChannels = {};
   List<String> _categories = [];
@@ -83,14 +105,40 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
   void didUpdateWidget(LiveTvScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.isActive && !widget.isActive) {
-      stopPlayback();
+      LiveTvScreen.isSystemInPip().then((inPip) {
+        if (!inPip && mounted) {
+          stopPlayback();
+        }
+      });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      LiveTvScreen.isSystemInPip().then((inPip) {
+        if (!inPip && mounted) {
+          stopPlayback();
+        }
+      });
     }
   }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _activeState = this;
+    for (final channelName in [
+      'com.goxio.mob/pip',
+      'com.privatecinema.private_cinema_mobile/pip',
+    ]) {
+      MethodChannel(channelName).setMethodCallHandler((call) async {
+        if (call.method == 'onPipChanged') {
+          LiveTvScreen.isPipActive = call.arguments == true;
+        }
+      });
+    }
     _initPrefs();
     _fetchChannels();
     _loadEPGData();
@@ -128,6 +176,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (_activeState == this) _activeState = null;
     stopPlayback();
     _miniEpgTimer?.cancel();
@@ -474,6 +523,47 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
         );
       }
     }
+  }
+
+  bool _isSameChannel(Map<String, dynamic>? a, Map<String, dynamic>? b) {
+    if (a == null || b == null) return false;
+    final aCmd = a['cmd']?.toString();
+    final bCmd = b['cmd']?.toString();
+    if (aCmd != null && bCmd != null && aCmd.isNotEmpty && aCmd == bCmd) return true;
+    final aId = a['stalker_id']?.toString() ?? a['id']?.toString();
+    final bId = b['stalker_id']?.toString() ?? b['id']?.toString();
+    if (aId != null && bId != null && aId.isNotEmpty && aId == bId) return true;
+    return false;
+  }
+
+  void _openFullscreen() {
+    try {
+      if (_videoKey.currentState != null) {
+        if (!(_videoKey.currentState?.isFullscreen() ?? false)) {
+          _videoKey.currentState?.enterFullscreen();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error entering fullscreen: $e');
+    }
+  }
+
+  void _handleChannelTap(Map<String, dynamic> ch) {
+    final active = _activeMiniChannel ?? _selectedChannel;
+    if (active != null && _isSameChannel(active, ch) && _miniController != null) {
+      // Channel is already playing/selected: open in fullscreen without restarting!
+      _openFullscreen();
+      return;
+    }
+    _playChannel(ch);
+  }
+
+  void _handleChannelDoubleTap(Map<String, dynamic> ch) {
+    final active = _activeMiniChannel ?? _selectedChannel;
+    if (active == null || !_isSameChannel(active, ch)) {
+      _playChannel(ch);
+    }
+    _openFullscreen();
   }
 
   Future<void> _playChannel(Map<String, dynamic> channel) async {
@@ -862,8 +952,34 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
               fit: StackFit.expand,
               children: [
                 Video(
+                  key: _videoKey,
                   controller: _miniController!,
-                  controls: AdaptiveVideoControls,
+                  controls: (state) => LiveTvVideoControls(
+                    state: state,
+                    activeChannel: _activeMiniChannel ?? _selectedChannel,
+                    groupedChannels: _groupedChannels,
+                    allChannels: _allChannels,
+                    onSelectChannel: (ch) => _handleChannelTap(ch),
+                    isResolving: _isResolvingStream,
+                    resolvingChannelName: _resolvingChannelName,
+                    logoHeaders: _logoHeaders,
+                  ),
+                  onEnterFullscreen: () async {
+                    await SystemChrome.setPreferredOrientations([
+                      DeviceOrientation.landscapeLeft,
+                      DeviceOrientation.landscapeRight,
+                    ]);
+                    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+                  },
+                  onExitFullscreen: () async {
+                    await SystemChrome.setPreferredOrientations([
+                      DeviceOrientation.portraitUp,
+                      DeviceOrientation.portraitDown,
+                      DeviceOrientation.landscapeLeft,
+                      DeviceOrientation.landscapeRight,
+                    ]);
+                    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+                  },
                 ),
                 if (_isResolvingStream || _activeMiniChannel == null)
                   Container(
@@ -1077,7 +1193,8 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           ),
           const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.04),
               borderRadius: BorderRadius.circular(10),
@@ -1087,12 +1204,13 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
               icon: Icon(_viewMode == ViewMode.grid ? Icons.list_rounded : Icons.grid_view_rounded, color: Colors.white70, size: 18),
               onPressed: () => setState(() => _viewMode = _viewMode == ViewMode.grid ? ViewMode.list : ViewMode.grid),
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
             ),
           ),
           const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: 0.04),
               borderRadius: BorderRadius.circular(10),
@@ -1109,7 +1227,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
                 ).then((_) => _miniPlayer?.play());
               },
               padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
             ),
           ),
         ],
@@ -1224,7 +1342,8 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     final epgTitle = currentProg != null ? currentProg.title : 'Live Stream';
 
     return InkWell(
-      onTap: () => _playChannel(ch),
+      onTap: () => _handleChannelTap(ch),
+      onDoubleTap: () => _handleChannelDoubleTap(ch),
       borderRadius: BorderRadius.circular(12),
       child: Padding(
         padding: const EdgeInsets.all(6),
@@ -1276,9 +1395,11 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
   }
 
   Widget _buildListChannelContent(Map<String, dynamic> ch, String channelId, String name, String logoUrl, EpgProgram? currentProg) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      onTap: () => _playChannel(ch),
+    return GestureDetector(
+      onDoubleTap: () => _handleChannelDoubleTap(ch),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        onTap: () => _handleChannelTap(ch),
       leading: Container(
         width: 48, height: 48,
         decoration: BoxDecoration(color: Colors.black38, borderRadius: BorderRadius.circular(8)),
@@ -1333,8 +1454,9 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
           constraints: const BoxConstraints(),
         ),
       ]),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildReorderableChannelList(BuildContext context) {
     var chans = (_groupedChannels[_selectedCategory] ?? []).where((ch) {
@@ -1368,7 +1490,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
 
     if (_viewMode == ViewMode.grid) {
       return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 130),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 3,
           childAspectRatio: 0.85,
@@ -1389,7 +1511,7 @@ class _LiveTvScreenState extends State<LiveTvScreen> {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 130),
       itemCount: chans.length,
       itemBuilder: (context, index) {
         final ch = chans[index];
@@ -1671,6 +1793,813 @@ class _AutoScrollEpgTextState extends State<AutoScrollEpgText> {
       scrollDirection: Axis.horizontal,
       physics: const NeverScrollableScrollPhysics(),
       child: Text(widget.text, style: widget.style),
+    );
+  }
+}
+
+class LiveTvVideoControls extends StatefulWidget {
+  final VideoState state;
+  final Map<String, dynamic>? activeChannel;
+  final Map<String, List<dynamic>> groupedChannels;
+  final List<dynamic> allChannels;
+  final Function(Map<String, dynamic>) onSelectChannel;
+  final bool isResolving;
+  final String resolvingChannelName;
+  final Map<String, String>? logoHeaders;
+
+  const LiveTvVideoControls({
+    super.key,
+    required this.state,
+    required this.activeChannel,
+    required this.groupedChannels,
+    required this.allChannels,
+    required this.onSelectChannel,
+    this.isResolving = false,
+    this.resolvingChannelName = '',
+    this.logoHeaders,
+  });
+
+  @override
+  State<LiveTvVideoControls> createState() => _LiveTvVideoControlsState();
+}
+
+class _LiveTvVideoControlsState extends State<LiveTvVideoControls> {
+  bool _showControls = true;
+  Timer? _hideTimer;
+  bool _isDrawerOpen = false;
+  String _drawerCategory = 'ALL';
+  String _drawerSearch = '';
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  EpgProgram? _currentProgram;
+  EpgProgram? _nextProgram;
+  Timer? _epgRefreshTimer;
+  Timer? _clockTimer;
+  String _timeStr = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _updateClock();
+    _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) => _updateClock());
+    _updateEpg();
+    _epgRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) => _updateEpg());
+    _armHideTimer();
+  }
+
+  void _updateClock() {
+    if (!mounted) return;
+    final now = DateTime.now();
+    final h = (now.hour % 12 == 0 ? 12 : now.hour % 12).toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour >= 12 ? 'PM' : 'AM';
+    setState(() => _timeStr = '$h:$m $ampm');
+  }
+
+  void _updateEpg() {
+    if (widget.activeChannel == null) return;
+    final ch = widget.activeChannel!;
+    final channelId = (ch['stalker_id'] ?? ch['id']).toString();
+    final name = ch['name']?.toString() ?? '';
+    if (mounted) {
+      setState(() {
+        _currentProgram = EpgService.getCurrentProgram(channelId, name);
+        _nextProgram = EpgService.getNextProgram(channelId, name);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(LiveTvVideoControls oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.activeChannel != oldWidget.activeChannel) {
+      _updateEpg();
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    _epgRefreshTimer?.cancel();
+    _clockTimer?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _armHideTimer() {
+    _hideTimer?.cancel();
+    if (!_showControls || _isDrawerOpen) return;
+    _hideTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted && !_isDrawerOpen) {
+        setState(() => _showControls = false);
+      }
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _showControls = !_showControls);
+    if (_showControls) {
+      _armHideTimer();
+    } else {
+      _hideTimer?.cancel();
+    }
+  }
+
+  String _formatTime(DateTime time) {
+    final h = time.hour.toString().padLeft(2, '0');
+    final m = time.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  double _epgProgress(EpgProgram prog) {
+    final now = DateTime.now();
+    if (now.isBefore(prog.startTime)) return 0.0;
+    if (now.isAfter(prog.stopTime)) return 1.0;
+    final total = prog.stopTime.difference(prog.startTime).inSeconds;
+    final elapsed = now.difference(prog.startTime).inSeconds;
+    return total > 0 ? elapsed / total : 0.0;
+  }
+
+  Widget _buildLogo(String? logoUrl, String name, {double size = 40}) {
+    if (logoUrl != null && logoUrl.isNotEmpty) {
+      return CachedNetworkImage(
+        imageUrl: logoUrl,
+        httpHeaders: widget.logoHeaders,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        memCacheWidth: 100,
+        memCacheHeight: 100,
+        placeholder: (_, __) => _buildFallback(name, size),
+        errorWidget: (_, __, ___) => _buildFallback(name, size),
+      );
+    }
+    return _buildFallback(name, size);
+  }
+
+  Widget _buildFallback(String name, double size) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'T';
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppColors.accentBright.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(size * 0.2),
+      ),
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: AppColors.accentBright,
+          fontSize: size * 0.45,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _enterPip(BuildContext context) async {
+    setState(() => _showControls = false);
+    try {
+      if (!isFullscreen(context)) {
+        await enterFullscreen(context);
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      bool entered = false;
+      for (final channelName in [
+        'com.goxio.mob/pip',
+        'com.privatecinema.private_cinema_mobile/pip',
+      ]) {
+        try {
+          final res = await MethodChannel(channelName).invokeMethod('enterPip');
+          if (res == true) {
+            entered = true;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (!entered) {
+        debugPrint('Could not enter PiP mode');
+      }
+    } catch (e) {
+      debugPrint('Live TV PiP failed: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inFullscreen = isFullscreen(context);
+
+    if (!inFullscreen) {
+      return GestureDetector(
+        onTap: _toggleControls,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedOpacity(
+          opacity: _showControls ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          child: Container(
+            color: _showControls ? Colors.black38 : Colors.transparent,
+            child: Stack(
+              children: [
+                Positioned(
+                  top: 10,
+                  left: 12,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.fiber_manual_record, color: Colors.white, size: 8),
+                        SizedBox(width: 4),
+                        Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+                Center(
+                  child: IconButton(
+                    iconSize: 44,
+                    icon: Icon(
+                      widget.state.widget.controller.player.state.playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                    onPressed: () {
+                      widget.state.widget.controller.player.playOrPause();
+                      setState(() {});
+                      _armHideTimer();
+                    },
+                  ),
+                ),
+                Positioned(
+                  bottom: 8,
+                  right: 8,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 22),
+                        tooltip: 'Picture-in-Picture',
+                        onPressed: () => _enterPip(context),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 26),
+                        onPressed: () => enterFullscreen(context),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final ch = widget.activeChannel;
+    final chName = ch?['name']?.toString() ?? 'Live Stream';
+    final chId = ch != null ? (ch['stalker_id'] ?? ch['id']).toString() : '';
+    final logoUrl = (ch?['logo_url']?.toString().isNotEmpty == true)
+        ? ch!['logo_url'].toString()
+        : (EpgService.getChannelLogo(chId, chName) ?? '');
+
+    final allCats = ['ALL', ...widget.groupedChannels.keys.where((k) => k != 'ALL')];
+
+    List<dynamic> drawerChannels = [];
+    if (_drawerCategory == 'ALL') {
+      drawerChannels = widget.allChannels;
+    } else {
+      drawerChannels = widget.groupedChannels[_drawerCategory] ?? [];
+    }
+    if (_drawerSearch.isNotEmpty) {
+      drawerChannels = drawerChannels.where((c) {
+        final n = c['name']?.toString().toLowerCase() ?? '';
+        return n.contains(_drawerSearch.toLowerCase());
+      }).toList();
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        GestureDetector(
+          onTap: () {
+            if (_isDrawerOpen) {
+              setState(() => _isDrawerOpen = false);
+              _armHideTimer();
+            } else {
+              _toggleControls();
+            }
+          },
+          onHorizontalDragUpdate: (details) {
+            if (details.primaryDelta != null && details.primaryDelta! > 10) {
+              setState(() => _isDrawerOpen = true);
+              _hideTimer?.cancel();
+            } else if (details.primaryDelta != null && details.primaryDelta! < -10) {
+              setState(() => _isDrawerOpen = false);
+              _armHideTimer();
+            }
+          },
+          behavior: HitTestBehavior.translucent,
+        ),
+
+        // TOP BAR
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          top: _showControls && !_isDrawerOpen ? 0 : -90,
+          left: 0,
+          right: 0,
+          child: Container(
+            padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 8, 20, 10),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.black87, Colors.transparent],
+              ),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 24),
+                  onPressed: () => exitFullscreen(context),
+                ),
+                const SizedBox(width: 8),
+                _buildLogo(logoUrl, chName, size: 30),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    chName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.fiber_manual_record, color: Colors.white, size: 8),
+                      SizedBox(width: 4),
+                      Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Text(
+                  _timeStr,
+                  style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 22),
+                  tooltip: 'Picture-in-Picture',
+                  onPressed: () => _enterPip(context),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.fullscreen_exit_rounded, color: Colors.white, size: 24),
+                  onPressed: () => exitFullscreen(context),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // BOTTOM BAR WITH CHANNEL LOGO, NAME, NOW AND NEXT
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          bottom: _showControls && !_isDrawerOpen ? 0 : -170,
+          left: 0,
+          right: 0,
+          child: Container(
+            padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.of(context).padding.bottom + 10),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [Colors.black87, Colors.transparent],
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: _buildLogo(logoUrl, chName, size: 44),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              chName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          if (ch?['category_name'] != null) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppColors.accentBright.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: AppColors.accentBright.withValues(alpha: 0.4)),
+                              ),
+                              child: Text(
+                                ch!['category_name'].toString(),
+                                style: TextStyle(color: AppColors.accentBright, fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentBright.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'NOW',
+                              style: TextStyle(color: AppColors.accentBright, fontSize: 9, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _currentProgram?.title ?? 'Live Broadcast',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          if (_currentProgram != null)
+                            Text(
+                              '${_formatTime(_currentProgram!.startTime)} - ${_formatTime(_currentProgram!.stopTime)}',
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            ),
+                        ],
+                      ),
+                      if (_currentProgram != null) ...[
+                        const SizedBox(height: 4),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: _epgProgress(_currentProgram!),
+                            minHeight: 2.5,
+                            backgroundColor: Colors.white12,
+                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentBright),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: Colors.white12,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'NEXT',
+                              style: TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _nextProgram?.title ?? 'No upcoming program info',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(color: Colors.white70, fontSize: 12),
+                            ),
+                          ),
+                          if (_nextProgram != null)
+                            Text(
+                              'Starts ${_formatTime(_nextProgram!.startTime)}',
+                              style: const TextStyle(color: Colors.white38, fontSize: 10),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        widget.state.widget.controller.player.state.playing ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
+                        color: Colors.white,
+                        size: 38,
+                      ),
+                      onPressed: () {
+                        widget.state.widget.controller.player.playOrPause();
+                        setState(() {});
+                        _armHideTimer();
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.fullscreen_exit_rounded, color: Colors.white, size: 28),
+                      onPressed: () => exitFullscreen(context),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // LEFT ARROW BUTTON TRIGGER
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: _isDrawerOpen ? 290 : 0,
+          top: MediaQuery.of(context).size.height * 0.40,
+          child: GestureDetector(
+            onTap: () {
+              setState(() => _isDrawerOpen = !_isDrawerOpen);
+              if (_isDrawerOpen) {
+                _hideTimer?.cancel();
+              } else {
+                _armHideTimer();
+              }
+            },
+            child: Container(
+              width: 32,
+              height: 54,
+              decoration: BoxDecoration(
+                color: const Color(0xDD10141E),
+                borderRadius: BorderRadius.horizontal(
+                  right: const Radius.circular(16),
+                  left: _isDrawerOpen ? const Radius.circular(16) : Radius.zero,
+                ),
+                border: Border.all(
+                  color: AppColors.accentBright.withValues(alpha: 0.5),
+                  width: 1.2,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black54,
+                    blurRadius: 8,
+                    offset: Offset(2, 2),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Icon(
+                  _isDrawerOpen ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // QUICK CHANNEL SWITCHER SIDEBAR DRAWER
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: _isDrawerOpen ? 0 : -300,
+          width: 290,
+          top: 0,
+          bottom: 0,
+          child: ClipRRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xF20B0F19),
+                  border: Border(
+                    right: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      width: 1,
+                    ),
+                  ),
+                ),
+                child: SafeArea(
+                  right: false,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.live_tv_rounded, color: Colors.white, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'CHANNELS',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: () {
+                                setState(() => _isDrawerOpen = false);
+                                _armHideTimer();
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child: Container(
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                          ),
+                          child: TextField(
+                            controller: _searchCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                            decoration: InputDecoration(
+                              hintText: 'Quick search...',
+                              hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                              prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 16),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.only(top: 2),
+                              suffixIcon: _drawerSearch.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.close, color: Colors.white38, size: 14),
+                                      onPressed: () {
+                                        setState(() {
+                                          _searchCtrl.clear();
+                                          _drawerSearch = '';
+                                        });
+                                      },
+                                    )
+                                  : null,
+                            ),
+                            onChanged: (val) => setState(() => _drawerSearch = val),
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        height: 38,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          itemCount: allCats.length,
+                          itemBuilder: (context, idx) {
+                            final cat = allCats[idx];
+                            final isSelected = _drawerCategory == cat;
+                            return GestureDetector(
+                              onTap: () => setState(() => _drawerCategory = cat),
+                              child: Container(
+                                margin: const EdgeInsets.only(right: 6),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isSelected ? AppColors.accentBright : Colors.white.withValues(alpha: 0.05),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  cat.toUpperCase(),
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white60,
+                                    fontSize: 10,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(color: Colors.white10, height: 8),
+                      Expanded(
+                        child: drawerChannels.isEmpty
+                            ? const Center(
+                                child: Text('No channels found', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                              )
+                            : ListView.builder(
+                                itemCount: drawerChannels.length,
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                itemBuilder: (context, idx) {
+                                  final c = drawerChannels[idx];
+                                  final cName = c['name']?.toString() ?? 'Channel';
+                                  final cId = (c['stalker_id'] ?? c['id']).toString();
+                                  final cLogo = (c['logo_url']?.toString().isNotEmpty == true)
+                                      ? c['logo_url'].toString()
+                                      : (EpgService.getChannelLogo(cId, cName) ?? '');
+                                  final isPlaying = widget.activeChannel != null &&
+                                      (widget.activeChannel!['stalker_id'] ?? widget.activeChannel!['id']).toString() == cId;
+                                  final cProg = EpgService.getCurrentProgram(cId, cName);
+
+                                  return Container(
+                                    margin: const EdgeInsets.only(bottom: 4),
+                                    decoration: BoxDecoration(
+                                      color: isPlaying ? AppColors.accentBright.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.03),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: isPlaying ? AppColors.accentBright : Colors.white.withValues(alpha: 0.05),
+                                        width: isPlaying ? 1.2 : 0.8,
+                                      ),
+                                    ),
+                                    child: ListTile(
+                                      dense: true,
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                      leading: Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: Colors.black38,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: _buildLogo(cLogo, cName, size: 28),
+                                      ),
+                                      title: Text(
+                                        cName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.outfit(
+                                          color: isPlaying ? Colors.white : Colors.white70,
+                                          fontSize: 12,
+                                          fontWeight: isPlaying ? FontWeight.bold : FontWeight.w500,
+                                        ),
+                                      ),
+                                      subtitle: cProg != null
+                                          ? Text(
+                                              cProg.title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: isPlaying ? AppColors.accentBright : Colors.white38,
+                                                fontSize: 10,
+                                              ),
+                                            )
+                                          : null,
+                                      trailing: isPlaying
+                                          ? Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: const Text(
+                                                'PLAYING',
+                                                style: TextStyle(color: Color(0xFF10B981), fontSize: 8, fontWeight: FontWeight.bold),
+                                              ),
+                                            )
+                                          : null,
+                                      onTap: () {
+                                        widget.onSelectChannel(c);
+                                        _updateEpg();
+                                        _armHideTimer();
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

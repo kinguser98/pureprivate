@@ -13,6 +13,7 @@ import '../../utils/drawer_helper.dart';
 import '../../utils/admin_api_client.dart';
 import '../../widgets/common/glass_card.dart';
 import '../../../data/stalker_resolver.dart';
+import '../../../data/epg_service.dart';
 import '../../utils/master_channel_repository.dart';
 import '../../models/master_channel.dart';
 import '../../../widgets/epg_picker_dialog.dart';
@@ -1551,7 +1552,45 @@ class _IptvScreenState extends ConsumerState<IptvScreen> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      const Text('LINKED EPG CHANNEL ID', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('LINKED EPG CHANNEL ID', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                          InkWell(
+                            onTap: () async {
+                              final pickedEpg = await EpgPickerDialog.show(ctx, initialEpgId: epgCtrl.text);
+                              if (pickedEpg != null && pickedEpg.isNotEmpty) {
+                                final epgLogo = EpgService.getChannelLogo(pickedEpg, pickedEpg);
+                                setDialogState(() {
+                                  epgCtrl.text = pickedEpg;
+                                  if (nameCtrl.text.trim().isEmpty) {
+                                    nameCtrl.text = pickedEpg;
+                                  }
+                                  if (epgLogo != null && epgLogo.startsWith('http')) {
+                                    logoCtrl.text = epgLogo;
+                                  }
+                                });
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFEF4444).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3)),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.stars_rounded, color: Color(0xFFEF4444), size: 13),
+                                  SizedBox(width: 4),
+                                  Text('Pick from EPG', style: TextStyle(color: Color(0xFFEF4444), fontSize: 11, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14),

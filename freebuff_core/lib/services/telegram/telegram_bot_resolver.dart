@@ -166,11 +166,18 @@ class TelegramBotResolver {
       throw TelegramException('Message $messageId not found in channel.');
     }
 
-    // If message is already a video file, return it directly
+    // If message is already a video file, secure it in Saved Messages and return
     final directVideo = _extractVideo(msg, -1000000000000 - channelId);
     if (directVideo != null) {
-      onStatus?.call('Direct video found!');
-      return directVideo;
+      onStatus?.call('Direct video found! Securing in Saved Messages...');
+      final secured = await _secureInSavedMessages(
+        client,
+        peer,
+        msg,
+        directVideo,
+        onStatus: onStatus,
+      );
+      return secured;
     }
 
     // Otherwise, check for bot action in inline buttons
@@ -216,8 +223,15 @@ class TelegramBotResolver {
 
     final directVideo = _extractVideo(msg, -1000000000000 - ch.id);
     if (directVideo != null) {
-      onStatus?.call('Direct video found!');
-      return directVideo;
+      onStatus?.call('Direct video found! Securing in Saved Messages...');
+      final secured = await _secureInSavedMessages(
+        client,
+        peer,
+        msg,
+        directVideo,
+        onStatus: onStatus,
+      );
+      return secured;
     }
 
     final botAction = _extractBotAction(msg);
@@ -654,18 +668,69 @@ class TelegramBotResolver {
   }) async {
     try {
       onStatus?.call('Securing video in Saved Messages...');
-      final fwdRes = await client.invoke(
-        MessagesForwardMessagesRequest(
-          fromPeer: botPeer,
-          id: [m.id],
-          randomId: [DateTime.now().millisecondsSinceEpoch],
-          toPeer: InputPeerSelf(),
-        ),
-      );
+      final randomId = DateTime.now().millisecondsSinceEpoch;
+      dynamic fwdRes;
+
+      // 1. Try forwarding with dropAuthor: true (clean forward into personal Saved Messages)
+      try {
+        fwdRes = await client.invoke(
+          MessagesForwardMessagesRequest(
+            dropAuthor: true,
+            fromPeer: botPeer,
+            id: [m.id],
+            randomId: [randomId],
+            toPeer: InputPeerSelf(),
+          ),
+        );
+      } catch (fwdErr) {
+        debugPrint('[TelegramBotResolver] Forward dropAuthor note: $fwdErr');
+        // Fallback to standard forward
+        try {
+          fwdRes = await client.invoke(
+            MessagesForwardMessagesRequest(
+              fromPeer: botPeer,
+              id: [m.id],
+              randomId: [randomId + 1],
+              toPeer: InputPeerSelf(),
+            ),
+          );
+        } catch (fwdErr2) {
+          debugPrint('[TelegramBotResolver] Forward normal note: $fwdErr2');
+        }
+      }
 
       int? savedMsgId = _extractForwardedMsgId(fwdRes);
 
-      // Reliable verification: check top of Saved Messages
+      // 2. If forwarding failed (common because movie bots set protect_content / noforwards),
+      // transfer the document directly to Saved Messages using MessagesSendMediaRequest + InputMediaDocument!
+      if ((savedMsgId == null || savedMsgId <= 0) && m.media is MessageMediaDocument) {
+        final doc = (m.media as MessageMediaDocument).document;
+        if (doc is DocumentObj) {
+          try {
+            debugPrint('[TelegramBotResolver] Forwarding was restricted; sending directly via MessagesSendMediaRequest...');
+            onStatus?.call('Transferring file to Saved Messages...');
+            final sendRes = await client.invoke(
+              MessagesSendMediaRequest(
+                peer: InputPeerSelf(),
+                media: InputMediaDocument(
+                  id: InputDocumentObj(
+                    id: doc.id,
+                    accessHash: doc.accessHash,
+                    fileReference: doc.fileReference,
+                  ),
+                ),
+                message: m.message,
+                randomId: DateTime.now().millisecondsSinceEpoch + 2,
+              ),
+            );
+            savedMsgId = _extractForwardedMsgId(sendRes);
+          } catch (se) {
+            debugPrint('[TelegramBotResolver] MessagesSendMediaRequest direct transfer notice: $se');
+          }
+        }
+      }
+
+      // 3. Reliable verification: check top of Saved Messages
       if (savedMsgId == null || savedMsgId <= 0) {
         final savedHistory = await client.getHistory(peer: InputPeerSelf(), limit: 3);
         final list = (savedHistory as dynamic).messages ?? const [];
@@ -680,6 +745,8 @@ class TelegramBotResolver {
       if (savedMsgId != null && savedMsgId > 0) {
         debugPrint('[TelegramBotResolver] Secured video in Saved Messages as msgId: $savedMsgId');
         onStatus?.call('Video secured against auto-deletion!');
+        // Refresh local saved messages in the background so it is instantly indexed in the app
+        unawaited(TelegramService.instance.loadSavedMessages());
         return TelegramVideoItem(
           localId: 'tg_saved_$savedMsgId',
           messageId: savedMsgId,
@@ -691,7 +758,7 @@ class TelegramBotResolver {
           durationSeconds: videoItem.durationSeconds,
           thumbnailUrl: videoItem.thumbnailUrl,
           directUrl: videoItem.directUrl,
-          source: videoItem.source,
+          source: 'Saved Messages',
         );
       }
     } catch (e) {

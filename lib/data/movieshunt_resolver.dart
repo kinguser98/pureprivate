@@ -9,6 +9,7 @@ import '../widgets/special_search_dialog.dart';
 
 class MovieshuntResolver {
   static const List<String> _domains = [
+    'https://movieshunt.icu',
     'https://movieshunt.monster',
     'https://movieshunt.buzz',
     'https://movieshunt.cc',

@@ -22,38 +22,75 @@ class ModularSourceService {
     'istreamflare': 'https://ot.goprivate.fun/sources/istreamflare.php',
   };
 
+  /// Ensures OKCDN / VKUser DASH manifests have the .mpd filename in their path
+  /// so that FFmpeg's dashdec demuxer recognizes and parses them.
+  static String ensureMpdExtension(String url) {
+    if (!url.startsWith('http')) return url;
+    try {
+      final uri = Uri.parse(url);
+      final hostLower = uri.host.toLowerCase();
+      final pathLower = uri.path.toLowerCase();
+      if ((hostLower.contains('okcdn.ru') ||
+           hostLower.contains('vkuser.net') ||
+           hostLower.contains('mycdn.me') ||
+           hostLower.contains('ok.ru') ||
+           hostLower.contains('istreamcdn')) &&
+          !pathLower.contains('.mpd')) {
+        if (uri.queryParameters.containsKey('type') ||
+            uri.queryParameters.containsKey('mid') ||
+            uri.queryParameters.containsKey('sig') ||
+            uri.queryParameters.containsKey('expires') ||
+            uri.queryParameters.containsKey('id')) {
+          final newPath = uri.path.endsWith('/') ? '${uri.path}manifest.mpd' : '${uri.path}/manifest.mpd';
+          return uri.replace(path: newPath).toString();
+        }
+      }
+    } catch (_) {}
+    return url;
+  }
+
   /// Resolves client-side HTTP 302 redirects for providers like iStream / OKCDN / X7Flix
   /// to ensure client IP binding and avoid cross-domain header dropping by video decoders.
   static Future<String> resolveStreamRedirect(String rawUrl, {Map<String, String>? headers}) async {
-    final lower = rawUrl.toLowerCase();
-    if (lower.contains('ox.php') ||
-        lower.contains('/ox/') ||
-        lower.contains('istreamcdn') ||
-        lower.contains('exposeworld.art') ||
-        lower.contains('x7flix.com') ||
-        lower.contains('iasbase.net') ||
-        lower.contains('mflare.php')) {
-      try {
-        final client = HttpClient();
-        client.badCertificateCallback = (cert, host, port) => true;
-        final uri = Uri.parse(rawUrl);
-        final req = await client.getUrl(uri).timeout(const Duration(seconds: 4));
-        req.followRedirects = false;
-        req.headers.set('User-Agent', headers?['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        req.headers.set('Referer', headers?['Referer'] ?? 'https://istreamflare.in/');
-        final resp = await req.close().timeout(const Duration(seconds: 4));
-        final loc = resp.headers.value('location');
-        client.close();
-        if (loc != null && loc.isNotEmpty) {
-          final resolved = uri.resolve(loc).toString();
-          debugPrint('ModularSourceService: Resolved redirect $rawUrl -> $resolved');
-          return resolved;
+    String currentUrl = rawUrl;
+    for (int hop = 0; hop < 3; hop++) {
+      final lower = currentUrl.toLowerCase();
+      if (!lower.startsWith('http')) break;
+      if (lower.contains('ox.php') ||
+          lower.contains('/ox/') ||
+          lower.contains('istreamcdn') ||
+          lower.contains('exposeworld.art') ||
+          lower.contains('x7flix.com') ||
+          lower.contains('iasbase.net') ||
+          lower.contains('mflare.php') ||
+          lower.contains('loner300artoa.com')) {
+        try {
+          final client = HttpClient();
+          client.badCertificateCallback = (cert, host, port) => true;
+          final uri = Uri.parse(currentUrl);
+          final req = await client.getUrl(uri).timeout(const Duration(seconds: 12));
+          req.followRedirects = false;
+          req.headers.set('User-Agent', headers?['User-Agent'] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+          req.headers.set('Referer', headers?['Referer'] ?? 'https://istreamflare.in/');
+          final resp = await req.close().timeout(const Duration(seconds: 12));
+          final loc = resp.headers.value('location');
+          client.close();
+          if (loc != null && loc.isNotEmpty) {
+            final resolved = uri.resolve(loc).toString();
+            debugPrint('ModularSourceService: Resolved redirect hop ${hop + 1}: $currentUrl -> $resolved');
+            if (resolved.contains('sub_expire') || resolved.contains('expired')) {
+              return '';
+            }
+            currentUrl = ensureMpdExtension(resolved);
+            continue;
+          }
+        } catch (e) {
+          debugPrint('ModularSourceService: Error resolving direct redirect on hop ${hop + 1}: $e');
         }
-      } catch (e) {
-        debugPrint('ModularSourceService: Error resolving direct redirect: $e');
       }
+      break;
     }
-    return rawUrl;
+    return ensureMpdExtension(currentUrl);
   }
 
   /// Fetches installed modules list from cloud settings with local fallbacks
@@ -158,7 +195,7 @@ class ModularSourceService {
             if (name.startsWith('•')) name = name.substring(1).trim();
             if (name.isEmpty) name = 'Direct Stream';
 
-            final url = item['url']?.toString() ?? '';
+            var rawUrl = item['url']?.toString() ?? '';
             final quality = item['quality']?.toString() ?? '1080p Full HD';
             final size = item['size']?.toString();
             Map<String, String>? headers;
@@ -166,32 +203,66 @@ class ModularSourceService {
               headers = Map<String, String>.from(item['headers']);
             }
 
-            if (url.isNotEmpty) {
-              final lowerUrl = url.toLowerCase();
-              // Exclude broken landing pages and dead dummy streams
+            if (rawUrl.isNotEmpty) {
+              // Extract and split piped headers if present (e.g. url|Referer=...&user_agent=...)
+              var cleanUrl = rawUrl;
+              if (cleanUrl.contains('|')) {
+                final parts = cleanUrl.split('|');
+                cleanUrl = parts[0].trim();
+                headers ??= {};
+                for (int p = 1; p < parts.length; p++) {
+                  final subParts = parts[p].split('&');
+                  for (final sp in subParts) {
+                    final eqIdx = sp.indexOf('=');
+                    if (eqIdx != -1) {
+                      final k = sp.substring(0, eqIdx).trim();
+                      final v = Uri.decodeComponent(sp.substring(eqIdx + 1).trim());
+                      if (k.toLowerCase() == 'referer') {
+                        headers['Referer'] = v;
+                      } else if (k.toLowerCase() == 'user_agent' || k.toLowerCase() == 'user-agent') {
+                        headers['User-Agent'] = v;
+                      } else {
+                        headers[k] = v;
+                      }
+                    }
+                  }
+                }
+              }
+
+              final lowerUrl = cleanUrl.toLowerCase();
+              // Exclude broken landing pages, dead dummy hosts and expired streams
               if (lowerUrl.contains('pixel.hubcloud') ||
                   lowerUrl.contains('pixeldrain') ||
                   lowerUrl.contains('fuckingfast') ||
                   lowerUrl.contains('istreamcdn_disabled/hls/') ||
-                  lowerUrl.contains('iasbase.net/stream/')) {
+                  lowerUrl.contains('iasbase.net/stream/') ||
+                  lowerUrl.contains('loner300artoa.com') ||
+                  lowerUrl.contains('sub_expire') ||
+                  lowerUrl.contains('expired')) {
                 continue;
               }
 
-              // Auto-inject and ensure iStream / OKCDN headers
-              if (moduleKey == 'istreamflare' ||
+              // Auto-inject headers
+              headers ??= {};
+              if (lowerUrl.contains('x7flix') || lowerUrl.contains('molop.art')) {
+                headers['Referer'] ??= 'https://molop.art/';
+                headers['Origin'] ??= 'https://molop.art';
+              } else if (moduleKey == 'istreamflare' ||
                   lowerUrl.contains('okcdn.ru') ||
                   lowerUrl.contains('ok.ru') ||
+                  lowerUrl.contains('vkuser.net') ||
                   lowerUrl.contains('istreamcdn') ||
-                  lowerUrl.contains('ox.php') ||
-                  lowerUrl.contains('x7flix.com')) {
-                headers ??= {};
-                if (!headers.containsKey('Referer')) headers['Referer'] = 'https://istreamflare.in/';
-                if (!headers.containsKey('Origin')) headers['Origin'] = 'https://istreamflare.in';
-                if (!headers.containsKey('User-Agent')) headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+                  lowerUrl.contains('ox.php')) {
+                headers['Referer'] ??= 'https://istreamflare.in/';
+                headers['Origin'] ??= 'https://istreamflare.in';
+                headers['User-Agent'] ??= 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
               }
 
               // Resolve 302 redirect on client if applicable (for iStream ox.php)
-              final finalUrl = await resolveStreamRedirect(url, headers: headers);
+              final finalUrl = await resolveStreamRedirect(cleanUrl, headers: headers);
+              if (finalUrl.isEmpty || finalUrl.contains('sub_expire') || finalUrl.contains('expired')) {
+                continue;
+              }
 
               streamsList.add(StreamSourceInfo(
                 name: name,

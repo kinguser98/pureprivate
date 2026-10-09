@@ -168,6 +168,8 @@ class CastleResolver {
               ? dataObj['rows'] as List
               : [];
 
+          final normTarget = cleanTitle.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
           for (final elem in rows) {
             if (elem is! Map) continue;
             final rTitle = elem['title']?.toString() ??
@@ -177,26 +179,22 @@ class CastleResolver {
                 elem['redirectId']?.toString() ??
                 '';
 
-            if (rId.isNotEmpty) {
-              final lowerR = rTitle.toLowerCase().replaceAll(' ', '');
-              final lowerKw = cleanTitle.toLowerCase().replaceAll(' ', '');
-              if (lowerR == lowerKw ||
-                  lowerR.contains(lowerKw) ||
-                  lowerKw.contains(lowerR) ||
-                  rows.length == 1) {
+            if (rId.isNotEmpty && normTarget.isNotEmpty) {
+              final normR = rTitle.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+              if (normR.isEmpty) continue;
+
+              final bool exactMatch = normR == normTarget;
+              final bool targetInsideR = normR.contains(normTarget) && (normTarget.length >= 4 || normR.length <= normTarget.length + 3);
+              final bool rInsideTarget = normTarget.contains(normR) && (normR.length >= 4 && normR.length >= normTarget.length * 0.7);
+
+              final rYear = elem['year']?.toString() ?? elem['releaseDate']?.toString() ?? '';
+              final bool yearMatches = year == null || rYear.isEmpty || rYear.contains(year.toString());
+
+              if ((exactMatch || targetInsideR || rInsideTarget) && yearMatches) {
                 targetMovieId = rId;
                 matchedTitle = rTitle;
                 break;
               }
-            }
-          }
-
-          if (targetMovieId == null && rows.isNotEmpty) {
-            final first = rows.first as Map;
-            targetMovieId = first['id']?.toString() ??
-                first['redirectId']?.toString();
-            if (first['title'] != null) {
-              matchedTitle = first['title'].toString();
             }
           }
         } catch (e) {

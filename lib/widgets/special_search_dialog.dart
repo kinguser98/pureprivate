@@ -3,7 +3,10 @@ import 'package:private_cinema_mobile/data/telegram_premium_resolver.dart';
 import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:freebuff_core/services/telegram/telegram_video_item.dart';
 import 'package:freebuff_core/services/telegram/telegram_bot_resolver.dart';
+import 'package:freebuff_core/services/telegram/telegram_index_db.dart';
 import 'package:private_cinema_mobile/data/telegram_sources.dart';
+import 'package:private_cinema_mobile/data/webtorrent_service.dart';
+import 'package:private_cinema_mobile/widgets/seedr_countdown_dialog.dart';
 import 'package:private_cinema_mobile/widgets/telegram_auto_join_dialog.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -87,7 +90,29 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   Map<String, bool> _dynamicModuleVisibility = {};
   String? _selectedAddonSubGroup;
   int _maxSourceSizeMb = 0;
-  List<String> _sourceOrder = [];
+  static const List<String> _defaultSourceOrder = [
+    'netmirror_ott',
+    'netmirror_center',
+    'streamplay',
+    'moviebox',
+    'movy',
+    'moviesdrive',
+    'hdhub4u',
+    'movieshunt',
+    'stalker',
+    'stravo',
+    'castle',
+    'torrent',
+    'stremioAddon',
+    'filmu',
+    'vegamovies',
+    'cinejoy',
+    'streamtape',
+    'telegram',
+    'telegram_premium',
+    'directLink',
+  ];
+  List<String> _sourceOrder = List<String>.from(_defaultSourceOrder);
 
   // Series state and dynamic episode loaders
   bool _isSeriesSearch = false;
@@ -125,6 +150,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   bool _hasSearchedTelegramGroup = false;
   bool _isSearchingTelegramGroup = false;
   String? _selectedTelegramQuality;
+  String? _selectedTelegramLanguage;
+  bool _isSearchingTelegramLanguage = false;
 
   Future<void> _loadSourceVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -142,12 +169,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       setState(() {
         _dynamicModules = activeModules;
         _dynamicModuleVisibility = dynamicVis;
-        _sourceOrder = [
-          
-          
-        'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
-          'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','telegram_premium','directLink'
-        ];
+        _sourceOrder = List<String>.from(_defaultSourceOrder);
         for (final m in activeModules) {
           final id = m['id'].toString();
           if (!_sourceOrder.contains(id)) _sourceOrder.add(id);
@@ -183,14 +205,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     }
     // Load source order from cloud
     final order = await SyncService.fetchSourceOrder();
-    final List<String> defaultOrder = [
-      
-          
-        'streamplay','moviebox','movy','moviesdrive','hdhub4u','movieshunt','stalker','stravo',
-      'castle','torrent','stremioAddon','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','telegram','telegram_premium','directLink'
-    ];
-    final List<String> mergedOrder = List<String>.from(order.isEmpty ? defaultOrder : order);
-    for (final key in defaultOrder) {
+    final List<String> mergedOrder = List<String>.from(order.isEmpty ? _defaultSourceOrder : order);
+    for (final key in _defaultSourceOrder) {
       if (!mergedOrder.contains(key)) mergedOrder.add(key);
     }
     for (final mod in activeModules) {
@@ -540,10 +556,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             _imdbId = resolvedImdb;
             _loadingDetails = false;
           });
+          final movieTitle = movieData['title']?.toString() ??
+              movieData['name']?.toString() ??
+              movieData['original_title']?.toString() ??
+              'Movie';
           _resolveMovieStreams(
             tmdbId,
             _imdbId,
-            movieData['title']?.toString() ?? 'Movie',
+            movieTitle,
           );
         }
       } catch (e) {
@@ -737,6 +757,9 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       if (_showTelegram && title.isNotEmpty) {
         tasks.add(_resolveTelegram(title, movieYear));
+        if (await TelegramService.instance.isGroupSearchEnabled()) {
+          tasks.add(_ensureTelegramGroupSearched(title));
+        }
       }
 
       // No Superembed and FilmU
@@ -777,12 +800,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final sources = TelegramSources.toStreamSources(hits).cast<StreamSource>().toList();
 
       if (sources.isNotEmpty && mounted) {
-        sources.sort((a, b) {
-          final rankA = _rankTelegramQuality(a.quality ?? '', a.name);
-          final rankB = _rankTelegramQuality(b.quality ?? '', b.name);
-          return rankB.compareTo(rankA);
-        });
-
         setState(() {
           for (final s in sources) {
             _resolvedSources.add(
@@ -790,7 +807,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
                 name: s.name,
                 url: s.url,
                 type: StreamSourceType.telegram,
-                quality: s.quality,
+                quality: s.qualityBadgeText != null && s.qualityBadgeText!.isNotEmpty ? '${s.qualityBadgeText!} • ${s.quality ?? ""}' : s.quality,
               ),
             );
           }
@@ -803,6 +820,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
   Future<void> _ensureTelegramGroupSearched(String title) async {
     if (_hasSearchedTelegramGroup || _isSearchingTelegramGroup) return;
+    if (!await TelegramService.instance.isGroupSearchEnabled()) return;
     _isSearchingTelegramGroup = true;
     if (mounted) setState(() {});
 
@@ -835,6 +853,57 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     } finally {
       _isSearchingTelegramGroup = false;
       if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _searchTelegramWithLanguage(String movieTitle, String language) async {
+    if (_isSearchingTelegramLanguage || _isSearchingTelegramGroup) return;
+    if (!await TelegramService.instance.isGroupSearchEnabled()) return;
+    if (!await TelegramService.instance.hasSession) return;
+
+    final isSame = _selectedTelegramLanguage == language;
+    final String query = isSame ? movieTitle.trim() : '${movieTitle.trim()} $language';
+
+    // Keep saved messages (tg://) and non-telegram sources, clear old telegram group sources
+    final otherSources = _resolvedSources
+        .where((s) => s.type != StreamSourceType.telegram || s.url.startsWith('tg://'))
+        .toList();
+
+    setState(() {
+      _selectedTelegramLanguage = isSame ? null : language;
+      _isSearchingTelegramLanguage = true;
+      _resolvedSources = otherSources;
+    });
+
+    try {
+      final groupResults = await TelegramService.instance.searchMovieInConfiguredGroup(query);
+
+      final List<StreamSourceInfo> newTgSources = [];
+      for (final gr in groupResults) {
+        newTgSources.add(
+          StreamSourceInfo(
+            name: 'TG • ${gr.title}',
+            url: gr.botStartUrl,
+            type: StreamSourceType.telegram,
+            quality: gr.qualityOrSize,
+          ),
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _resolvedSources = [...otherSources, ...newTgSources];
+          _selectedTelegramQuality = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('[SpecialSearch] Telegram language search error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSearchingTelegramLanguage = false;
+        });
+      }
     }
   }
 
@@ -1852,7 +1921,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       return;
     }
 
-    if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(source.url)) {
+    if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(source.url) || TelegramSources.isTelegramUrl(source.url)) {
       if (TelegramBotResolver.instance.canHandle(source.url)) {
         final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
         bool dialogOpen = true;
@@ -1903,6 +1972,64 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             Navigator.of(context, rootNavigator: true).pop();
             dialogOpen = false;
           }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Telegram Resolve Error: $e'), backgroundColor: Colors.redAccent),
+            );
+          }
+        }
+        return;
+      } else {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const Center(child: CircularProgressIndicator(color: Colors.lightBlueAccent)),
+        );
+        try {
+          final localId = TelegramSources.extractLocalId(source.url);
+          var items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+          TelegramVideoItem? match;
+          for (final i in items) {
+            if (i.localId == localId) {
+              match = i;
+              break;
+            }
+          }
+          if (match == null) {
+            await TelegramService.instance.loadSavedMessages();
+            final items2 = await TelegramIndexDb.instance.all();
+            for (final i in items2) {
+              if (i.localId == localId) {
+                match = i;
+                break;
+              }
+            }
+          }
+
+          if (mounted) Navigator.of(context).pop();
+
+          if (match == null) {
+            throw Exception('Telegram file not found. Open Settings → Telegram → Sync.');
+          }
+
+          final tgItem = match;
+          final streamUrl = await TelegramService.instance.resolveStream(tgItem);
+          if (mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => VideoPlayerScreen(
+                  videoSource: streamUrl,
+                  title: movieTitle,
+                  subtitle: 'Telegram • ${tgItem.sizeLabel ?? ''}',
+                  movieId: tgItem.localId,
+                  resumeDirectly: false,
+                  sourceName: 'Telegram',
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) Navigator.of(context).pop();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Telegram Resolve Error: $e'), backgroundColor: Colors.redAccent),
@@ -2044,17 +2171,48 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         }
       }
     } else if (source.url.startsWith('magnet:')) {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => WebViewPlayerScreen(
-            embedUrl: source.url,
-            title: movieTitle,
-            backdropUrl: posterPath != null
-                ? 'https://image.tmdb.org/t/p/w780$posterPath'
-                : null,
-          ),
-        ),
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => SeedrCountdownDialog(title: movieTitle),
       );
+      final seedrToken = await WebTorrentService.getToken();
+      if (seedrToken != null && seedrToken.isNotEmpty && WebTorrentService.isUnderLimit(source.url)) {
+        try {
+          final downloadUrl = await WebTorrentService.startTorrent(source.url,
+              authToken: seedrToken, name: movieTitle);
+          if (mounted) Navigator.of(context).pop();
+          if (downloadUrl != null && mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => VideoPlayerScreen(
+                  videoSource: downloadUrl,
+                  title: movieTitle,
+                  subtitle: 'Seedr Torrent',
+                  movieId: 'torrent_${DateTime.now().millisecondsSinceEpoch}',
+                  resumeDirectly: false,
+                  sourceName: 'Seedr Torrent',
+                ),
+              ),
+            );
+            return;
+          }
+        } catch (e) {
+          if (mounted) Navigator.of(context).pop();
+          debugPrint('Seedr error: $e');
+        }
+      } else {
+        if (mounted) Navigator.of(context).pop();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Seedr torrent playback unavailable (ensure size <= 4GB).'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
     } else {
       final isWebEmbed =
           source.url.contains('vidsrc') ||
@@ -3515,11 +3673,39 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         .where((s) => s.type == StreamSourceType.directLink)
         .toList();
 
+    bool sourceHasStreams(String key) {
+      switch (key) {
+        case 'streamplay': return streamplayStreams.isNotEmpty;
+        case 'movy': return movyStreams.isNotEmpty;
+        case 'moviesdrive': return moviesdriveStreams.isNotEmpty;
+        case 'hdhub4u': return hdhub4uStreams.isNotEmpty;
+        case 'stravo': return stravoStreams.isNotEmpty;
+        case 'stalker': return stalkerStreams.isNotEmpty;
+        case 'cinefreak': return cinefreakStreams.isNotEmpty;
+        case 'moviebox': return movieboxStreams.isNotEmpty;
+        case 'castle': return castleStreams.isNotEmpty;
+        case 'torrent': return torrentStreams.isNotEmpty;
+        case 'stremioAddon': return stremioStreams.isNotEmpty;
+        case 'nuveoAddon': return nuveoStreams.isNotEmpty;
+        case 'filmu': return filmuStreams.isNotEmpty;
+        case 'vegamovies': return vegamoviesStreams.isNotEmpty;
+        case 'cinejoy': return cinejoyStreams.isNotEmpty;
+        case 'streamtape': return streamtapeStreams.isNotEmpty;
+        case 'netmirror_center': return netmirrorCenterStreams.isNotEmpty;
+        case 'netmirror_ott': return netmirrorOttStreams.isNotEmpty;
+        case 'telegram': return telegramStreams.isNotEmpty;
+        case 'telegram_premium': return telegramPremiumStreams.isNotEmpty;
+        case 'directLink': return directLinkStreams.isNotEmpty;
+        default:
+          return filteredSources.any((s) => s.moduleKey == key);
+      }
+    }
+
     if (_activeGroupType == null && _activeDynamicModuleKey == null) {
       final Map<String, Widget> sourceWidgets = {};
 
       // StreamPlay Multi-API
-      if (_showStreamplay && (_resolvingStreams || streamplayStreams.isNotEmpty) && enabledKeys.contains('streamplay')) {
+      if (_showStreamplay && enabledKeys.contains('streamplay')) {
         sourceWidgets['streamplay'] = _buildServerGroupCard(
           title: '${pos('streamplay')}. StreamPlay Multi-API',
           subtitle: _resolvingStreams && streamplayStreams.isEmpty
@@ -3538,7 +3724,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Movy.bz
-      if (_showMovy && (_resolvingStreams || movyStreams.isNotEmpty) && enabledKeys.contains('movy')) {
+      if (_showMovy && enabledKeys.contains('movy')) {
         sourceWidgets['movy'] = _buildServerGroupCard(
           title: '${pos('movy')}. Movy.bz Multi-Source',
           subtitle: _resolvingStreams && movyStreams.isEmpty
@@ -3557,7 +3743,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // MoviesDrive (FSL & HubCloud)
-      if (_showMoviesdrive && (_resolvingStreams || moviesdriveStreams.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
+      if (_showMoviesdrive && enabledKeys.contains('moviesdrive')) {
         sourceWidgets['moviesdrive'] = _buildServerGroupCard(
           title: '${pos('moviesdrive')}. MoviesDrive FSL',
           subtitle: _resolvingStreams && moviesdriveStreams.isEmpty
@@ -3576,7 +3762,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // HDHub4u API
-      if (_showHdhub4u && (_resolvingStreams || hdhub4uStreams.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
+      if (_showHdhub4u && enabledKeys.contains('hdhub4u')) {
         sourceWidgets['hdhub4u'] = _buildServerGroupCard(
           title: '${pos('hdhub4u')}. HDHub4u 4K & Dolby',
           subtitle: _resolvingStreams && hdhub4uStreams.isEmpty
@@ -3595,12 +3781,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Stravo
-      if (_showStravo && (_resolvingStreams || stravoStreams.isNotEmpty) && enabledKeys.contains('stravo')) {
+      if (_showStravo && enabledKeys.contains('stravo')) {
         sourceWidgets['stravo'] = _buildServerGroupCard(
           title: '${pos('stravo')}. Stravo Server',
           subtitle: _resolvingStreams && stravoStreams.isEmpty
               ? 'Searching streams...'
-              : '${stravoStreams.length} links available',
+              : (stravoStreams.isNotEmpty
+                    ? '${stravoStreams.length} links available'
+                    : 'Not available'),
           icon: Icons.rocket_launch_rounded,
           accentColor: Colors.cyan,
           onTap: stravoStreams.isEmpty
@@ -3612,7 +3800,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Stalker
-      if (_showStalker && (_resolvingStreams || stalkerStreams.isNotEmpty) && enabledKeys.contains('stalker')) {
+      if (_showStalker && enabledKeys.contains('stalker')) {
         sourceWidgets['stalker'] = _buildServerGroupCard(
           title: '${pos('stalker')}. Stalker VOD Server',
           subtitle: _resolvingStreams && stalkerStreams.isEmpty
@@ -3630,8 +3818,8 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         );
       }
 
-            // CineFreak Server
-      if (_showCinefreak && (_resolvingStreams || cinefreakStreams.isNotEmpty) && enabledKeys.contains('cinefreak')) {
+      // CineFreak Server
+      if (_showCinefreak && enabledKeys.contains('cinefreak')) {
         sourceWidgets['cinefreak'] = _buildServerGroupCard(
           title: '${pos('cinefreak')}. CineCloud Direct Server',
           subtitle: _resolvingStreams && cinefreakStreams.isEmpty
@@ -3646,12 +3834,11 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               : () => setState(
                   () => _activeGroupType = StreamSourceType.cinefreak,
                 ),
-          
         );
       }
 
       // MovieBox
-      if (_showMoviebox && (_resolvingStreams || movieboxStreams.isNotEmpty) && enabledKeys.contains('moviebox')) {
+      if (_showMoviebox && enabledKeys.contains('moviebox')) {
         sourceWidgets['moviebox'] = _buildServerGroupCard(
           title: '${pos('moviebox')}. MovieBox Server',
           subtitle: _resolvingStreams && movieboxStreams.isEmpty
@@ -3670,7 +3857,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Castle (movies only)
-      if (_showCastle && !widget.isSeriesSearch && (_resolvingStreams || castleStreams.isNotEmpty) && enabledKeys.contains('castle')) {
+      if (_showCastle && !widget.isSeriesSearch && enabledKeys.contains('castle')) {
         sourceWidgets['castle'] = _buildServerGroupCard(
           title: '${pos('castle')}. Castle TV Server',
           subtitle: _resolvingStreams && castleStreams.isEmpty
@@ -3689,12 +3876,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Torrent
-      if (_showTorrent && (_resolvingStreams || torrentStreams.isNotEmpty) && enabledKeys.contains('torrent')) {
+      if (_showTorrent && enabledKeys.contains('torrent')) {
         sourceWidgets['torrent'] = _buildServerGroupCard(
           title: '${pos('torrent')}. Torrent Server',
-          subtitle: _resolvingStreams && torrentStreams.isNotEmpty
+          subtitle: _resolvingStreams && torrentStreams.isEmpty
               ? 'Scraping torrents...'
-              : '${torrentStreams.length} links available',
+              : (torrentStreams.isNotEmpty
+                    ? '${torrentStreams.length} links available'
+                    : 'Not available'),
           icon: Icons.cloud_circle_rounded,
           accentColor: Colors.amber,
           onTap: torrentStreams.isEmpty
@@ -3706,12 +3895,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Stremio Addons
-      if (_showStremioAddon && (_resolvingStreams || stremioStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+      if (_showStremioAddon && enabledKeys.contains('stremioAddon')) {
         sourceWidgets['stremioAddon'] = _buildServerGroupCard(
           title: '${pos('stremioAddon')}. Stremio Addons',
           subtitle: _resolvingStreams && stremioStreams.isEmpty
               ? 'Searching addons...'
-              : '${stremioStreams.length} links available',
+              : (stremioStreams.isNotEmpty
+                    ? '${stremioStreams.length} links available'
+                    : 'Not available'),
           icon: Icons.extension_rounded,
           accentColor: Colors.pinkAccent,
           onTap: stremioStreams.isEmpty
@@ -3724,12 +3915,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Nuveo Addons
-      if ((_resolvingStreams || nuveoStreams.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+      if (enabledKeys.contains('stremioAddon')) {
         sourceWidgets['nuveoAddon'] = _buildServerGroupCard(
           title: '${pos('stremioAddon')}. Nuveo Addons',
           subtitle: _resolvingStreams && nuveoStreams.isEmpty
               ? 'Searching scrapers...'
-              : '${nuveoStreams.length} links available',
+              : (nuveoStreams.isNotEmpty
+                    ? '${nuveoStreams.length} links available'
+                    : 'Not available'),
           icon: Icons.settings_input_component_rounded,
           accentColor: Colors.pinkAccent,
           onTap: nuveoStreams.isEmpty
@@ -3742,12 +3935,14 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // FilmU Card
-      if (_showFilmu && (_resolvingStreams || filmuStreams.isNotEmpty) && enabledKeys.contains('filmu')) {
+      if (_showFilmu && enabledKeys.contains('filmu')) {
         sourceWidgets['filmu'] = _buildServerGroupCard(
           title: '${pos('filmu')}. FilmU Premium Server',
           subtitle: _resolvingStreams && filmuStreams.isEmpty
               ? 'Searching FilmU...'
-              : '${filmuStreams.length} servers available',
+              : (filmuStreams.isNotEmpty
+                    ? '${filmuStreams.length} servers available'
+                    : 'Not available'),
           icon: Icons.hd_rounded,
           accentColor: Colors.orangeAccent,
           onTap: filmuStreams.isEmpty
@@ -3759,7 +3954,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Vegamovies Card
-      if (_showVegamovies && (_resolvingStreams || vegamoviesStreams.isNotEmpty) && enabledKeys.contains('vegamovies')) {
+      if (_showVegamovies && enabledKeys.contains('vegamovies')) {
         sourceWidgets['vegamovies'] = _buildServerGroupCard(
           title: '${pos('vegamovies')}. Vegamovies.se Server',
           subtitle: _resolvingStreams && vegamoviesStreams.isEmpty
@@ -3778,7 +3973,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Cinejoy Card
-      if (_showCinejoy && (_resolvingStreams || cinejoyStreams.isNotEmpty) && enabledKeys.contains('cinejoy')) {
+      if (_showCinejoy && enabledKeys.contains('cinejoy')) {
         sourceWidgets['cinejoy'] = _buildServerGroupCard(
           title: '${pos('cinejoy')}. Cinejoy.to Server',
           subtitle: _resolvingStreams && cinejoyStreams.isEmpty
@@ -3797,7 +3992,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Streamtape Card
-      if (_showStreamtape && (_resolvingStreams || streamtapeStreams.isNotEmpty) && enabledKeys.contains('streamtape')) {
+      if (_showStreamtape && enabledKeys.contains('streamtape')) {
         sourceWidgets['streamtape'] = _buildServerGroupCard(
           title: '${pos('streamtape')}. Streamtape Server',
           subtitle: _resolvingStreams && streamtapeStreams.isEmpty
@@ -3816,7 +4011,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // NetMirror Center Card
-      if (_showNetmirrorCenter && (_resolvingStreams || netmirrorCenterStreams.isNotEmpty) && enabledKeys.contains('netmirror_center')) {
+      if (_showNetmirrorCenter && enabledKeys.contains('netmirror_center')) {
         sourceWidgets['netmirror_center'] = _buildServerGroupCard(
           title: '${pos('netmirror_center')}. NetMirror Center',
           subtitle: _resolvingStreams && netmirrorCenterStreams.isEmpty
@@ -3838,7 +4033,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       final hasOttAction = netmirrorOttStreams.any((s) => s.url == 'netmirror_verify_action');
       final validOttCount = netmirrorOttStreams.where((s) => s.url != 'netmirror_verify_action').length;
 
-      if (_showNetmirrorOtt && (_resolvingStreams || netmirrorOttStreams.isNotEmpty) && enabledKeys.contains('netmirror_ott')) {
+      if (_showNetmirrorOtt && enabledKeys.contains('netmirror_ott')) {
         sourceWidgets['netmirror_ott'] = _buildServerGroupCard(
           title: '${pos('netmirror_ott')}. NetMirror OTT',
           subtitle: _resolvingStreams && netmirrorOttStreams.isEmpty
@@ -3903,7 +4098,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Telegram Premium Card
-      if (_showTelegramPremium && (_resolvingStreams || telegramPremiumStreams.isNotEmpty) && enabledKeys.contains('telegram_premium')) {
+      if (_showTelegramPremium && enabledKeys.contains('telegram_premium')) {
         sourceWidgets['telegram_premium'] = _buildServerGroupCard(
           title: '${pos('telegram_premium')}. Telegram Premium',
           subtitle: _resolvingStreams && telegramPremiumStreams.isEmpty
@@ -3922,7 +4117,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
 
       // Direct Link Card
-      if (_showDirectLink && (_resolvingStreams || directLinkStreams.isNotEmpty) && enabledKeys.contains('directLink')) {
+      if (_showDirectLink && enabledKeys.contains('directLink')) {
         sourceWidgets['directLink'] = _buildServerGroupCard(
           title: '${pos('directLink')}. Direct Links',
           subtitle: _resolvingStreams && directLinkStreams.isEmpty
@@ -3948,7 +4143,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         final name = mod['name']?.toString() ?? key;
         final isVis = _dynamicModuleVisibility[key] ?? true;
         final modStreams = filteredSources.where((s) => s.moduleKey == key).toList();
-        if (isVis && (_resolvingStreams || modStreams.isNotEmpty) && enabledKeys.contains(key)) {
+        if (isVis && enabledKeys.contains(key)) {
           sourceWidgets[key] = _buildServerGroupCard(
             title: '${pos(key)}. $name',
             subtitle: _resolvingStreams && modStreams.isEmpty
@@ -3989,17 +4184,23 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       for (final key in _sourceOrder) {
         if (key == 'stremioAddon') {
           if (sourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
-            groupCards.add(sourceWidgets['stremioAddon']!);
+            if (_resolvingStreams || stremioStreams.isNotEmpty) {
+              groupCards.add(sourceWidgets['stremioAddon']!);
+            }
           }
           if (sourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
-            groupCards.add(sourceWidgets['nuveoAddon']!);
+            if (_resolvingStreams || nuveoStreams.isNotEmpty) {
+              groupCards.add(sourceWidgets['nuveoAddon']!);
+            }
           }
         } else {
           if (sourceWidgets.containsKey(key) && enabledKeys.contains(key)) {
-            groupCards.add(sourceWidgets[key]!);
+            if (_resolvingStreams || sourceHasStreams(key)) {
+              groupCards.add(sourceWidgets[key]!);
+            }
           }
+        }
       }
-    }
 
       if (groupCards.isEmpty && !_resolvingStreams) {
         return Center(
@@ -4382,6 +4583,10 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             : activeList;
         sortedActiveList = List<StreamSourceInfo>.from(filteredList)
           ..sort((a, b) {
+            final isSavedA = (a.quality ?? '').contains('SAVED') || a.name.contains('💾') || a.url.startsWith('tg://');
+            final isSavedB = (b.quality ?? '').contains('SAVED') || b.name.contains('💾') || b.url.startsWith('tg://');
+            if (isSavedA && !isSavedB) return -1;
+            if (!isSavedA && isSavedB) return 1;
             final rankA = _rankTelegramQuality(a.quality ?? '', a.name);
             final rankB = _rankTelegramQuality(b.quality ?? '', b.name);
             return rankB.compareTo(rankA);
@@ -4410,6 +4615,13 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_activeGroupType == StreamSourceType.telegram) ...[
+            _buildTelegramLanguageBar(
+              selectedLanguage: _selectedTelegramLanguage,
+              isSearching: _isSearchingTelegramLanguage,
+              onLanguageSelected: (lang) => _searchTelegramWithLanguage(movieTitle, lang),
+            ),
+          ],
           if (isTelegramType && tgQualityOptions.length > 1) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
@@ -4492,6 +4704,83 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
   }
 
 
+  Widget _buildTelegramLanguageBar({
+    required String? selectedLanguage,
+    required bool isSearching,
+    required ValueChanged<String> onLanguageSelected,
+  }) {
+    const languages = ['Malayalam', 'Tamil', 'Hindi', 'English'];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+      child: Row(
+        children: languages.map((lang) {
+          final isSelected = selectedLanguage == lang;
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => onLanguageSelected(lang),
+                  borderRadius: BorderRadius.circular(10),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? const Color(0xFF00E5FF).withValues(alpha: 0.18)
+                          : Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected
+                            ? const Color(0xFF00E5FF)
+                            : Colors.white.withValues(alpha: 0.1),
+                        width: isSelected ? 1.4 : 1.0,
+                      ),
+                      boxShadow: isSelected
+                          ? [
+                              BoxShadow(
+                                color: const Color(0xFF00E5FF).withValues(alpha: 0.25),
+                                blurRadius: 8,
+                                spreadRadius: 0.5,
+                              )
+                            ]
+                          : null,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (isSelected && isSearching) ...[
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF00E5FF),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        Text(
+                          lang,
+                          style: GoogleFonts.outfit(
+                            color: isSelected ? const Color(0xFF00E5FF) : Colors.white70,
+                            fontSize: 12,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Future<void> _handleStreamDownload(StreamSourceInfo source, String movieTitle, String? posterPath) async {
     final movie = Movie(
       id: 'special_search_${_selectedMovie?['id'] ?? DateTime.now().millisecondsSinceEpoch}',
@@ -4519,7 +4808,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
         return;
       }
 
-      if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(url)) {
+      if (source.type == StreamSourceType.telegram || TelegramBotResolver.instance.canHandle(url) || TelegramSources.isTelegramUrl(url)) {
         if (TelegramBotResolver.instance.canHandle(url)) {
           final statusNotifier = ValueNotifier<String>('Connecting to Telegram Bot...');
           bool dialogOpen = true;
@@ -4566,6 +4855,48 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             }
           }
           return;
+        } else {
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => const Center(child: CircularProgressIndicator(color: Colors.lightBlueAccent)),
+          );
+          try {
+            final localId = TelegramSources.extractLocalId(url);
+            var items = await TelegramIndexDb.instance.all().catchError((_) => <TelegramVideoItem>[]);
+            TelegramVideoItem? match;
+            for (final i in items) {
+              if (i.localId == localId) {
+                match = i;
+                break;
+              }
+            }
+            if (match == null) {
+              await TelegramService.instance.loadSavedMessages();
+              final items2 = await TelegramIndexDb.instance.all();
+              for (final i in items2) {
+                if (i.localId == localId) {
+                  match = i;
+                  break;
+                }
+              }
+            }
+            if (mounted) Navigator.of(context).pop();
+            if (match != null) {
+              final resolved = await TelegramService.instance.resolveStream(match);
+              await DownloadManager.downloadMovie(movie, resolved);
+            } else {
+              throw Exception('Telegram file not found. Open Settings → Telegram → Sync.');
+            }
+          } catch (e) {
+            if (mounted) Navigator.of(context).pop();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Telegram download error: $e'), backgroundColor: Colors.redAccent),
+              );
+            }
+          }
+          return;
         }
       }
 
@@ -4575,6 +4906,44 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
           headers.addAll(source.headers!);
         }
         await DownloadManager.downloadMovie(movie, url, headers: headers.isNotEmpty ? headers : null);
+        return;
+      }
+
+      if (url.startsWith('magnet:')) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+        );
+        try {
+          if (!WebTorrentService.isUnderLimit(url)) {
+            if (mounted) Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Torrent file exceeds Seedr 4GB size limit.'),
+                backgroundColor: Colors.orangeAccent,
+              ),
+            );
+            return;
+          }
+          final seedrToken = await WebTorrentService.getToken();
+          final resolvedUrl = await WebTorrentService.startTorrent(
+            url,
+            authToken: seedrToken,
+            name: movieTitle,
+          );
+          if (mounted) Navigator.of(context).pop();
+          if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+            await DownloadManager.downloadMovie(movie, resolvedUrl);
+          } else {
+            throw Exception('Could not fetch Seedr direct download link (limit 4GB).');
+          }
+        } catch (e) {
+          if (mounted) Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Seedr torrent download error: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
         return;
       }
 

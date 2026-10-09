@@ -522,15 +522,31 @@ class SyncService {
     return prefs.getString('netmirror_domains') ?? '';
   }
 
+  static const String defaultSeedrToken = 'sdp_zfvS5fCde2VMajyFDIspqveYPkGFxkWPd1z5j93u8wjeKyWIEf1u2MbnUw3bHZpA';
+
   static Future<String?> getSeedrToken() async {
     try {
       final cloud = await fetchAppSettings();
-      if (cloud.containsKey('seedr_token') && cloud['seedr_token']!.isNotEmpty) {
-        return cloud['seedr_token']!;
+      final token = cloud['seedr_token'] ??
+          cloud['seedr_auth_token'] ??
+          cloud['seedr_key'] ??
+          cloud['seedr_api_key'] ??
+          cloud['seedr_cc_auth_token'] ??
+          cloud['seedr_shared_token'];
+      if (token != null && token.trim().isNotEmpty) {
+        return token.trim();
       }
     } catch (_) {}
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('seedr_auth_token');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final local = prefs.getString('seedr_auth_token') ??
+          prefs.getString('seedr_token') ??
+          prefs.getString('seedr_key');
+      if (local != null && local.trim().isNotEmpty) {
+        return local.trim();
+      }
+    } catch (_) {}
+    return defaultSeedrToken;
   }
 }
 

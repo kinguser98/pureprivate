@@ -2,7 +2,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:private_cinema_mobile/screens/home_screen.dart';
 import 'package:private_cinema_mobile/screens/all_movies_screen.dart';
-import 'package:private_cinema_mobile/screens/downloads_screen.dart';
 import 'package:private_cinema_mobile/screens/favorites_screen.dart';
 import 'package:private_cinema_mobile/screens/settings_screen.dart';
 import 'package:private_cinema_mobile/screens/live_tv_screen.dart';
@@ -18,27 +17,16 @@ class NavigationHolder extends StatefulWidget {
 
 class _NavigationHolderState extends State<NavigationHolder> {
   int _currentIndex = 0;
-  late final List<Widget> _screens;
 
-  @override
-  void initState() {
-    super.initState();
-    _screens = [
-      HomeScreen(
-        key: const PageStorageKey('home'),
-        onSwitchTab: (index) {
-          if (mounted) {
-            setState(() {
-              _currentIndex = index;
-            });
-          }
-        },
-      ),
-      const AllMoviesScreen(key: PageStorageKey('search')),
-      const LiveTvScreen(key: PageStorageKey('livetv')),
-      const FavoritesScreen(key: PageStorageKey('favorites')),
-      const SettingsScreen(key: PageStorageKey('settings')),
-    ];
+  void _onTabSwitched(int index) {
+    if (_currentIndex == index) return;
+    final previousIndex = _currentIndex;
+    setState(() {
+      _currentIndex = index;
+    });
+    if (previousIndex == 2 && index != 2) {
+      LiveTvScreen.stopActivePlayback(checkPip: true);
+    }
   }
 
   @override
@@ -54,7 +42,19 @@ class _NavigationHolderState extends State<NavigationHolder> {
               Positioned.fill(
                 child: IndexedStack(
                   index: _currentIndex,
-                  children: _screens,
+                  children: [
+                    HomeScreen(
+                      key: const PageStorageKey('home'),
+                      onSwitchTab: _onTabSwitched,
+                    ),
+                    const AllMoviesScreen(key: PageStorageKey('search')),
+                    LiveTvScreen(
+                      key: const PageStorageKey('livetv'),
+                      isActive: _currentIndex == 2,
+                    ),
+                    const FavoritesScreen(key: PageStorageKey('favorites')),
+                    const SettingsScreen(key: PageStorageKey('settings')),
+                  ],
                 ),
               ),
               
@@ -66,6 +66,9 @@ class _NavigationHolderState extends State<NavigationHolder> {
                         : 24) + 76,
                 child: GestureDetector(
                   onTap: () {
+                    if (_currentIndex == 2) {
+                      LiveTvScreen.stopActivePlayback(checkPip: true);
+                    }
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => const StalkerVodScreen(),
@@ -176,9 +179,7 @@ class _NavigationHolderState extends State<NavigationHolder> {
     return GestureDetector(
       onTap: () {
         if (_currentIndex != index) {
-          setState(() {
-            _currentIndex = index;
-          });
+          _onTabSwitched(index);
         }
       },
       behavior: HitTestBehavior.opaque,

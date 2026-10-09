@@ -91,26 +91,31 @@ class _MultiViewPlayerScreenState extends State<MultiViewPlayerScreen> {
       
       if (mounted) {
         var resolvedSource = resolved.url;
-        final dnsProxy = CustomDnsProxy();
-        if (resolvedSource.startsWith('http') && dnsProxy.port != null) {
-          final uri = Uri.parse(resolvedSource);
-          final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
-          
-          final newParams = Map<String, String>.from(uri.queryParameters);
-          newParams['local_proxy_headers'] = jsonEncode(resolved.headers);
-          final cleanUri = uri.replace(queryParameters: newParams);
+        if (!resolved.isDirect) {
+          final dnsProxy = CustomDnsProxy();
+          if (resolvedSource.startsWith('http') && dnsProxy.port != null) {
+            final uri = Uri.parse(resolvedSource);
+            final hostWithPort = uri.hasPort ? '${uri.host}:${uri.port}' : uri.host;
+            
+            final newParams = Map<String, String>.from(uri.queryParameters);
+            newParams['local_proxy_headers'] = jsonEncode(resolved.headers);
+            final cleanUri = uri.replace(queryParameters: newParams);
 
-          resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
+            resolvedSource = 'http://127.0.0.1:${dnsProxy.port}/proxy/${cleanUri.scheme}/$hostWithPort${cleanUri.path}${cleanUri.hasQuery ? "?" + cleanUri.query : ""}';
+          }
         }
 
         if (player.platform is NativePlayer) {
           final nativePlayer = player.platform as NativePlayer;
+          await nativePlayer.setProperty('tls-verify', 'no');
+          await nativePlayer.setProperty('framedrop', 'vo');
+          await nativePlayer.setProperty('hwdec', 'auto');
           await nativePlayer.setProperty('cache', 'yes');
-          await nativePlayer.setProperty('demuxer-readahead-secs', '15');
-          await nativePlayer.setProperty('cache-secs', '15');
+          await nativePlayer.setProperty('demuxer-readahead-secs', '10');
+          await nativePlayer.setProperty('cache-secs', '10');
           await nativePlayer.setProperty('demuxer-max-bytes', '33554432');
-          await nativePlayer.setProperty('cache-pause-wait', '1');
-          await nativePlayer.setProperty('network-timeout', '30');
+          await nativePlayer.setProperty('network-timeout', '20');
+          await nativePlayer.setProperty('demuxer-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
         }
 
         await player.open(

@@ -18,6 +18,7 @@ import 'package:freebuff_core/services/telegram/telegram_service.dart';
 import 'package:private_cinema_mobile/screens/device_gate.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/theme/home_wallpaper_manager.dart';
+import 'package:private_cinema_mobile/data/skip_intro_service.dart';
 
 Future<void> fetchHotConfig() async {
   try {
@@ -51,6 +52,9 @@ Future<void> fetchHotConfig() async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+
+  // Initialize SkipIntroService cache from local storage
+  await SkipIntroService.init();
 
   // Initialize dynamic domain manager
   DomainService.init();
