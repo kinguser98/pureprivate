@@ -767,14 +767,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
       _initialVideoQualityAdjusted = false;
 
-      // Pre-resolve client-side redirectors (e.g. iStream ox.php, mflare, istreamcdn)
+      // Intercept and rewrite dead/expired x7flix oauth URLs to active istreamcdn redirector
+      if (!isLocalStream && (rawSource.contains('x7flix.com') && (rawSource.contains('oauth.php') || rawSource.contains('id=')))) {
+        final u = Uri.tryParse(rawSource);
+        if (u != null && u.queryParameters.containsKey('id')) {
+          final id = u.queryParameters['id']!;
+          rawSource = 'https://istreamcdn.com/ox/ox.php?id=$id';
+          debugPrint('VideoPlayerScreen: Rewrote dead x7flix oauth URL to istreamcdn: $rawSource');
+        }
+      }
+
+      // Pre-resolve client-side redirectors (e.g. iStream ox.php, mflare, istreamcdn, x7flix)
       // to obtain the final direct media URL (e.g., vkuser.net DASH MPD) before player initialization.
-      if (!isLocalStream && (rawSource.contains('ox.php') || rawSource.contains('/ox/') || rawSource.contains('mflare') || rawSource.contains('istreamcdn'))) {
+      if (!isLocalStream && (rawSource.contains('ox.php') || rawSource.contains('/ox/') || rawSource.contains('mflare') || rawSource.contains('istreamcdn') || rawSource.contains('x7flix.com'))) {
         try {
           final resolved = await ModularSourceService.resolveStreamRedirect(rawSource, headers: playHeaders);
           if (resolved.isNotEmpty && resolved != rawSource) {
-            rawSource = resolved;
-            debugPrint('VideoPlayerScreen: Pre-resolved redirector -> $rawSource');
+            final lowerResolved = resolved.toLowerCase();
+            if (!lowerResolved.contains('sessionexpired') && !lowerResolved.contains('desileak.net')) {
+              rawSource = resolved;
+              debugPrint('VideoPlayerScreen: Pre-resolved redirector -> $rawSource');
+            }
           }
         } catch (e) {
           debugPrint('VideoPlayerScreen: Pre-resolve note: $e');

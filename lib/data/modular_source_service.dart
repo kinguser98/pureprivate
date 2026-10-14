@@ -53,6 +53,16 @@ class ModularSourceService {
   /// to ensure client IP binding and avoid cross-domain header dropping by video decoders.
   static Future<String> resolveStreamRedirect(String rawUrl, {Map<String, String>? headers}) async {
     String currentUrl = rawUrl;
+    // Intercept and rewrite dead/expired x7flix oauth URLs to active istreamcdn redirector
+    if (currentUrl.contains('x7flix.com') && (currentUrl.contains('oauth.php') || currentUrl.contains('id='))) {
+      final u = Uri.tryParse(currentUrl);
+      if (u != null && u.queryParameters.containsKey('id')) {
+        final id = u.queryParameters['id']!;
+        currentUrl = 'https://istreamcdn.com/ox/ox.php?id=$id';
+        debugPrint('ModularSourceService: Rewrote dead x7flix oauth URL to istreamcdn: $currentUrl');
+      }
+    }
+
     for (int hop = 0; hop < 3; hop++) {
       final lower = currentUrl.toLowerCase();
       if (!lower.startsWith('http')) break;
@@ -77,8 +87,13 @@ class ModularSourceService {
           client.close();
           if (loc != null && loc.isNotEmpty) {
             final resolved = uri.resolve(loc).toString();
+            final lowerResolved = resolved.toLowerCase();
             debugPrint('ModularSourceService: Resolved redirect hop ${hop + 1}: $currentUrl -> $resolved');
-            if (resolved.contains('sub_expire') || resolved.contains('expired')) {
+            if (lowerResolved.contains('sub_expire') ||
+                lowerResolved.contains('expired') ||
+                lowerResolved.contains('sessionexpired') ||
+                lowerResolved.contains('desileak.net')) {
+              debugPrint('ModularSourceService: Dropped dummy/expired stream: $resolved');
               return '';
             }
             currentUrl = ensureMpdExtension(resolved);
@@ -229,6 +244,15 @@ class ModularSourceService {
                 }
               }
 
+              // Intercept and rewrite dead/expired x7flix oauth URLs to active istreamcdn redirector
+              if (cleanUrl.contains('x7flix.com') && (cleanUrl.contains('oauth.php') || cleanUrl.contains('id='))) {
+                final u = Uri.tryParse(cleanUrl);
+                if (u != null && u.queryParameters.containsKey('id')) {
+                  final id = u.queryParameters['id']!;
+                  cleanUrl = 'https://istreamcdn.com/ox/ox.php?id=$id';
+                }
+              }
+
               final lowerUrl = cleanUrl.toLowerCase();
               // Exclude broken landing pages, dead dummy hosts and expired streams
               if (lowerUrl.contains('pixel.hubcloud') ||
@@ -238,6 +262,8 @@ class ModularSourceService {
                   lowerUrl.contains('iasbase.net/stream/') ||
                   lowerUrl.contains('loner300artoa.com') ||
                   lowerUrl.contains('sub_expire') ||
+                  lowerUrl.contains('sessionexpired') ||
+                  lowerUrl.contains('desileak.net') ||
                   lowerUrl.contains('expired')) {
                 continue;
               }
@@ -260,7 +286,12 @@ class ModularSourceService {
 
               // Resolve 302 redirect on client if applicable (for iStream ox.php)
               final finalUrl = await resolveStreamRedirect(cleanUrl, headers: headers);
-              if (finalUrl.isEmpty || finalUrl.contains('sub_expire') || finalUrl.contains('expired')) {
+              final lowerFinal = finalUrl.toLowerCase();
+              if (finalUrl.isEmpty ||
+                  lowerFinal.contains('sub_expire') ||
+                  lowerFinal.contains('sessionexpired') ||
+                  lowerFinal.contains('desileak.net') ||
+                  lowerFinal.contains('expired')) {
                 continue;
               }
 
