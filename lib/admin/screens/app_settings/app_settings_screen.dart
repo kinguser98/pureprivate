@@ -151,6 +151,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
 
       final allSources = [
         'streamplay',
+        'flyflix',
         'moviebox',
         'movy',
         'moviesdrive',
@@ -228,6 +229,16 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
           } else {
             orderedSources.add('telegram_premium');
           }
+        }
+      }
+
+      // If flyflix is not in the saved source_order yet, insert it right after streamplay!
+      if (!orderedSources.contains('flyflix')) {
+        final spIdx = orderedSources.indexOf('streamplay');
+        if (spIdx != -1) {
+          orderedSources.insert(spIdx + 1, 'flyflix');
+        } else {
+          orderedSources.add('flyflix');
         }
       }
 
@@ -382,6 +393,7 @@ class _AppSettingsScreenState extends ConsumerState<AppSettingsScreen> {
     }
     switch (key) {
       case 'streamplay': return 'StreamPlay Multi-API (VidLink, Videasy, RiveStream, VidFast, VidZee)';
+      case 'flyflix': return 'Flyflix Multi-Server (VidRift & VidBolt 1080p)';
       case 'movy': return 'Movy.bz Multi-Source (Multi-Audio & Multi-Quality)';
       case 'moviesdrive': return 'MoviesDrive FSL (Fast Server, R2 & S3 Multi-Audio)';
       case 'hdhub4u': return 'HDHub4u (4K UHD & Dolby Atmos Multi-Audio)';

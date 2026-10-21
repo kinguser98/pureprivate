@@ -54,6 +54,7 @@ ParsedStreamMeta parseStreamMeta(String name, String url, {String? explicitQuali
   raw = raw.replaceAll(RegExp(r'^(MKV|MP4)\s*Stream\s*[-•:]\s*', caseSensitive: false), '');
   raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|Movy\.bz|Movy|Cinejoy(\.to)?|CineFreak(\.ch|\.net)?|Vegamovies(\.futbol|\.se|\.catering)?|StreamPlay|MovieBox|FilmU|NetMirror(\s*Center)?)\s*[-•:]\s*', caseSensitive: false), '');
   raw = raw.replaceAll(RegExp(r'^(MoviesDrive|HDHub4u|Movy|Cinejoy|Vegamovies|NetMirror(\s*Center)?)\s+', caseSensitive: false), '');
+  raw = raw.replaceAll(RegExp(r'^Flyflix\s*(Server\s*\d+)?\s*[\(-]*\s*', caseSensitive: false), '');
 
   // Clean up TG tag suffixes/delimiters (e.g. -TG, _TG, [TG])
   raw = raw.replaceAll(RegExp(r'[-_.]?[tT][gG]\b'), '');

@@ -944,13 +944,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               lowerSubtitle.contains('streamplay') ||
               lowerSubtitle.contains('moviebox') ||
               lowerSubtitle.contains('netmirror') ||
+              lowerSubtitle.contains('flyflix') ||
+              lowerSubtitle.contains('vidrift') ||
+              lowerSubtitle.contains('vidbolt') ||
               lowerSourceName.contains('stalker') ||
               lowerSourceName.contains('castle') ||
               lowerSourceName.contains('telegram') ||
               lowerSourceName.contains('streamplay') ||
               lowerSourceName.contains('moviebox') ||
               lowerSourceName.contains('netmirror') ||
+              lowerSourceName.contains('flyflix') ||
+              lowerSourceName.contains('vidrift') ||
+              lowerSourceName.contains('vidbolt') ||
               isDirectMpdOrOkcdn ||
+              lowerUrl.contains('vidrift.net') ||
+              lowerUrl.contains('vidbolt.xyz') ||
+              lowerUrl.contains('rousav.tech') ||
+              lowerUrl.contains('hakunaymatata.com') ||
+              lowerUrl.contains('flyflix.php') ||
               lowerUrl.contains('exposeworld.art') ||
               lowerUrl.contains('vidlink.pro') ||
               lowerUrl.contains('hlowb.com') ||

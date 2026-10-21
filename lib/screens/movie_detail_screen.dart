@@ -135,6 +135,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _resolvingVegamovies = false;
   bool _resolvingCinejoy = false;
   bool _resolvingFilmu = false;
+  bool _showFlyflix = true;
+  bool _resolvingFlyflix = false;
+  List<StreamSource> _liveFlyflixSources = [];
 
   bool _showStreamplay = true;
   bool _showMovy = true;
@@ -164,7 +167,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [
     'cinefreak',
-    'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
+    'streamplay', 'flyflix', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
     'telegram', 'telegram_premium', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
   ];
@@ -370,6 +373,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (mounted) {
       setState(() {
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
+        _showFlyflix = cloud.containsKey('source_show_flyflix') ? cloud['source_show_flyflix'] == 'true' : (prefs.getBool('source_show_flyflix') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
         _showHdhub4u = cloud.containsKey('source_show_hdhub4u') ? cloud['source_show_hdhub4u'] == 'true' : (prefs.getBool('source_show_hdhub4u') ?? true);
@@ -415,7 +419,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     if (mounted) {
       final List<String> defaultOrder = [
         'cinefreak',
-    'streamplay', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
+        'streamplay', 'flyflix', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
         'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
         'telegram', 'telegram_premium', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
       ];
@@ -535,6 +539,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       _resolveLiveMovieshunt(movie.title, movie.year?.toString() ?? '2024');
     }
 
+    if (_showFlyflix && movie.title.isNotEmpty) {
+      _resolveLiveFlyflix(movie.title, movie.year?.toString() ?? '2024');
+    }
+
     // Resolve dynamic modules (custom modules not already covered by built-in resolvers)
     final builtInKeys = {'movieshunt', 'hdhub4u', 'moviesdrive', 'vegamovies', 'cinejoy', 'filmu'};
     for (final mod in _dynamicModules) {
@@ -544,6 +552,41 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       if (isVisible && _resolvingModules[modId] != true && !_liveModuleSources.containsKey(modId)) {
         _resolveLiveDynamicModule(mod);
       }
+    }
+  }
+
+  Future<void> _resolveLiveFlyflix(String title, String yearStr) async {
+    if (mounted) setState(() => _resolvingFlyflix = true);
+    try {
+      final y = int.tryParse(yearStr) ?? 2024;
+      final parsedYear = (movie.year is int)
+          ? (movie.year as int)
+          : (int.tryParse(movie.year?.toString() ?? '') ?? y);
+      final effectiveTmdb = (movie.tmdbId != null && movie.tmdbId!.isNotEmpty && movie.tmdbId != '0' && movie.tmdbId != 'null')
+          ? movie.tmdbId
+          : (int.tryParse(movie.id) != null ? movie.id : null);
+      final infos = await ModularSourceService.resolveModuleStreams(
+        moduleKey: 'flyflix',
+        title: title,
+        year: parsedYear,
+        tmdbId: effectiveTmdb,
+        imdbId: movie.imdbId,
+        isSeries: false,
+      );
+      if (mounted) {
+        setState(() {
+          _liveFlyflixSources = infos.map((info) => StreamSource(
+            name: info.name,
+            url: info.url,
+            headers: info.headers,
+            quality: info.quality,
+          )).toList();
+          _resolvingFlyflix = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error resolving Flyflix: $e');
+      if (mounted) setState(() => _resolvingFlyflix = false);
     }
   }
 
@@ -966,6 +1009,47 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     return cleaned.isNotEmpty ? cleaned : rawTitle;
   }
 
+  static String _normalizeTitleForMatch(String t) {
+    var s = t;
+    s = s.replaceAll(RegExp(r'\b(19\d\d|20\d\d)\b'), ' ');
+    s = s.replaceAll(
+      RegExp(
+        r'\b(4k|2160p|1080p|720p|480p|uhd|fhd|hd|hevc|h264|h265|x264|x265|aac|dts|atmos|bluray|web-dl|webrip|dvdrip|remux|proper|unrated|extended|tamil|telugu|hindi|malayalam|kannada|english|tam|tel|hin|mal|kan|eng|dubbed|multi|dual\s+audio|sub|esub)\b',
+        caseSensitive: false,
+      ),
+      ' ',
+    );
+    s = s.replaceAll(RegExp(r"[\.']"), '');
+    s = s.replaceAll(RegExp(r'[^a-zA-Z0-9\s]'), ' ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    s = s.replaceFirst(RegExp(r'^(the|a|an)\s+'), '');
+    return s;
+  }
+
+  static bool _isStalkerTitleMatch(String targetTitle, String candidateTitle) {
+    final tNorm = _normalizeTitleForMatch(targetTitle);
+    final cNorm = _normalizeTitleForMatch(candidateTitle);
+
+    if (tNorm.isEmpty || cNorm.isEmpty) return false;
+    if (tNorm == cNorm) return true;
+
+    if (cNorm.startsWith('$tNorm ')) {
+      final suffix = cNorm.substring(tNorm.length + 1).trim();
+      if (RegExp(r'^(part|chapter|vol|volume|\d+|[ivx]+)$').hasMatch(suffix)) {
+        return true;
+      }
+    }
+
+    if (tNorm.startsWith('$cNorm ')) {
+      final suffix = tNorm.substring(cNorm.length + 1).trim();
+      if (RegExp(r'^(part|chapter|vol|volume|\d+|[ivx]+)$').hasMatch(suffix)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   Future<void> _resolveLiveStalker(String title) async {
     if (mounted) setState(() => _resolvingStalker = true);
     try {
@@ -1016,8 +1100,16 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               fetched = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
             }
             if (fetched.isNotEmpty) {
-              movies = fetched;
-              break; // Found matching Stalker movies!
+              // Strictly verify that at least one item genuinely matches the target movie title
+              final hasValidMatch = fetched.any((item) {
+                if (item is! Map) return false;
+                final candName = item['title']?.toString() ?? item['name']?.toString() ?? '';
+                return _isStalkerTitleMatch(title, candName);
+              });
+              if (hasValidMatch) {
+                movies = fetched;
+                break; // Found genuinely matching Stalker movies!
+              }
             }
           }
         } catch (e) {
@@ -1026,6 +1118,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
 
       for (final item in movies) {
+        final name = item['title']?.toString() ?? item['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        // Discard unrelated movies returned by partial database queries
+        if (!_isStalkerTitleMatch(title, name)) {
+          debugPrint('Stalker VOD discarding unrelated result: "$name" for target "$title"');
+          continue;
+        }
+
         final rawPortalId = item['portal_id'];
         var portalId = rawPortalId != null 
             ? (int.tryParse(rawPortalId.toString()) ?? 1) 
@@ -1039,7 +1140,6 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             if (params.portalId > 0) portalId = params.portalId;
           }
         }
-        final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
         final rawPortalName = item['portal_name']?.toString() ?? '';
         final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
@@ -3520,6 +3620,36 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       context,
                       'CINECLOUD DIRECT STREAMS',
                       _liveCinefreakSources,
+                      resumeDirectly: resumeDirectly,
+                    );
+                  }
+                },
+              );
+            }
+
+            // Flyflix Multi-Server
+            if ((_resolvingFlyflix || _liveFlyflixSources.isNotEmpty) && enabledKeys.contains('flyflix')) {
+              sourceWidgets['flyflix'] = _buildSourceTile(
+                icon: Icons.movie_filter_rounded,
+                title: '${pos('flyflix')}. Flyflix Multi-Server',
+                subtitle: _resolvingFlyflix
+                    ? 'Extracting Flyflix servers...'
+                    : '${_liveFlyflixSources.length} high-speed stream(s) available',
+                disabled: _resolvingFlyflix && _liveFlyflixSources.isEmpty,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveFlyflixSources.length == 1) {
+                    _playWithResolution(
+                      _liveFlyflixSources.first.url,
+                      resumeDirectly: resumeDirectly,
+                      sourceName: _liveFlyflixSources.first.name,
+                      headers: _liveFlyflixSources.first.headers,
+                    );
+                  } else {
+                    _showSubSourceSelector(
+                      context,
+                      'FLYFLIX MULTI-SERVER',
+                      _liveFlyflixSources,
                       resumeDirectly: resumeDirectly,
                     );
                   }

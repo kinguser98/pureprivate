@@ -16,6 +16,19 @@ class MovieboxResolver {
     'https://api6.aoneroom.com',
   ];
 
+  static const List<String> _webDomains = [
+    'https://movie-box.co',
+    'https://movieboxonline.net',
+    'https://123moviesfree.club',
+    'https://sflix.film',
+    'https://h5-api.aoneroom.com',
+  ];
+
+  static const String _browserUa =
+      'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36';
+  static const String _appUa =
+      'com.community.mbox.in/50020131 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)';
+
   static const String _keyB64Default =
       'NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==';
 
@@ -106,14 +119,14 @@ class MovieboxResolver {
 
     final clientInfo = jsonEncode({
       'package_name': 'com.community.mbox.in',
-      'version_name': '4.0.02.0831.03',
-      'version_code': 50020126,
+      'version_name': '4.0.03.0922.03',
+      'version_code': 50020131,
       'os': 'android',
       'os_version': '14',
-      'install_ch': 'ps',
+      'install_ch': 'official',
       'device_id': _deviceId,
-      'install_store': 'ps',
-      'gaid': 'd7578036d13336cc',
+      'install_store': 'official',
+      'gaid': '1b2212c1-dadf-43c3-a0c8-bd6ce48ae22d',
       'brand': _brand ?? 'Google',
       'model': _model ?? 'Pixel 8',
       'system_language': 'en',
@@ -135,8 +148,7 @@ class MovieboxResolver {
       req.headers.set(HttpHeaders.contentTypeHeader, ct);
       req.headers.set('x-client-token', _xClientToken(ts));
       req.headers.set('x-tr-signature', sig);
-      req.headers.set(HttpHeaders.userAgentHeader,
-          'com.community.mbox.in/50020126 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)');
+      req.headers.set(HttpHeaders.userAgentHeader, _appUa);
       req.headers.set('x-client-info', clientInfo);
       req.headers.set('x-client-status', '0');
       if (token != null && token.isNotEmpty) {
@@ -383,26 +395,25 @@ class MovieboxResolver {
     final se = isSeries ? (season ?? 1) : 0;
     final ep = isSeries ? (episode ?? 1) : 0;
     final title = subject['title']?.toString() ?? 'MovieBox';
-
     final sources = <StreamSourceInfo>[];
-    Map<String, String> baseHeaders() => {
-          'User-Agent':
-              'com.community.mbox.in/50020126 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)',
-        };
 
-    // 1. Fetch subject details to extract all multi-language dubs
-    final subjectIds = <Map<String, String>>[];
+    final subjectDubs = <Map<String, dynamic>>[];
     final localSeenIds = <String>{};
     if (sid.isNotEmpty) localSeenIds.add(sid);
 
+    // 1. Fetch main subject details to extract language dubs and detailPath
+    Map<String, dynamic>? mainDetailRes;
     try {
-      final (detailRes, _) = await _requestWithFailover(
+      final (res, _) = await _requestWithFailover(
         method: 'GET',
         endpoint: '/wefeed-mobile-bff/subject-api/get?subjectId=$sid',
         token: token,
       );
-      if (detailRes != null && detailRes['data'] is Map) {
-        final dataMap = detailRes['data'] as Map;
+      mainDetailRes = res;
+      subjectDubs.add({'id': sid, 'lang': 'Original', 'detail': mainDetailRes});
+
+      if (mainDetailRes != null && mainDetailRes['data'] is Map) {
+        final dataMap = mainDetailRes['data'] as Map;
         final dubs = dataMap['dubs'] as List? ?? [];
         for (final dub in dubs) {
           if (dub is Map) {
@@ -414,113 +425,113 @@ class MovieboxResolver {
                   continue;
                 }
                 seenSubjectIds?.add(dubSid);
-                subjectIds.add({'id': dubSid, 'lang': lang});
+                subjectDubs.add({'id': dubSid, 'lang': lang, 'detail': null});
               }
             }
           }
         }
       }
-    } catch (_) {}
-
-    if (subjectIds.isEmpty) {
-      subjectIds.add({'id': sid, 'lang': 'Original'});
+    } catch (_) {
+      subjectDubs.add({'id': sid, 'lang': 'Original', 'detail': null});
     }
 
-    // 2. Fetch play-info for all dubs in PARALLEL
-    final dubFutures = subjectIds.map((dubItem) async {
-      final currentSid = dubItem['id']!;
-      final lang = dubItem['lang']!;
+    if (subjectDubs.isEmpty) {
+      subjectDubs.add({'id': sid, 'lang': 'Original', 'detail': null});
+    }
+
+    // 2. Resolve streams for all dubs in PARALLEL
+    final dubFutures = subjectDubs.map((dubItem) async {
+      final currentSid = dubItem['id'] as String;
+      final lang = dubItem['lang'] as String;
+      final cachedDetail = dubItem['detail'] as Map<String, dynamic>?;
       final dubSources = <StreamSourceInfo>[];
+      final seenUrls = <String>{};
 
-      try {
-        final (playRes, _) = await _requestWithFailover(
-          method: 'GET',
-          endpoint:
-              '/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSid&se=$se&ep=$ep',
-          token: token,
+      Map<String, dynamic>? detailObj = cachedDetail;
+      if (detailObj == null) {
+        try {
+          final (res, _) = await _requestWithFailover(
+            method: 'GET',
+            endpoint: '/wefeed-mobile-bff/subject-api/get?subjectId=$currentSid',
+            token: token,
+          );
+          detailObj = res;
+        } catch (_) {}
+      }
+
+      final dataMap = detailObj?['data'] is Map ? detailObj!['data'] as Map : null;
+      final detailUrl = dataMap?['detailUrl']?.toString() ?? '';
+      var detailPath = dataMap?['detailPath']?.toString() ?? '';
+      if (detailPath.isEmpty && detailUrl.isNotEmpty) {
+        detailPath = detailUrl.replaceAll(RegExp(r'/+$'), '').split('/').last;
+      }
+
+      // Strategy A: Web BFF API (High Priority - returns direct 1080p MP4)
+      if (detailPath.isNotEmpty) {
+        final webStreams = await _fetchWebStreams(
+          subjectId: currentSid,
+          se: se,
+          ep: ep,
+          detailPath: detailPath,
+          lang: lang,
         );
-
-        if (playRes != null && playRes['code'] == 0) {
-          final data = playRes['data'] as Map? ?? {};
-          if (data['needUpdate'] != true && data['forceUpdate'] != true) {
-            for (final item in (data['streams'] as List? ?? [])) {
-              if (item is! Map) continue;
-              var url = item['url']?.toString() ?? '';
-              final cookie = item['signCookie']?.toString() ?? '';
-
-              // Extract stream URL from signCookie (Edge-Cache-Cookie urlprefix or CloudFront Policy)
-              if (url.isEmpty || _isUpdateVideo(url)) {
-                if (cookie.isNotEmpty) {
-                  // 1. Try Edge-Cache-Cookie (urlprefix=...)
-                  final urlprefixMatch = RegExp(r'urlprefix=([^:;]+)').firstMatch(cookie);
-                  if (urlprefixMatch != null) {
-                    try {
-                      var b64 = urlprefixMatch.group(1)!;
-                      while (b64.length % 4 != 0) {
-                        b64 += '=';
-                      }
-                      final decoded = utf8.decode(base64.decode(b64.replaceAll('-', '+').replaceAll('_', '/')));
-                      if (decoded.startsWith('http')) {
-                        url = decoded.endsWith('/') ? '${decoded}index.mpd' : decoded;
-                      }
-                    } catch (e) {
-                      debugPrint('MovieboxResolver: urlprefix decode error: $e');
-                    }
-                  }
-
-                  // 2. Try legacy CloudFront-Policy
-                  if (url.isEmpty || _isUpdateVideo(url)) {
-                    final polMatch = RegExp(r'CloudFront-Policy=([^;]+)').firstMatch(cookie);
-                    if (polMatch != null) {
-                      try {
-                        var b64Pol = polMatch.group(1)!;
-                        while (b64Pol.length % 4 != 0) {
-                          b64Pol += '=';
-                        }
-                        final decoded = utf8.decode(base64.decode(b64Pol.replaceAll('-', '+').replaceAll('_', '/')));
-                        final polJson = jsonDecode(decoded);
-                        final resource = polJson['Statement']?[0]?['Resource']?.toString() ?? '';
-                        if (resource.isNotEmpty) {
-                          url = resource.replaceAll(RegExp(r'/\*$'), '/index.mpd');
-                        }
-                      } catch (_) {}
-                    }
-                  }
-                }
-              }
-
-              // Drop dummy update video completely
-              if (url.isEmpty || _isUpdateVideo(url)) continue;
-
-              final resStr = item['resolutions']?.toString() ?? '';
-              final res = resStr.isNotEmpty
-                  ? '${resStr.split(',').first.trim()}p'
-                  : 'HD';
-              final fmt = item['format']?.toString() ?? _fmt(url);
-              final codec = item['codecName']?.toString() ?? '';
-              final size = _size(item['size']);
-              final label =
-                  '$lang • $res • $fmt${codec.isNotEmpty ? " ($codec)" : ""}${size != null ? " ($size)" : ""}';
-
-              final h = baseHeaders();
-              if (cookie.isNotEmpty) {
-                h['Cookie'] = cookie;
-              }
-
-              dubSources.add(StreamSourceInfo(
-                name: label,
-                url: url,
-                type: StreamSourceType.moviebox,
-                quality: res,
-                size: size,
-                languages: [lang],
-                headers: h.isNotEmpty ? h : null,
-              ));
-            }
+        for (final ws in webStreams) {
+          if (seenUrls.add(ws.url)) {
+            dubSources.add(ws);
           }
         }
-      } catch (e) {
-        debugPrint('MovieboxResolver dub fetch error: $e');
+      }
+
+      // Strategy B: Mobile play-info fallback (only if webStreams is empty and not .mpd)
+      if (dubSources.isEmpty) {
+        try {
+          final (playRes, _) = await _requestWithFailover(
+            method: 'GET',
+            endpoint:
+                '/wefeed-mobile-bff/subject-api/play-info?subjectId=$currentSid&se=$se&ep=$ep',
+            token: token,
+          );
+
+          if (playRes != null && playRes['code'] == 0) {
+            final data = playRes['data'] as Map? ?? {};
+            if (data['needUpdate'] != true && data['forceUpdate'] != true) {
+              for (final item in (data['streams'] as List? ?? [])) {
+                if (item is! Map) continue;
+                var url = item['url']?.toString() ?? '';
+                final cookie = item['signCookie']?.toString() ?? '';
+
+                if (url.isEmpty || _isUpdateVideo(url) || url.toLowerCase().contains('.mpd')) continue;
+                if (!seenUrls.add(url)) continue;
+
+                final resStr = item['resolutions']?.toString() ?? '';
+                final res = resStr.isNotEmpty ? '${resStr.split(',').first.trim()}p' : 'HD';
+                final fmt = item['format']?.toString() ?? _fmt(url);
+                final codec = item['codecName']?.toString() ?? '';
+                final size = _size(item['size']);
+                final label = _formatLabel(lang, res, fmt, codec: codec, size: size);
+
+                final h = <String, String>{
+                  'User-Agent': _appUa,
+                };
+                if (cookie.isNotEmpty) {
+                  h['Cookie'] = cookie;
+                }
+
+                dubSources.add(StreamSourceInfo(
+                  name: label,
+                  url: url,
+                  type: StreamSourceType.moviebox,
+                  quality: res,
+                  size: size,
+                  languages: [lang],
+                  headers: h.isNotEmpty ? h : null,
+                ));
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('MovieboxResolver dub fetch fallback error: $e');
+        }
       }
       return dubSources;
     });
@@ -532,6 +543,89 @@ class MovieboxResolver {
 
     debugPrint('MovieboxResolver: ${sources.length} valid streams for "$title"');
     return sources;
+  }
+
+  static Future<List<StreamSourceInfo>> _fetchWebStreams({
+    required String subjectId,
+    required int se,
+    required int ep,
+    required String detailPath,
+    required String lang,
+  }) async {
+    if (detailPath.isEmpty) return [];
+    final sources = <StreamSourceInfo>[];
+
+    for (final domain in _webDomains) {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      try {
+        final playUrl =
+            '$domain/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1';
+        final ref =
+            '$domain/movies/$detailPath?id=$subjectId&type=/movie/detail&detailSe=&detailEp=&lang=en';
+
+        final req = await client.getUrl(Uri.parse(playUrl));
+        req.headers.set(HttpHeaders.userAgentHeader, _browserUa);
+        req.headers.set(HttpHeaders.refererHeader, ref);
+        req.headers.set(HttpHeaders.acceptHeader, 'application/json');
+        req.headers.set('x-client-info', '{"timezone":"Asia/Calcutta"}');
+        req.headers.set('x-request-lang', 'en');
+        req.headers.set('x-vip-restrict', '0');
+        req.headers.set('x-no-high-risk-restrict', '0');
+        req.headers.set('x-source', '');
+
+        final res = await req.close();
+        final body = await res.transform(utf8.decoder).join();
+        client.close();
+
+        if (res.statusCode != 200 || body.isEmpty) continue;
+        final json = jsonDecode(body);
+        if (json is! Map || json['data'] is! Map) continue;
+        final data = json['data'] as Map;
+
+        // 1. MP4 direct streams only (DASH .mpd and HLS chunks cause playback errors)
+        final streams = data['streams'] as List? ?? [];
+        for (final st in streams) {
+          if (st is! Map) continue;
+          final url = st['url']?.toString() ?? '';
+          if (url.isEmpty || _isUpdateVideo(url) || url.toLowerCase().contains('.mpd')) continue;
+          final resStr = st['resolutions']?.toString() ?? '';
+          final res = resStr.isNotEmpty ? '${resStr.split(',').first.trim()}p' : '1080p';
+          final size = _size(st['size']);
+          final label = _formatLabel(lang, res, 'MP4', size: size);
+
+          sources.add(StreamSourceInfo(
+            name: label,
+            url: url,
+            type: StreamSourceType.moviebox,
+            quality: res,
+            size: size,
+            languages: [lang],
+            headers: {
+              'User-Agent': _browserUa,
+              'Referer': '$domain/',
+              'Origin': domain,
+            },
+          ));
+        }
+
+        if (sources.isNotEmpty) break;
+      } catch (_) {
+        client.close();
+      }
+    }
+    return sources;
+  }
+
+  static String _formatLabel(String lang, String res, String fmt, {String? codec, String? size}) {
+    final audio = lang.toLowerCase() == 'original'
+        ? 'Original Audio'
+        : (lang.toLowerCase().contains('audio') || lang.toLowerCase().contains('dub'))
+            ? lang.trim()
+            : '${lang.trim()} Audio';
+    final parts = [audio, res, fmt];
+    if (codec != null && codec.isNotEmpty) parts.add('($codec)');
+    if (size != null && size.isNotEmpty) parts.add('($size)');
+    return parts.join(' • ');
   }
 
   static String _norm(String s) => s

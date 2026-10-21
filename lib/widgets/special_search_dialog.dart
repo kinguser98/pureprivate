@@ -94,6 +94,7 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     'netmirror_ott',
     'netmirror_center',
     'streamplay',
+    'flyflix',
     'moviebox',
     'movy',
     'moviesdrive',
@@ -967,6 +968,47 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
     return cleaned.isNotEmpty ? cleaned : rawTitle;
   }
 
+  static String _normalizeTitleForMatch(String t) {
+    var s = t;
+    s = s.replaceAll(RegExp(r'\b(19\d\d|20\d\d)\b'), ' ');
+    s = s.replaceAll(
+      RegExp(
+        r'\b(4k|2160p|1080p|720p|480p|uhd|fhd|hd|hevc|h264|h265|x264|x265|aac|dts|atmos|bluray|web-dl|webrip|dvdrip|remux|proper|unrated|extended|tamil|telugu|hindi|malayalam|kannada|english|tam|tel|hin|mal|kan|eng|dubbed|multi|dual\s+audio|sub|esub)\b',
+        caseSensitive: false,
+      ),
+      ' ',
+    );
+    s = s.replaceAll(RegExp(r"[\.']"), '');
+    s = s.replaceAll(RegExp(r'[^a-zA-Z0-9\s]'), ' ');
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    s = s.replaceFirst(RegExp(r'^(the|a|an)\s+'), '');
+    return s;
+  }
+
+  static bool _isStalkerTitleMatch(String targetTitle, String candidateTitle) {
+    final tNorm = _normalizeTitleForMatch(targetTitle);
+    final cNorm = _normalizeTitleForMatch(candidateTitle);
+
+    if (tNorm.isEmpty || cNorm.isEmpty) return false;
+    if (tNorm == cNorm) return true;
+
+    if (cNorm.startsWith('$tNorm ')) {
+      final suffix = cNorm.substring(tNorm.length + 1).trim();
+      if (RegExp(r'^(part|chapter|vol|volume|\d+|[ivx]+)$').hasMatch(suffix)) {
+        return true;
+      }
+    }
+
+    if (tNorm.startsWith('$cNorm ')) {
+      final suffix = tNorm.substring(cNorm.length + 1).trim();
+      if (RegExp(r'^(part|chapter|vol|volume|\d+|[ivx]+)$').hasMatch(suffix)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   Future<void> _resolveStalkerVodDatabase(String title) async {
     try {
       debugPrint('Stalker VOD resolver (Mobile/iOS): Searching for "$title"...');
@@ -1006,8 +1048,16 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
               fetched = data['movies'] as List<dynamic>? ?? data['data'] as List<dynamic>? ?? [];
             }
             if (fetched.isNotEmpty) {
-              movies = fetched;
-              break; // Found matching Stalker movies!
+              // Strictly verify that at least one item genuinely matches the target movie title
+              final hasValidMatch = fetched.any((item) {
+                if (item is! Map) return false;
+                final candName = item['title']?.toString() ?? item['name']?.toString() ?? '';
+                return _isStalkerTitleMatch(title, candName);
+              });
+              if (hasValidMatch) {
+                movies = fetched;
+                break; // Found genuinely matching Stalker movies!
+              }
             }
           }
         } catch (e) {
@@ -1021,6 +1071,15 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
 
       for (final item in movies) {
         if (item is! Map) continue;
+        final name = item['title']?.toString() ?? item['name']?.toString() ?? '';
+        if (name.isEmpty) continue;
+
+        // Discard unrelated movies returned by partial database queries
+        if (!_isStalkerTitleMatch(title, name)) {
+          debugPrint('Stalker VOD discarding unrelated result: "$name" for target "$title"');
+          continue;
+        }
+
         final rawPortalId = item['portal_id'];
         var portalId = rawPortalId != null 
             ? (int.tryParse(rawPortalId.toString()) ?? 1) 
@@ -1034,7 +1093,6 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
             if (params.portalId > 0) portalId = params.portalId;
           }
         }
-        final name = item['title']?.toString() ?? item['name']?.toString() ?? 'Stalker VOD';
         final rawPortalName = item['portal_name']?.toString() ?? '';
         final portalName = rawPortalName.isNotEmpty ? rawPortalName : 'Portal $portalId';
 
@@ -2214,22 +2272,24 @@ class _SpecialSearchDialogState extends State<SpecialSearchDialog> {
       }
       return;
     } else {
-      final isWebEmbed =
+      final isDirectMedia = source.url.contains('.m3u8') || source.url.contains('.mp4');
+      final isWebEmbed = !isDirectMedia && (
           source.url.contains('vidsrc') ||
           source.url.contains('embed') ||
           source.url.contains('player') ||
           source.url.contains('vidlink.pro') ||
           source.url.contains('woof.video') ||
           source.url.contains('movy.bz') ||
+          source.url.contains('movy.sx') ||
           source.url.contains('streamtape') ||
           source.url.contains('dood') ||
           source.url.contains('mixdrop') ||
           source.url.contains('hgcloud') ||
-          source.url.contains('/e/');
+          source.url.contains('/e/'));
 
       if (isWebEmbed ||
-          source.type == StreamSourceType.vidsrc ||
-          source.type == StreamSourceType.movy) {
+          (source.type == StreamSourceType.vidsrc && !isDirectMedia) ||
+          (source.type == StreamSourceType.movy && !isDirectMedia)) {
         try {
           final resolvedUrl = await EmbedResolver.resolve(context, source.url);
           if (mounted) {

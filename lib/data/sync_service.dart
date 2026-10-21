@@ -446,7 +446,40 @@ class SyncService {
       } catch (_) {}
     }
     if (list.isEmpty) {
-      list = ['streamplay','moviebox','movy','moviesdrive','hdhub4u','stalker','stravo','castle','torrent','stremioAddon','telegram','filmu','vegamovies','cinejoy','streamtape','netmirror_center','netmirror_ott','directLink'];
+      list = [
+        'netmirror_ott',
+        'netmirror_center',
+        'streamplay',
+        'flyflix',
+        'moviebox',
+        'movy',
+        'moviesdrive',
+        'hdhub4u',
+        'stalker',
+        'stravo',
+        'castle',
+        'torrent',
+        'stremioAddon',
+        'filmu',
+        'vegamovies',
+        'cinejoy',
+        'streamtape',
+        'telegram',
+        'telegram_premium',
+        'directLink',
+      ];
+    } else {
+      final isFlyflixEnabled = settings['source_show_flyflix'] != 'false';
+      if (isFlyflixEnabled && !list.contains('flyflix')) {
+        final spIdx = list.indexOf('streamplay');
+        if (spIdx != -1) {
+          list.insert(spIdx + 1, 'flyflix');
+        } else {
+          list.add('flyflix');
+        }
+      } else if (!isFlyflixEnabled) {
+        list.remove('flyflix');
+      }
     }
     return list;
   }

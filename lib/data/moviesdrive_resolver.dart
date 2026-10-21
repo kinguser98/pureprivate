@@ -10,8 +10,9 @@ import '../widgets/special_search_dialog.dart';
 
 class MoviesdriveResolver {
   static const List<String> _domains = [
-    'https://new3.moviesdrive.christmas',
-    'https://new.moviesdrive.christmas',
+    'https://moviesdrives.bid',
+    'https://new3.moviesdrive.beer',
+    'https://moviesdrive.space',
   ];
 
   static const Map<String, String> _requestHeaders = {

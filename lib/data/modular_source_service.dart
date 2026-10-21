@@ -20,6 +20,7 @@ class ModularSourceService {
     'cinejoy': 'https://ot.goprivate.fun/sources/cinejoy.php',
     'filmu': 'https://ot.goprivate.fun/sources/filmu.php',
     'istreamflare': 'https://ot.goprivate.fun/sources/istreamflare.php',
+    'flyflix': 'https://ot.goprivate.fun/sources/flyflix.php',
   };
 
   /// Ensures OKCDN / VKUser DASH manifests have the .mpd filename in their path
@@ -138,6 +139,7 @@ class ModularSourceService {
       case 'cinejoy': return 'Cinejoy Server';
       case 'filmu': return 'FilmU Premium Server';
       case 'istreamflare': return 'iStream Server';
+      case 'flyflix': return 'Flyflix Multi-Server';
       default: return id.substring(0, 1).toUpperCase() + id.substring(1);
     }
   }
@@ -206,6 +208,7 @@ class ModularSourceService {
                 .replaceAll(RegExp(r'\bMovies\s*Hunt\b[:\s-]*', caseSensitive: false), '')
                 .replaceAll(RegExp(r'\bHDHub4u\b[:\s-]*', caseSensitive: false), '')
                 .replaceAll(RegExp(r'\bMoviesDrive\b[:\s-]*', caseSensitive: false), '')
+                .replaceAll(RegExp(r'^Flyflix\s*(Server\s*\d+)?\s*[\(-]*\s*', caseSensitive: false), '')
                 .trim();
             if (name.startsWith('•')) name = name.substring(1).trim();
             if (name.isEmpty) name = 'Direct Stream';

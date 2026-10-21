@@ -7,9 +7,13 @@ import 'modular_source_service.dart';
 import '../widgets/special_search_dialog.dart';
 
 class VegamoviesResolver {
-  static const String _defaultDomain = 'https://vegamoviess.xyz';
+  static const String _defaultDomain = 'https://vegamovies.me.in';
 
   static Future<String> getBaseDomain() async {
+    try {
+      final dyn = await DomainService.getDomain('vegamovies');
+      if (dyn.isNotEmpty) return dyn;
+    } catch (_) {}
     return _defaultDomain;
   }
 

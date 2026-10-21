@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
+import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
 
 class SendToTvScreen extends StatefulWidget {
   const SendToTvScreen({super.key});
@@ -24,6 +25,9 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   double _progress = 0;
   String? _status;
   String? _sendingToDeviceName;
+  String? _transferSpeed;
+  String? _transferEta;
+  String? _transferredMb;
   List<Map<String, String>> _history = [];
 
   // Local Wi-Fi Device Discovery state
@@ -44,8 +48,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     _loadReceivedFiles();
     _startServer();
     _scanForNearbyTvs();
-    // Auto refresh discovered TV devices every 5 seconds
-    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    // Auto refresh discovered TV devices every 4 seconds
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (mounted && !_isSending && _activeTab == 0) {
         _scanForNearbyTvs(showLoader: false);
       }
@@ -59,76 +63,25 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     super.dispose();
   }
 
-  // --- Fast Subnet Scanner for TV Devices ---
+  // --- Fast UDP & Subnet Discovery for TV Devices ---
 
   Future<void> _scanForNearbyTvs({bool showLoader = true}) async {
     if (!mounted) return;
     if (showLoader) setState(() => _isScanningDevices = true);
 
-    final List<Map<String, dynamic>> found = [];
-
     try {
-      final interfaces = await NetworkInterface.list();
-      String? localIp;
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            final ip = addr.address;
-            if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
-              localIp = ip;
-              break;
-            }
-          }
-        }
-      }
-
-      if (localIp != null) {
-        final subnet = localIp.substring(0, localIp.lastIndexOf('.'));
-        final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 350);
-
-        final futures = <Future<void>>[];
-        for (int i = 1; i <= 254; i++) {
-          final targetIp = '$subnet.$i';
-          // Check ports 58526 and 58527
-          for (final testPort in [58526, 58527]) {
-            futures.add(() async {
-              try {
-                final req = await client.getUrl(Uri.parse('http://$targetIp:$testPort/ping'));
-                final resp = await req.close();
-                if (resp.statusCode == 200) {
-                  final body = await resp.transform(utf8.decoder).join();
-                  String name = 'Smart TV ($targetIp)';
-                  if (body.contains('{')) {
-                    try {
-                      final jsonMap = json.decode(body);
-                      name = jsonMap['device_name']?.toString() ?? name;
-                    } catch (_) {}
-                  }
-                  if (!found.any((d) => d['ip'] == targetIp)) {
-                    found.add({
-                      'name': name,
-                      'ip': targetIp,
-                      'port': testPort,
-                      'host': '$targetIp:$testPort',
-                    });
-                  }
-                }
-              } catch (_) {}
-            }());
-          }
-        }
-        await Future.wait(futures);
-        client.close();
+      final found = await WifiCastService.discoverTvDevices(
+        timeout: const Duration(milliseconds: 1800),
+      );
+      if (mounted) {
+        setState(() {
+          _discoveredTvDevices = found;
+          _isScanningDevices = false;
+        });
       }
     } catch (e) {
       debugPrint('TV discovery error: $e');
-    }
-
-    if (mounted) {
-      setState(() {
-        _discoveredTvDevices = found;
-        _isScanningDevices = false;
-      });
+      if (mounted) setState(() => _isScanningDevices = false);
     }
   }
 
@@ -160,10 +113,14 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     setState(() {
       _isSending = true;
       _progress = 0;
+      _transferSpeed = null;
+      _transferEta = null;
+      _transferredMb = null;
       _sendingToDeviceName = deviceName;
       _status = 'Connecting to $deviceName...';
     });
 
+    Socket? socket;
     try {
       final fileName = _selectedFile!.name;
       final file = File(_selectedFile!.path!);
@@ -172,39 +129,60 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       final host = uri.host;
       final port = uri.port;
 
-      _status = 'Sending $fileName (${fileSize ~/ 1048576} MB) to $deviceName...';
+      _status = 'Sending $fileName...';
 
-      final socket = await Socket.connect(host, port, timeout: const Duration(seconds: 15));
+      socket = await Socket.connect(host, port, timeout: const Duration(seconds: 10));
 
       final requestLine = 'POST /upload?name=${Uri.encodeComponent(fileName)} HTTP/1.1\r\n';
       final hostHeader = 'Host: $targetHost\r\n';
       final contentType = 'Content-Type: application/octet-stream\r\n';
       final contentLength = 'Content-Length: $fileSize\r\n';
+      final connection = 'Connection: close\r\n';
       final headersEnd = '\r\n';
 
-      socket.add(requestLine.codeUnits);
-      socket.add(hostHeader.codeUnits);
-      socket.add(contentType.codeUnits);
-      socket.add(contentLength.codeUnits);
-      socket.add(headersEnd.codeUnits);
+      socket.add(utf8.encode(requestLine));
+      socket.add(utf8.encode(hostHeader));
+      socket.add(utf8.encode(contentType));
+      socket.add(utf8.encode(contentLength));
+      socket.add(utf8.encode(connection));
+      socket.add(utf8.encode(headersEnd));
       await socket.flush();
 
+      final stopwatch = Stopwatch()..start();
       int sentBytes = 0;
+      int lastUpdate = 0;
+
       await for (final chunk in file.openRead()) {
         socket.add(chunk);
         sentBytes += chunk.length;
-        if (mounted) {
-          setState(() {
-            _progress = sentBytes / fileSize;
-          });
+
+        final now = stopwatch.elapsedMilliseconds;
+        if (now - lastUpdate > 100 || sentBytes == fileSize) {
+          lastUpdate = now;
+          final elapsedSec = now / 1000.0;
+          final speedMBs = elapsedSec > 0 ? (sentBytes / (1024 * 1024)) / elapsedSec : 0.0;
+          final remainingBytes = fileSize - sentBytes;
+          final etaSec = speedMBs > 0 ? (remainingBytes / (1024 * 1024 * speedMBs)).round() : 0;
+
+          if (mounted) {
+            setState(() {
+              _progress = sentBytes / fileSize;
+              _transferSpeed = '${speedMBs.toStringAsFixed(1)} MB/s';
+              _transferEta = etaSec > 0 ? '${etaSec}s remaining' : '';
+              _transferredMb = '${(sentBytes / 1048576).toStringAsFixed(1)} / ${(fileSize / 1048576).toStringAsFixed(1)} MB';
+            });
+          }
         }
       }
       await socket.flush();
 
-      final responseStr = await socket.map(utf8.decode).join();
-      await socket.close();
+      // Read HTTP response with 15s timeout
+      final responseBytes = <int>[];
+      await socket.listen((data) => responseBytes.addAll(data)).asFuture().timeout(const Duration(seconds: 15));
+      final responseStr = utf8.decode(responseBytes);
+      try { await socket.close(); } catch (_) {}
 
-      if (responseStr.contains('200') || responseStr.contains('"success":true')) {
+      if (responseStr.contains('200') || responseStr.contains('"status":"success"')) {
         _status = '✓ Sent successfully to $deviceName!';
         _history.insert(0, {'ip': targetHost, 'file': fileName, 'time': DateTime.now().toIso8601String()});
         _saveHistory();
@@ -213,9 +191,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       }
     } catch (e) {
       _status = 'Transfer failed: $e';
+    } finally {
+      try { socket?.destroy(); } catch (_) {}
+      if (mounted) setState(() => _isSending = false);
     }
-
-    if (mounted) setState(() => _isSending = false);
   }
 
   Future<void> _loadHistory() async {
@@ -479,6 +458,75 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     );
   }
 
+  void _showManualIpDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          'Direct IP Transfer (Mobile / TV)',
+          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Enter the receiver IP shown on the other phone (Android / iOS) or TV screen:',
+              style: GoogleFonts.outfit(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                hintText: 'e.g. 192.168.1.15 or 192.168.1.15:58526',
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Colors.white12),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('CANCEL', style: GoogleFonts.outfit(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.accentBright,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              final raw = controller.text.trim();
+              if (raw.isEmpty) return;
+              Navigator.of(ctx).pop();
+              final host = raw.contains(':') ? raw : '$raw:58526';
+              final ip = raw.contains(':') ? raw.split(':').first : raw;
+              _sendFileToTv({
+                'name': 'Device ($host)',
+                'ip': ip,
+                'port': raw.contains(':') ? (int.tryParse(raw.split(':').last) ?? 58526) : 58526,
+                'host': host,
+                'type': 'direct',
+              });
+            },
+            child: Text('SEND FILE', style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSendToTvView() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -568,7 +616,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text('Sending file...', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                      Text('${(_progress * 100).toInt()}%', style: GoogleFonts.outfit(color: AppColors.accentBright, fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text(
+                        '${(_progress * 100).toInt()}%${_transferSpeed != null ? ' • $_transferSpeed' : ''}',
+                        style: GoogleFonts.outfit(color: AppColors.accentBright, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -579,6 +630,16 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                     minHeight: 6,
                     borderRadius: BorderRadius.circular(4),
                   ),
+                  if (_transferredMb != null || _transferEta != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(_transferredMb ?? '', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                        Text(_transferEta ?? '', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -602,19 +663,29 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
             const SizedBox(height: 20),
           ],
 
-          // STEP 2: Choose TV Device List
+          // STEP 2: Choose TV / Mobile Device List
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'STEP 2: CHOOSE TARGET TV',
+                'STEP 2: CHOOSE TARGET (TV / MOBILE)',
                 style: GoogleFonts.outfit(color: Colors.white38, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1),
               ),
-              IconButton(
-                icon: _isScanningDevices
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
-                    : const Icon(Icons.refresh_rounded, color: Colors.white70, size: 18),
-                onPressed: _isScanningDevices ? null : () => _scanForNearbyTvs(),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Direct IP Transfer',
+                    icon: const Icon(Icons.dialpad_rounded, color: Colors.white70, size: 20),
+                    onPressed: () => _showManualIpDialog(),
+                  ),
+                  IconButton(
+                    icon: _isScanningDevices
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
+                        : const Icon(Icons.refresh_rounded, color: Colors.white70, size: 18),
+                    onPressed: _isScanningDevices ? null : () => _scanForNearbyTvs(),
+                  ),
+                ],
               ),
             ],
           ),
@@ -629,7 +700,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                 children: [
                   CircularProgressIndicator(strokeWidth: 2, color: AppColors.accentBright),
                   const SizedBox(width: 14),
-                  Text('Scanning Wi-Fi for TV devices...', style: GoogleFonts.outfit(color: Colors.white60, fontSize: 13)),
+                  Text('Scanning Wi-Fi for TV & Mobile devices...', style: GoogleFonts.outfit(color: Colors.white60, fontSize: 13)),
                 ],
               ),
             )
@@ -643,28 +714,44 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
               ),
               child: Column(
                 children: [
-                  const Icon(Icons.tv_off_rounded, color: Colors.white24, size: 36),
+                  const Icon(Icons.devices_other_rounded, color: Colors.white24, size: 36),
                   const SizedBox(height: 8),
                   Text(
-                    'No TV App Found on Local Wi-Fi',
+                    'No Receiver Found on Local Wi-Fi',
                     style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Make sure the app is open on your TV and connected to the same Wi-Fi network.',
+                    'Open the app on your TV, Android phone, or iPhone (tab "Received Files") on the same Wi-Fi.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
                   ),
                   const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white12,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    onPressed: () => _scanForNearbyTvs(),
-                    icon: const Icon(Icons.search_rounded, size: 16),
-                    label: Text('SEARCH AGAIN', style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.bold)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white12,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _scanForNearbyTvs(),
+                        icon: const Icon(Icons.search_rounded, size: 16),
+                        label: Text('SCAN AGAIN', style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 10),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accentBright.withValues(alpha: 0.2),
+                          foregroundColor: AppColors.accentBright,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _showManualIpDialog(),
+                        icon: const Icon(Icons.edit_note_rounded, size: 16),
+                        label: Text('ENTER IP', style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -672,6 +759,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           else
             Column(
               children: _discoveredTvDevices.map((device) {
+                final isMobile = device['type'] == 'mobile';
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   decoration: BoxDecoration(
@@ -687,7 +775,11 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                         color: AppColors.accentBright.withValues(alpha: 0.2),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.tv_rounded, color: AppColors.accentBright, size: 24),
+                      child: Icon(
+                        isMobile ? Icons.smartphone_rounded : Icons.tv_rounded,
+                        color: AppColors.accentBright,
+                        size: 24,
+                      ),
                     ),
                     title: Text(
                       device['name'],
@@ -706,7 +798,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                       ),
                       onPressed: _isSending ? null : () => _sendFileToTv(device),
                       icon: const Icon(Icons.send_rounded, size: 16),
-                      label: Text('SEND TO TV', style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12)),
+                      label: Text(
+                        isMobile ? 'SEND TO PHONE' : 'SEND TO TV',
+                        style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
                     ),
                   ),
                 );
