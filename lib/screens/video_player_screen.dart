@@ -23,6 +23,8 @@ import 'package:private_cinema_mobile/data/skip_intro_service.dart';
 import 'package:private_cinema_mobile/data/modular_source_service.dart';
 import '../widgets/stream_metadata_tile.dart';
 import 'package:private_cinema_mobile/widgets/netflix_intro_badge.dart';
+import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
+import 'package:private_cinema_mobile/screens/cast_controller_screen.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({
@@ -1733,6 +1735,287 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     );
   }
 
+  void _showCastToTvDialog() {
+    final ipInputController = TextEditingController();
+    WifiCastService.getLocalIp().then((ip) {
+      if (ip != '127.0.0.1' && ip.contains('.')) {
+        final subnet = ip.substring(0, ip.lastIndexOf('.'));
+        if (ipInputController.text.isEmpty) {
+          ipInputController.text = '$subnet.1:8888';
+        }
+      }
+    });
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (BuildContext sheetCtx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Container(
+              height: 480,
+              decoration: const BoxDecoration(
+                color: Color(0xFF101320),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(top: BorderSide(color: Colors.white12, width: 1)),
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 12),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.cast_connected_rounded, color: Colors.white, size: 22),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Cast to Android TV / Device',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+                          onPressed: () => setSheetState(() {}),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Direct IP Fast Connect row
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.flash_on_rounded, color: AppColors.accentBright, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: ipInputController,
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(vertical: 6),
+                                border: InputBorder.none,
+                                hintText: 'Direct IP: 192.168.43.1:8888',
+                                hintStyle: TextStyle(color: Colors.white30, fontSize: 13),
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () {
+                              final raw = ipInputController.text.trim();
+                              if (raw.isNotEmpty) {
+                                final host = raw.contains(':') ? raw : '$raw:8888';
+                                Navigator.of(sheetCtx).pop();
+                                _startCastToDevice({'host': host, 'name': 'Device ($host)'});
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: AppColors.accent.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.accentBright.withOpacity(0.4)),
+                              ),
+                              child: Text(
+                                'Direct Cast',
+                                style: TextStyle(
+                                  color: AppColors.accentBright,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Divider(color: Colors.white10),
+                  Expanded(
+                    child: FutureBuilder<List<Map<String, dynamic>>>(
+                      future: WifiCastService.discoverTvDevices(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircularProgressIndicator(color: AppColors.accentBright),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Scanning local Wi-Fi for TVs & phones...',
+                                  style: GoogleFonts.outfit(color: Colors.white60, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        final devices = snapshot.data ?? [];
+                        if (devices.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.tv_off_rounded, color: Colors.white24, size: 48),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No Cast devices found automatically',
+                                  style: GoogleFonts.outfit(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 6),
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 32),
+                                  child: Text(
+                                    'Ensure Goxio TV is open on the TV or phone. You can also use the Direct IP bar above to cast instantly!',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: Colors.white38, fontSize: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          itemCount: devices.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final dev = devices[index];
+                            final name = dev['name'] as String;
+                            final host = dev['host'] as String;
+                            final isTv = (dev['type'] as String? ?? 'tv').contains('tv');
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.04),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white10),
+                              ),
+                              child: ListTile(
+                                leading: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.accent.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(isTv ? Icons.tv_rounded : Icons.smartphone_rounded, color: AppColors.accentBright, size: 22),
+                                ),
+                                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                                subtitle: Text(host, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+                                onTap: () async {
+                                  Navigator.of(sheetCtx).pop();
+                                  _startCastToDevice(dev);
+                                },
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _startCastToDevice(Map<String, dynamic> device) async {
+    final host = device['host'] as String;
+    final name = device['name'] as String;
+
+    // Pause local mobile player
+    _player.pause();
+
+    final currentPosMs = _position.inMilliseconds;
+    final totalDurationMs = _duration.inMilliseconds;
+    final movieTitle = widget.title ?? 'Movie';
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Connecting and casting to $name...')),
+    );
+
+    String? castUrl;
+    bool isOfflineMode = false;
+
+    // Determine if videoSource is a local file (downloaded movie)
+    final file = File(widget.videoSource);
+    if (widget.videoSource.startsWith('/') || widget.videoSource.startsWith('file://') || (await file.exists())) {
+      isOfflineMode = true;
+      castUrl = await WifiCastService.startLocalFileServer(file);
+    } else {
+      // Online stream: start proxy to relay to TV
+      castUrl = await WifiCastService.startProxyServer(widget.videoSource, headers: widget.headers);
+    }
+
+    if (castUrl == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to initiate casting stream.')),
+        );
+      }
+      return;
+    }
+
+    final success = await WifiCastService.castToTv(
+      tvHost: host,
+      title: movieTitle,
+      streamUrl: castUrl,
+      startPositionMs: currentPosMs,
+      posterUrl: widget.logoUrl,
+    );
+
+    if (success && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => CastControllerScreen(
+            title: movieTitle,
+            tvHost: host,
+            tvName: name,
+            posterUrl: widget.logoUrl,
+            initialPositionMs: currentPosMs,
+            initialDurationMs: totalDurationMs,
+            isOffline: isOfflineMode,
+          ),
+        ),
+      );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to connect to TV Cast service.')),
+      );
+    }
+  }
+
   void _showSubtitleManagerSheet() {
     final textController = TextEditingController();
     final cleanSearchTitle = (widget.title ?? '')
@@ -2902,11 +3185,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         // Cast
                         _buildTopBarIcon(
                           const Icon(Icons.cast_rounded, color: Colors.white, size: 20),
-                          () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Searching for cast devices...')),
-                            );
-                          },
+                          _showCastToTvDialog,
                         ),
                         
                         // Open in External Player (VLC / MX)

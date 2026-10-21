@@ -78,15 +78,22 @@ class WifiCastService {
     }
 
     // 2. Batched HTTP Subnet Scan on port 8888 (TV) and port 58526 (Mobile Android/iOS)
-    // Batching 25 concurrent connections prevents socket exhaustion (too many open files) on mobile OS
     try {
       final localIp = await getLocalIp();
       if (localIp != '127.0.0.1' && localIp.contains('.')) {
         final subnet = localIp.substring(0, localIp.lastIndexOf('.'));
         final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 350);
 
-        final ips = List.generate(254, (i) => '$subnet.${i + 1}').where((ip) => ip != localIp).toList();
-        const batchSize = 25;
+        // Immediate probe for Hotspot Host / Gateway ($subnet.1)
+        final gatewayIp = '$subnet.1';
+        if (gatewayIp != localIp) {
+          await _probeIp(client, gatewayIp, discovered);
+        }
+
+        final ips = List.generate(254, (i) => '$subnet.${i + 1}')
+            .where((ip) => ip != localIp && ip != gatewayIp)
+            .toList();
+        const batchSize = 35;
 
         for (int i = 0; i < ips.length; i += batchSize) {
           final batch = ips.sublist(i, (i + batchSize > ips.length) ? ips.length : i + batchSize);
@@ -125,7 +132,7 @@ class WifiCastService {
             name = jsonMap['name']?.toString() ?? name;
           } catch (_) {}
         }
-        discovered['tv_$targetIp'] = {
+        discovered[targetIp] = {
           'name': name,
           'ip': targetIp,
           'port': tvHttpPort,
@@ -150,7 +157,7 @@ class WifiCastService {
             name = jsonMap['device_name']?.toString() ?? name;
           } catch (_) {}
         }
-        discovered['mobile_$targetIp'] = {
+        discovered[targetIp] = {
           'name': name,
           'ip': targetIp,
           'port': mobileHttpPort,

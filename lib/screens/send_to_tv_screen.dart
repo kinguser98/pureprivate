@@ -43,6 +43,14 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   String _localIp = '';
   List<Map<String, dynamic>> _receivedFiles = [];
 
+  // Live Receiving Progress state
+  bool _isReceiving = false;
+  String? _receivingFileName;
+  double _receivingProgress = 0.0;
+  String? _receivingSpeed;
+  String? _receivingTransferred;
+  String? _receivingEta;
+
   @override
   void initState() {
     super.initState();
@@ -254,6 +262,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   Future<void> _handleUpload(HttpRequest request) async {
     try {
       final fileName = request.uri.queryParameters['name'] ?? 'file_${DateTime.now().millisecondsSinceEpoch}';
+      final totalLength = request.contentLength;
       final dir = await getApplicationDocumentsDirectory();
       final saveDir = Directory('${dir.path}/ReceivedFiles');
       if (!await saveDir.exists()) await saveDir.create(recursive: true);
@@ -263,9 +272,45 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       final sink = file.openWrite();
 
       int fileSize = 0;
+      final stopwatch = Stopwatch()..start();
+      int lastUiUpdate = 0;
+
+      if (mounted) {
+        setState(() {
+          _isReceiving = true;
+          _receivingFileName = fileName;
+          _receivingProgress = 0.0;
+          _receivingSpeed = null;
+          _receivingTransferred = null;
+          _receivingEta = null;
+        });
+      }
+
       await for (final chunk in request) {
         sink.add(chunk);
         fileSize += chunk.length;
+
+        final now = stopwatch.elapsedMilliseconds;
+        if (now - lastUiUpdate > 100 || (totalLength > 0 && fileSize == totalLength)) {
+          lastUiUpdate = now;
+          final elapsedSec = now / 1000.0;
+          final speedMBs = elapsedSec > 0 ? (fileSize / (1024 * 1024)) / elapsedSec : 0.0;
+          final remainingBytes = totalLength > fileSize ? totalLength - fileSize : 0;
+          final etaSec = (speedMBs > 0 && remainingBytes > 0) ? (remainingBytes / (1024 * 1024 * speedMBs)).round() : 0;
+
+          if (mounted) {
+            setState(() {
+              _isReceiving = true;
+              _receivingFileName = fileName;
+              _receivingProgress = totalLength > 0 ? (fileSize / totalLength).clamp(0.0, 1.0) : 0.0;
+              _receivingSpeed = '${speedMBs.toStringAsFixed(1)} MB/s';
+              _receivingTransferred = totalLength > 0
+                  ? '${(fileSize / (1024 * 1024)).toStringAsFixed(1)} / ${(totalLength / (1024 * 1024)).toStringAsFixed(1)} MB'
+                  : '${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+              _receivingEta = etaSec > 0 ? '${etaSec}s remaining' : '';
+            });
+          }
+        }
       }
       await sink.flush();
       await sink.close();
@@ -295,6 +340,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       if (mounted) {
         setState(() {
           _receivedFiles.insert(0, newItem);
+          _isReceiving = false;
+          _receivingFileName = null;
         });
       }
       await _saveFileIndex();
@@ -307,6 +354,13 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       debugPrint('Mobile Receiver upload error: $e');
       request.response.statusCode = 500;
       await request.response.close();
+    } finally {
+      if (mounted && _isReceiving) {
+        setState(() {
+          _isReceiving = false;
+          _receivingFileName = null;
+        });
+      }
     }
   }
 
@@ -543,7 +597,13 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
               children: [
                 Expanded(child: _buildTabChip(0, 'Send to TV', Icons.tv_rounded)),
                 const SizedBox(width: 12),
-                Expanded(child: _buildTabChip(1, 'Received Files', Icons.download_rounded)),
+                Expanded(
+                  child: _buildTabChip(
+                    1,
+                    _isReceiving ? 'Receiving (${(_receivingProgress * 100).toInt()}%)' : 'Received Files',
+                    _isReceiving ? Icons.downloading_rounded : Icons.download_rounded,
+                  ),
+                ),
               ],
             ),
           ),
@@ -973,6 +1033,78 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
               ],
             ),
           ),
+          if (_isReceiving) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF22C55E).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF4ADE80).withValues(alpha: 0.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4ADE80)),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Receiving File...',
+                            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        '${(_receivingProgress * 100).toInt()}%${_receivingSpeed != null ? ' • $_receivingSpeed' : ''}',
+                        style: GoogleFonts.outfit(color: const Color(0xFF4ADE80), fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  if (_receivingFileName != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _receivingFileName!,
+                      style: GoogleFonts.outfit(color: Colors.white70, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                    value: _receivingProgress > 0 ? _receivingProgress : null,
+                    backgroundColor: Colors.white10,
+                    color: const Color(0xFF4ADE80),
+                    minHeight: 6,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  if (_receivingTransferred != null || _receivingEta != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _receivingTransferred ?? '',
+                          style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+                        ),
+                        Text(
+                          _receivingEta ?? '',
+                          style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Expanded(
             child: _receivedFiles.isEmpty
