@@ -4,11 +4,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/data/wifi_cast_service.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
+import 'package:share_plus/share_plus.dart';
 
 class SendToTvScreen extends StatefulWidget {
   const SendToTvScreen({super.key});
@@ -37,6 +38,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
 
   // Receive Mode state
   HttpServer? _server;
+  RawDatagramSocket? _udpSocket;
   int _port = 58526;
   String _localIp = '';
   List<Map<String, dynamic>> _receivedFiles = [];
@@ -60,6 +62,9 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   void dispose() {
     _autoRefreshTimer?.cancel();
     _server?.close(force: true);
+    try {
+      _udpSocket?.close();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -151,30 +156,40 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       final stopwatch = Stopwatch()..start();
       int sentBytes = 0;
       int lastUpdate = 0;
+      const int chunkSize = 65536; // 64 KB chunk size for accurate TCP pacing
 
-      await for (final chunk in file.openRead()) {
-        socket.add(chunk);
-        sentBytes += chunk.length;
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        while (sentBytes < fileSize) {
+          final toRead = (fileSize - sentBytes) > chunkSize ? chunkSize : (fileSize - sentBytes);
+          final chunk = await raf.read(toRead);
+          if (chunk.isEmpty) break;
 
-        final now = stopwatch.elapsedMilliseconds;
-        if (now - lastUpdate > 100 || sentBytes == fileSize) {
-          lastUpdate = now;
-          final elapsedSec = now / 1000.0;
-          final speedMBs = elapsedSec > 0 ? (sentBytes / (1024 * 1024)) / elapsedSec : 0.0;
-          final remainingBytes = fileSize - sentBytes;
-          final etaSec = speedMBs > 0 ? (remainingBytes / (1024 * 1024 * speedMBs)).round() : 0;
+          socket.add(chunk);
+          await socket.flush(); // Waits for TCP socket buffer to actually push bytes over Wi-Fi
+          sentBytes += chunk.length;
 
-          if (mounted) {
-            setState(() {
-              _progress = sentBytes / fileSize;
-              _transferSpeed = '${speedMBs.toStringAsFixed(1)} MB/s';
-              _transferEta = etaSec > 0 ? '${etaSec}s remaining' : '';
-              _transferredMb = '${(sentBytes / 1048576).toStringAsFixed(1)} / ${(fileSize / 1048576).toStringAsFixed(1)} MB';
-            });
+          final now = stopwatch.elapsedMilliseconds;
+          if (now - lastUpdate > 120 || sentBytes == fileSize) {
+            lastUpdate = now;
+            final elapsedSec = now / 1000.0;
+            final speedMBs = elapsedSec > 0 ? (sentBytes / (1024 * 1024)) / elapsedSec : 0.0;
+            final remainingBytes = fileSize - sentBytes;
+            final etaSec = speedMBs > 0 ? (remainingBytes / (1024 * 1024 * speedMBs)).round() : 0;
+
+            if (mounted) {
+              setState(() {
+                _progress = (sentBytes / fileSize).clamp(0.0, 1.0);
+                _transferSpeed = '${speedMBs.toStringAsFixed(1)} MB/s';
+                _transferEta = etaSec > 0 ? '${etaSec}s remaining' : '';
+                _transferredMb = '${(sentBytes / 1048576).toStringAsFixed(1)} / ${(fileSize / 1048576).toStringAsFixed(1)} MB';
+              });
+            }
           }
         }
+      } finally {
+        await raf.close();
       }
-      await socket.flush();
 
       // Read HTTP response with 15s timeout
       final responseBytes = <int>[];
@@ -263,14 +278,16 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       }
 
       final ext = fileName.split('.').last.toLowerCase();
-      final videoExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v'];
+      final videoExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'ts', '3gp'];
+      final imageExts = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'];
       final isVideo = videoExts.contains(ext);
+      final isImage = imageExts.contains(ext);
 
       final newItem = {
         'name': fileName,
         'path': savePath,
         'size': fileSize,
-        'type': isVideo ? 'video' : 'file',
+        'type': isVideo ? 'video' : (isImage ? 'image' : 'file'),
         'ext': ext,
         'time': DateTime.now().toIso8601String(),
       };
@@ -293,6 +310,98 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     }
   }
 
+  void _openOrPlayFile(Map<String, dynamic> item) {
+    final String? srcPath = item['path'];
+    final String fileName = item['name'] ?? 'File';
+
+    if (srcPath == null || !File(srcPath).existsSync()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File not found on device storage.'), backgroundColor: Colors.redAccent),
+        );
+      }
+      return;
+    }
+
+    final ext = (item['ext'] ?? fileName.split('.').last).toString().toLowerCase();
+    final videoExts = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'ts', '3gp'];
+    final imageExts = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'];
+    final audioExts = ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg'];
+
+    if (videoExts.contains(ext) || audioExts.contains(ext)) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: srcPath,
+            title: fileName,
+            isLive: false,
+          ),
+        ),
+      );
+    } else if (imageExts.contains(ext)) {
+      _showImageViewer(srcPath, fileName);
+    } else {
+      Share.shareXFiles([XFile(srcPath, name: fileName)], text: fileName);
+    }
+  }
+
+  void _showImageViewer(String imagePath, String fileName) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black.withValues(alpha: 0.95),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      fileName,
+                      style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.share_rounded, color: Colors.white70, size: 20),
+                    onPressed: () => Share.shareXFiles([XFile(imagePath, name: fileName)], text: fileName),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 22),
+                    onPressed: () => Navigator.of(ctx).pop(),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4.0,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    File(imagePath),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => const Padding(
+                      padding: EdgeInsets.all(40),
+                      child: Text('Unable to render image preview', style: TextStyle(color: Colors.white54)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _saveFileToDownloads(Map<String, dynamic> item) async {
     final String? srcPath = item['path'];
     final String fileName = item['name'] ?? 'received_file';
@@ -300,104 +409,118 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     if (srcPath == null || !File(srcPath).existsSync()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('File not found on device storage.'),
-            backgroundColor: Colors.redAccent,
-          ),
+          const SnackBar(content: Text('File not found on device storage.'), backgroundColor: Colors.redAccent),
         );
       }
       return;
     }
 
     try {
-      Directory? downloadsDir;
-      if (Platform.isAndroid) {
-        final pubDownload = Directory('/storage/emulated/0/Download');
-        if (await pubDownload.exists()) {
-          downloadsDir = pubDownload;
-        } else {
-          try {
-            await pubDownload.create(recursive: true);
-            downloadsDir = pubDownload;
-          } catch (_) {}
-        }
-      }
-
-      if (downloadsDir == null) {
-        final extDir = await getExternalStorageDirectory();
-        if (extDir != null) {
-          downloadsDir = Directory('${extDir.path}/Download');
-          if (!await downloadsDir.exists()) await downloadsDir.create(recursive: true);
-        } else {
-          final docDir = await getApplicationDocumentsDirectory();
-          downloadsDir = Directory('${docDir.path}/Download');
-          if (!await downloadsDir.exists()) await downloadsDir.create(recursive: true);
-        }
-      }
-
-      final targetPath = '${downloadsDir.path}/$fileName';
-      final srcFile = File(srcPath);
-      await srcFile.copy(targetPath);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.download_done_rounded, color: Colors.greenAccent),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Saved to Downloads: $fileName',
-                    style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: const Color(0xFF1E293B),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            duration: const Duration(seconds: 4),
-          ),
+      if (Platform.isIOS) {
+        // On iOS: Share Sheet provides native "Save Video", "Save Image", "Save to Files"
+        await Share.shareXFiles(
+          [XFile(srcPath, name: fileName)],
+          text: 'Save $fileName',
         );
+        return;
+      }
+
+      // Android: Copy to public Downloads/GoXio/
+      Directory? downloadsDir;
+      final pubDownload = Directory('/storage/emulated/0/Download');
+      if (await pubDownload.exists()) {
+        downloadsDir = pubDownload;
+      } else {
+        downloadsDir = await getExternalStorageDirectory();
+      }
+
+      if (downloadsDir != null) {
+        final goxioDownloads = Directory('${downloadsDir.path}/GoXio');
+        if (!await goxioDownloads.exists()) await goxioDownloads.create(recursive: true);
+        final targetPath = '${goxioDownloads.path}/$fileName';
+        await File(srcPath).copy(targetPath);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.download_done_rounded, color: Colors.greenAccent),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Saved to Downloads/GoXio/$fileName',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF1E293B),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint('Error saving file to downloads: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving to downloads: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+      try {
+        await Share.shareXFiles([XFile(srcPath, name: fileName)], text: fileName);
+      } catch (err) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error saving: $err'), backgroundColor: Colors.redAccent),
+          );
+        }
       }
     }
   }
 
   Future<void> _startServer() async {
     try {
-      final interfaces = await NetworkInterface.list();
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
-            _localIp = addr.address;
-            break;
-          }
-        }
-      }
+      _localIp = await WifiCastService.getLocalIp();
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 58526);
       _port = 58526;
-      setState(() {});
+      if (mounted) setState(() {});
 
       _server!.listen((HttpRequest request) async {
         if (request.method == 'POST' && request.uri.path == '/upload') {
           await _handleUpload(request);
         } else if (request.uri.path == '/ping') {
           request.response.headers.contentType = ContentType.json;
-          request.response.write(json.encode({'status': 'ok', 'device_name': 'Mobile Phone', 'port': _port}));
+          final modelName = Platform.isIOS ? 'iPhone' : 'Android Mobile';
+          request.response.write(json.encode({'status': 'ok', 'device_name': modelName, 'port': _port}));
           await request.response.close();
         }
       });
+
+      // Start UDP Discovery Listener on port 41235 for zero-latency peer discovery
+      try {
+        _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, WifiCastService.mobileUdpPort);
+        _udpSocket!.broadcastEnabled = true;
+        _udpSocket!.listen((RawSocketEvent event) {
+          if (event == RawSocketEvent.read) {
+            final datagram = _udpSocket?.receive();
+            if (datagram != null) {
+              try {
+                final msg = utf8.decode(datagram.data);
+                if (msg.contains('discover') || msg.contains('goxio')) {
+                  final resp = json.encode({
+                    'type': 'mobile',
+                    'name': Platform.isIOS ? 'iPhone (GoXio)' : 'Android Phone (GoXio)',
+                    'ip': _localIp,
+                    'port': _port,
+                  });
+                  _udpSocket?.send(utf8.encode(resp), datagram.address, datagram.port);
+                }
+              } catch (_) {}
+            }
+          }
+        });
+      } catch (e) {
+        debugPrint('Mobile UDP discovery responder error: $e');
+      }
     } catch (_) {}
   }
 
@@ -615,7 +738,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Sending file...', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text(
+                        _sendingToDeviceName != null ? 'Sending to $_sendingToDeviceName...' : 'Sending file...',
+                        style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
                       Text(
                         '${(_progress * 100).toInt()}%${_transferSpeed != null ? ' • $_transferSpeed' : ''}',
                         style: GoogleFonts.outfit(color: AppColors.accentBright, fontWeight: FontWeight.bold, fontSize: 13),
@@ -818,78 +944,184 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Local Mobile Receiver: $_localIp:$_port',
-            style: GoogleFonts.outfit(color: AppColors.accentBright, fontWeight: FontWeight.bold, fontSize: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.accentBright.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.accentBright.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.wifi_tethering_rounded, color: AppColors.accentBright, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Device Receiver Active',
+                        style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Text(
+                        'Direct IP: ${_localIp.isNotEmpty ? _localIp : "Detecting..."}:$_port',
+                        style: GoogleFonts.outfit(color: AppColors.accentBright, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
           Expanded(
             child: _receivedFiles.isEmpty
-                ? Center(child: Text('No files received yet.', style: GoogleFonts.outfit(color: Colors.white38)))
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.folder_open_rounded, color: Colors.white24, size: 48),
+                        const SizedBox(height: 10),
+                        Text('No files received yet', style: GoogleFonts.outfit(color: Colors.white60, fontSize: 14)),
+                        const SizedBox(height: 4),
+                        Text('Send files from another device or TV to see them here', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11)),
+                      ],
+                    ),
+                  )
                 : ListView.separated(
                     itemCount: _receivedFiles.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (context, index) => const SizedBox(height: 10),
                     itemBuilder: (ctx, idx) {
                       final f = _receivedFiles[idx];
                       final isVideo = f['type'] == 'video';
-                      return Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.04),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.white10),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: isVideo ? AppColors.accentBright.withValues(alpha: 0.15) : Colors.white10,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                isVideo ? Icons.movie_rounded : Icons.insert_drive_file_rounded,
-                                color: isVideo ? AppColors.accentBright : Colors.white70,
-                                size: 20,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                      final isImage = f['type'] == 'image';
+                      return InkWell(
+                        onTap: () => _openOrPlayFile(f),
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.04),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
                                 children: [
-                                  Text(
-                                    f['name'] ?? '',
-                                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: isVideo
+                                          ? AppColors.accentBright.withValues(alpha: 0.15)
+                                          : (isImage ? Colors.purpleAccent.withValues(alpha: 0.15) : Colors.white10),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      isVideo
+                                          ? Icons.movie_rounded
+                                          : (isImage ? Icons.image_rounded : Icons.insert_drive_file_rounded),
+                                      color: isVideo
+                                          ? AppColors.accentBright
+                                          : (isImage ? Colors.purpleAccent : Colors.white70),
+                                      size: 20,
+                                    ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '${((f['size'] ?? 0) / 1048576).toStringAsFixed(1)} MB',
-                                    style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          f['name'] ?? '',
+                                          style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '${((f['size'] ?? 0) / 1048576).toStringAsFixed(1)} MB',
+                                          style: GoogleFonts.outfit(color: Colors.white38, fontSize: 11),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                side: const BorderSide(color: Colors.white24),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  if (isVideo)
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.accentBright,
+                                        foregroundColor: Colors.black,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      onPressed: () => _openOrPlayFile(f),
+                                      icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                                      label: Text('PLAY', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    )
+                                  else if (isImage)
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.purpleAccent,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      onPressed: () => _openOrPlayFile(f),
+                                      icon: const Icon(Icons.visibility_rounded, size: 16),
+                                      label: Text('VIEW', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    )
+                                  else
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.white24,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      onPressed: () => _openOrPlayFile(f),
+                                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                                      label: Text('OPEN', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    ),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      side: const BorderSide(color: Colors.white24),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    ),
+                                    onPressed: () => _saveFileToDownloads(f),
+                                    icon: const Icon(Icons.download_rounded, size: 14),
+                                    label: Text('SAVE', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  IconButton(
+                                    tooltip: 'Share',
+                                    icon: const Icon(Icons.share_rounded, color: Colors.white60, size: 18),
+                                    onPressed: () {
+                                      final path = f['path'];
+                                      final name = f['name'] ?? 'file';
+                                      if (path != null && File(path).existsSync()) {
+                                        Share.shareXFiles([XFile(path, name: name)], text: name);
+                                      }
+                                    },
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Delete',
+                                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 18),
+                                    onPressed: () => _deleteFile(idx),
+                                  ),
+                                ],
                               ),
-                              onPressed: () => _saveFileToDownloads(f),
-                              icon: const Icon(Icons.download_rounded, size: 14),
-                              label: Text('SAVE', style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.bold)),
-                            ),
-                            const SizedBox(width: 4),
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
-                              onPressed: () => _deleteFile(idx),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       );
                     },

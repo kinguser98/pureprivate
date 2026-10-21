@@ -16,6 +16,7 @@ class WifiCastService {
   static const int tvHttpPort = 8888;
   static const int tvUdpPort = 41234;
   static const int mobileHttpPort = 58526;
+  static const int mobileUdpPort = 41235;
 
   static HttpServer? _server;
   static http.Client? _client;
@@ -26,25 +27,27 @@ class WifiCastService {
   static bool get isRunning => _server != null;
 
   // ---------------------------------------------------------------------------
-  // DEVICE DISCOVERY (UDP Beacon + Fast Subnet Ping)
+  // DEVICE DISCOVERY (Dual UDP Beacon + Batched Fast Subnet Ping)
   // ---------------------------------------------------------------------------
 
   /// Discovers Android TV and Mobile (Android & iOS) devices on the local Wi-Fi network.
-  /// Combines 50ms UDP broadcast probe with asynchronous HTTP /ping subnet scan.
+  /// Combines dual UDP broadcast probes (TV: 41234, Mobile: 41235) with batched HTTP /ping subnet scan.
   static Future<List<Map<String, dynamic>>> discoverTvDevices({
-    Duration timeout = const Duration(milliseconds: 2500),
+    Duration timeout = const Duration(milliseconds: 2000),
   }) async {
     final Map<String, Map<String, dynamic>> discovered = {};
 
-    // 1. UDP Broadcast Discovery Probe
+    // 1. Dual UDP Broadcast Discovery Probe (TV + Mobile)
     RawDatagramSocket? udpSocket;
     try {
       udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       udpSocket.broadcastEnabled = true;
 
-      final probe = utf8.encode(json.encode({'cmd': 'discover', 'client': 'goxio_mobile'}));
+      final probe = utf8.encode(json.encode({'cmd': 'discover', 'client': 'goxio'}));
       final broadcastAddress = InternetAddress('255.255.255.255');
+      // Probe Android TV receiver on 41234 and Mobile phone receiver on 41235
       udpSocket.send(probe, broadcastAddress, tvUdpPort);
+      udpSocket.send(probe, broadcastAddress, mobileUdpPort);
 
       udpSocket.listen((RawSocketEvent event) {
         if (event == RawSocketEvent.read) {
@@ -54,14 +57,16 @@ class WifiCastService {
               final text = utf8.decode(datagram.data);
               final map = json.decode(text) as Map<String, dynamic>;
               final ip = map['ip']?.toString() ?? datagram.address.address;
-              final port = (map['port'] as num?)?.toInt() ?? tvHttpPort;
-              final name = map['name']?.toString() ?? 'Goxio TV ($ip)';
+              final type = map['type']?.toString().toLowerCase() ?? 'tv';
+              final isTv = type.contains('tv');
+              final port = (map['port'] as num?)?.toInt() ?? (isTv ? tvHttpPort : mobileHttpPort);
+              final name = map['name']?.toString() ?? (isTv ? 'Goxio TV ($ip)' : 'Mobile Phone ($ip)');
               discovered[ip] = {
                 'name': name,
                 'ip': ip,
                 'port': port,
                 'host': '$ip:$port',
-                'type': 'tv',
+                'type': isTv ? 'tv' : 'mobile',
                 'source': 'udp',
               };
             } catch (_) {}
@@ -72,83 +77,89 @@ class WifiCastService {
       debugPrint('UDP discovery probe error: $e');
     }
 
-    // 2. Fast HTTP Subnet Scan on port 8888 (TV) and port 58526 (Mobile Android/iOS)
+    // 2. Batched HTTP Subnet Scan on port 8888 (TV) and port 58526 (Mobile Android/iOS)
+    // Batching 25 concurrent connections prevents socket exhaustion (too many open files) on mobile OS
     try {
       final localIp = await getLocalIp();
       if (localIp != '127.0.0.1' && localIp.contains('.')) {
         final subnet = localIp.substring(0, localIp.lastIndexOf('.'));
-        final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 400);
+        final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 350);
 
-        final futures = <Future<void>>[];
-        for (int i = 1; i <= 254; i++) {
-          final targetIp = '$subnet.$i';
-          if (targetIp == localIp) continue;
+        final ips = List.generate(254, (i) => '$subnet.${i + 1}').where((ip) => ip != localIp).toList();
+        const batchSize = 25;
 
-          futures.add(() async {
-            // Check TV device on port 8888
-            try {
-              final req = await client.getUrl(Uri.parse('http://$targetIp:$tvHttpPort/ping'));
-              final resp = await req.close().timeout(const Duration(milliseconds: 400));
-              if (resp.statusCode == 200) {
-                final body = await resp.transform(utf8.decoder).join();
-                String name = 'Goxio TV ($targetIp)';
-                if (body.contains('{')) {
-                  try {
-                    final jsonMap = json.decode(body);
-                    name = jsonMap['name']?.toString() ?? name;
-                  } catch (_) {}
-                }
-                discovered['tv_$targetIp'] = {
-                  'name': name,
-                  'ip': targetIp,
-                  'port': tvHttpPort,
-                  'host': '$targetIp:$tvHttpPort',
-                  'type': 'tv',
-                  'source': 'http',
-                };
-                return;
-              }
-            } catch (_) {}
-
-            // Check Mobile device (Android / iOS) on port 58526
-            try {
-              final req = await client.getUrl(Uri.parse('http://$targetIp:$mobileHttpPort/ping'));
-              final resp = await req.close().timeout(const Duration(milliseconds: 400));
-              if (resp.statusCode == 200) {
-                final body = await resp.transform(utf8.decoder).join();
-                String name = 'Mobile Phone ($targetIp)';
-                if (body.contains('{')) {
-                  try {
-                    final jsonMap = json.decode(body);
-                    name = jsonMap['device_name']?.toString() ?? name;
-                  } catch (_) {}
-                }
-                discovered['mobile_$targetIp'] = {
-                  'name': name,
-                  'ip': targetIp,
-                  'port': mobileHttpPort,
-                  'host': '$targetIp:$mobileHttpPort',
-                  'type': 'mobile',
-                  'source': 'http',
-                };
-              }
-            } catch (_) {}
-          }());
+        for (int i = 0; i < ips.length; i += batchSize) {
+          final batch = ips.sublist(i, (i + batchSize > ips.length) ? ips.length : i + batchSize);
+          await Future.wait(batch.map((targetIp) => _probeIp(client, targetIp, discovered)));
         }
-        await Future.wait(futures);
         client.close();
       }
     } catch (e) {
       debugPrint('Subnet discovery scan error: $e');
     }
 
-    // Wait for UDP probe window
-    await Future.delayed(timeout);
+    // Short yield to allow any trailing UDP broadcast responses to arrive
+    await Future.delayed(const Duration(milliseconds: 250));
     try {
       udpSocket?.close();
     } catch (_) {}
 
     return discovered.values.toList();
+  }
+
+  static Future<void> _probeIp(
+    HttpClient client,
+    String targetIp,
+    Map<String, Map<String, dynamic>> discovered,
+  ) async {
+    // 1. Probe TV on port 8888
+    try {
+      final req = await client.getUrl(Uri.parse('http://$targetIp:$tvHttpPort/ping'));
+      final resp = await req.close().timeout(const Duration(milliseconds: 300));
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        String name = 'Goxio TV ($targetIp)';
+        if (body.contains('{')) {
+          try {
+            final jsonMap = json.decode(body);
+            name = jsonMap['name']?.toString() ?? name;
+          } catch (_) {}
+        }
+        discovered['tv_$targetIp'] = {
+          'name': name,
+          'ip': targetIp,
+          'port': tvHttpPort,
+          'host': '$targetIp:$tvHttpPort',
+          'type': 'tv',
+          'source': 'http',
+        };
+        return;
+      }
+    } catch (_) {}
+
+    // 2. Probe Mobile device on port 58526
+    try {
+      final req = await client.getUrl(Uri.parse('http://$targetIp:$mobileHttpPort/ping'));
+      final resp = await req.close().timeout(const Duration(milliseconds: 300));
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        String name = 'Mobile Phone ($targetIp)';
+        if (body.contains('{')) {
+          try {
+            final jsonMap = json.decode(body);
+            name = jsonMap['device_name']?.toString() ?? name;
+          } catch (_) {}
+        }
+        discovered['mobile_$targetIp'] = {
+          'name': name,
+          'ip': targetIp,
+          'port': mobileHttpPort,
+          'host': '$targetIp:$mobileHttpPort',
+          'type': 'mobile',
+          'source': 'http',
+        };
+      }
+    } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
@@ -407,19 +418,68 @@ class WifiCastService {
 
   static Future<String> getLocalIp() async {
     try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          if (!addr.isLoopback && (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.'))) {
-            return addr.address;
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+
+      // 1. Wi-Fi / Ethernet interfaces first (wlan, en, ap, eth)
+      for (final iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        final isWifiOrEth = name.startsWith('wlan') ||
+            name.startsWith('en') ||
+            name.startsWith('eth') ||
+            name.startsWith('ap');
+        if (isWifiOrEth) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback &&
+                (addr.address.startsWith('192.168.') ||
+                 addr.address.startsWith('10.') ||
+                 addr.address.startsWith('172.'))) {
+              return addr.address;
+            }
           }
         }
       }
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          if (!addr.isLoopback) {
-            return addr.address;
+
+      // 2. Non-cellular interfaces with standard 192.168.* IP
+      for (final iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        final isCellular = name.startsWith('rmnet') ||
+            name.startsWith('ccmni') ||
+            name.startsWith('pdp') ||
+            name.startsWith('radio') ||
+            name.startsWith('dummy') ||
+            name.startsWith('tun');
+        if (!isCellular) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback && addr.address.startsWith('192.168.')) {
+              return addr.address;
+            }
           }
+        }
+      }
+
+      // 3. Any non-cellular private IP
+      for (final iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        final isCellular = name.startsWith('rmnet') ||
+            name.startsWith('ccmni') ||
+            name.startsWith('pdp') ||
+            name.startsWith('radio') ||
+            name.startsWith('dummy') ||
+            name.startsWith('tun');
+        if (!isCellular) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback) return addr.address;
+          }
+        }
+      }
+
+      // 4. Fallback to any non-loopback address
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback) return addr.address;
         }
       }
     } catch (_) {}
