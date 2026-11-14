@@ -697,8 +697,8 @@ abstract final class DownloadManager {
   }
 
   /// Checks if a movie has been fully downloaded and the file exists.
-  static Future<bool> isDownloaded(String movieId) async {
-    final path = await getLocalPath(movieId);
+  static Future<bool> isDownloaded(String movieId, {String? tmdbId, String? imdbId, String? title}) async {
+    final path = await getLocalPath(movieId, tmdbId: tmdbId, imdbId: imdbId, title: title);
     if (path == null) return false;
     if (kIsWeb) return true; // On web, if metadata exists, consider it downloaded
     final resolved = await resolveLocalPath(path);
@@ -706,21 +706,34 @@ abstract final class DownloadManager {
   }
 
   /// Returns the local path where the movie video file is stored.
-  static Future<String?> getLocalPath(String movieId) async {
+  static Future<String?> getLocalPath(String movieId, {String? tmdbId, String? imdbId, String? title}) async {
     final prefs = await SharedPreferences.getInstance();
     final rawList = prefs.getString('downloaded_movies_metadata') ?? '[]';
     final List<dynamic> decoded = json.decode(rawList);
     final targetCanonical = canonicalTitle(movieId);
+    final titleCanonical = title != null ? canonicalTitle(title) : '';
 
     final match = decoded.firstWhere(
       (item) {
         final id = item['id']?.toString() ?? '';
-        final tmdbId = item['tmdb_id']?.toString() ?? '';
-        final title = item['title']?.toString() ?? '';
-        if (id == movieId || tmdbId == movieId || title.toLowerCase() == movieId.toLowerCase()) {
+        final itemTmdbId = item['tmdb_id']?.toString() ?? '';
+        final itemImdbId = item['imdb_id']?.toString() ?? '';
+        final itemTitle = item['title']?.toString() ?? '';
+
+        if (id == movieId || itemTmdbId == movieId || itemTitle.toLowerCase() == movieId.toLowerCase()) {
           return true;
         }
-        if (targetCanonical.isNotEmpty && canonicalTitle(title) == targetCanonical) {
+        if (tmdbId != null && tmdbId.isNotEmpty && (id == tmdbId || itemTmdbId == tmdbId)) {
+          return true;
+        }
+        if (imdbId != null && imdbId.isNotEmpty && itemImdbId == imdbId) {
+          return true;
+        }
+        if (title != null && title.isNotEmpty) {
+          if (itemTitle.toLowerCase() == title.toLowerCase()) return true;
+          if (titleCanonical.isNotEmpty && canonicalTitle(itemTitle) == titleCanonical) return true;
+        }
+        if (targetCanonical.isNotEmpty && canonicalTitle(itemTitle) == targetCanonical) {
           return true;
         }
         return false;
@@ -728,9 +741,39 @@ abstract final class DownloadManager {
       orElse: () => null,
     );
     if (match == null) return null;
-    final rawPath = match['stream_url']?.toString();
+    final rawPath = (match['stream_url'] ?? match['video_source'])?.toString();
     if (rawPath == null) return null;
     return await resolveLocalPath(rawPath);
+  }
+
+  /// Saves an imported local video file (from internal storage, SD Card, USB drive) into downloaded library metadata
+  static Future<void> saveImportedVideo(String filePath, String fileName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawList = prefs.getString('downloaded_movies_metadata') ?? '[]';
+    final List<dynamic> decoded = json.decode(rawList);
+    final id = 'local_${DateTime.now().millisecondsSinceEpoch}';
+    final cleanTitle = fileName.replaceAll(RegExp(r'\.[^.]+$'), '').replaceAll('_', ' ').replaceAll('.', ' ').trim();
+
+    // Check if already in metadata
+    final alreadyExists = decoded.any((m) => m['stream_url'] == filePath || m['video_source'] == filePath);
+    if (!alreadyExists) {
+      decoded.insert(0, {
+        'id': id,
+        'title': cleanTitle.isNotEmpty ? cleanTitle : fileName,
+        'genre': 'Local Storage',
+        'rating': 9.0,
+        'poster_url': '',
+        'backdrop_url': '',
+        'description': 'Imported local media from device or external storage (SD card / USB drive).\nFile: $filePath',
+        'year': DateTime.now().year,
+        'runtime': 'Local File',
+        'contentRating': 'ALL',
+        'stream_url': filePath,
+        'video_source': filePath,
+        'is_local_import': true,
+      });
+      await prefs.setString('downloaded_movies_metadata', json.encode(decoded));
+    }
   }
 
   /// Retrieves a list of all fully downloaded Movie models.

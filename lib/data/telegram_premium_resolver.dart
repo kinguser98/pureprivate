@@ -516,7 +516,10 @@ class TelegramPremiumResolver {
         }
 
         final fullMeta = '$rawTitle $nameHeader $desc';
-        final sizeFormatted = fileSize > 0 ? _formatBytes(fileSize) : _extractSizeFromText(desc);
+        final extractedSize = _extractSizeFromText(desc);
+        final sizeFormatted = fileSize > 0
+            ? _formatBytes(fileSize)
+            : (extractedSize.isNotEmpty ? extractedSize : _extractSizeFromText(fullMeta));
         final quality = _extractQuality(fullMeta);
         final languages = _extractLanguages(fullMeta, desc);
 
@@ -650,7 +653,10 @@ class TelegramPremiumResolver {
         final quality = _extractQuality(rawTitle);
         final languages = _extractLanguages(rawTitle, fMap['caption']?.toString());
         final badges = _extractBadges(rawTitle);
-        final sizeFormatted = _formatBytes(fileSize);
+        final extractedSize = _extractSizeFromText(rawTitle);
+        final sizeFormatted = fileSize > 0
+            ? _formatBytes(fileSize)
+            : (extractedSize.isNotEmpty ? extractedSize : _extractSizeFromText(fMap['caption']?.toString() ?? ''));
         final startParam = '$shortCode-$postId-0';
         final botStartUrl = 'https://t.me/$_defaultBot?start=$startParam';
 

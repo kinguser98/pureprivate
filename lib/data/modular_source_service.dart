@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:private_cinema_mobile/data/cinefreak_resolver.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -116,7 +115,14 @@ class ModularSourceService {
       if (cloud.containsKey('source_modules_json') && cloud['source_modules_json']!.isNotEmpty) {
         final decoded = jsonDecode(cloud['source_modules_json']!);
         if (decoded is Map && decoded['modules'] is List) {
-          return List<Map<String, dynamic>>.from(decoded['modules']);
+          final modules = List<Map<String, dynamic>>.from(decoded['modules']);
+          return modules.where((m) {
+            final id = m['id']?.toString() ?? '';
+            final enabled = m['enabled'] == true || m['enabled'] == 'true';
+            final showKey = 'source_show_$id';
+            final isVisible = cloud.containsKey(showKey) ? cloud[showKey] == 'true' : true;
+            return enabled && isVisible;
+          }).toList();
         }
       }
     } catch (_) {}

@@ -1,5 +1,9 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_cinema_mobile/models/movie.dart';
 import 'package:private_cinema_mobile/data/download_manager.dart';
@@ -7,6 +11,7 @@ import 'package:private_cinema_mobile/data/sync_service.dart';
 import 'package:private_cinema_mobile/theme/app_colors.dart';
 import 'package:private_cinema_mobile/widgets/movie_image.dart';
 import 'package:private_cinema_mobile/screens/movie_detail_screen.dart';
+import 'package:private_cinema_mobile/screens/video_player_screen.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});
@@ -45,6 +50,80 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         _loadingCompleted = false;
       });
     }
+  }
+
+  Future<void> _importAndPlayLocalVideo() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.video,
+        allowMultiple: false,
+      );
+      if (!mounted || result == null || result.files.isEmpty) return;
+      final file = result.files.single;
+      final path = file.path;
+      if (path == null || path.isEmpty) return;
+
+      final name = file.name.isNotEmpty ? file.name : p.basename(path);
+      await DownloadManager.saveImportedVideo(path, name);
+      await _loadCompleted();
+
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => VideoPlayerScreen(
+            videoSource: path,
+            title: name.replaceAll(RegExp(r'\.[^.]+$'), ''),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error importing video file: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _playLocalMovie(Movie movie) async {
+    String? localPath = await DownloadManager.getLocalPath(
+      movie.id,
+      tmdbId: movie.tmdbId,
+      imdbId: movie.imdbId,
+      title: movie.title,
+    );
+    if (localPath == null && movie.videoSource != null) {
+      final vs = movie.videoSource!;
+      if (!vs.startsWith('http://') && !vs.startsWith('https://')) {
+        final clean = vs.startsWith('file://') ? vs.replaceFirst('file://', '') : vs;
+        if (File(clean).existsSync()) {
+          localPath = clean;
+        }
+      }
+    }
+    final path = localPath ?? movie.videoSource;
+    if (path == null || path.isEmpty || (!kIsWeb && !File(path).existsSync())) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot locate downloaded video file on disk.')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => VideoPlayerScreen(
+          videoSource: path,
+          title: movie.title,
+          movieId: movie.id,
+          imdbId: movie.imdbId,
+          year: movie.year,
+          genre: movie.genre,
+        ),
+      ),
+    );
   }
 
   String _formatSize(int bytes) {
@@ -115,20 +194,37 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 children: [
                   // Header Title & Actions Row
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(6, 12, 12, 8),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Downloads',
-                          style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                              tooltip: 'Back',
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Downloads',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
                         ),
                         Row(
                           children: [
+                            // Import Local Video Button
+                            IconButton(
+                              onPressed: _importAndPlayLocalVideo,
+                              icon: const Icon(Icons.folder_open_rounded, color: Colors.white70),
+                              tooltip: 'Import & Play Video (Phone / SD Card / USB)',
+                            ),
                             // Pairing Action Button
                             IconButton(
                               onPressed: _showPairingDialog,
@@ -138,7 +234,6 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                               ),
                               tooltip: 'TV Pairing Settings',
                             ),
-                            const SizedBox(width: 8),
                             // Manual Download Add Button
                             IconButton(
                               onPressed: _showAddManualDownloadDialog,
@@ -192,22 +287,39 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
     if (_completedDownloads.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.download_done_rounded, color: Colors.white24, size: 64),
-            const SizedBox(height: 16),
-            Text(
-              'No completed downloads.',
-              style: GoogleFonts.outfit(color: Colors.white54, fontSize: 16),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Movies you download will appear here\nfor offline playback.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white30, fontSize: 13, height: 1.4),
-            ),
-          ],
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.download_done_rounded, color: Colors.white24, size: 64),
+              const SizedBox(height: 16),
+              Text(
+                'No completed downloads.',
+                style: GoogleFonts.outfit(color: Colors.white54, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Movies you download or import will appear here\nfor offline playback.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white30, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                onPressed: _importAndPlayLocalVideo,
+                icon: const Icon(Icons.folder_open_rounded, color: Colors.white),
+                label: Text(
+                  'Import Video from Storage / SD Card',
+                  style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -262,6 +374,15 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                IconButton(
+                  icon: Icon(
+                    Icons.play_circle_fill_rounded,
+                    color: AppColors.accentBright,
+                    size: 32,
+                  ),
+                  tooltip: 'Play Offline Movie',
+                  onPressed: () => _playLocalMovie(movie),
+                ),
                 IconButton(
                   icon: Icon(
                     Icons.tv_rounded,

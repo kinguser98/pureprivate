@@ -164,10 +164,13 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   bool _showNetmirrorOtt = true;
   bool _resolvingNetmirrorOtt = false;
   List<StreamSource> _liveNetmirrorOttSources = [];
+  bool _showDirectLink = true;
+  bool _showStreamtape = true;
+  bool _showIstreamflare = true;
   List<String> _blockedAddonGroups = [];
   List<String> _sourceOrder = [
     'cinefreak',
-    'streamplay', 'flyflix', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
+    'streamplay', 'vidlink', 'flyflix', 'moviebox', 'movy', 'moviesdrive', 'hdhub4u', 'movieshunt',
     'stalker', 'stravo', 'castle', 'torrent', 'stremioAddon',
     'telegram', 'telegram_premium', 'filmu', 'vegamovies', 'cinejoy', 'streamtape', 'netmirror_center', 'netmirror_ott', 'directLink'
   ];
@@ -191,10 +194,75 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     return null;
   }
 
+  bool _isSourceKeyVisible(String key) {
+    switch (key.toLowerCase()) {
+      case 'cinefreak':
+        return _showCinefreak;
+      case 'streamplay':
+        return _showStreamplay;
+      case 'vidlink':
+        return _showVidlink;
+      case 'flyflix':
+        return _showFlyflix;
+      case 'moviebox':
+        return _showMoviebox;
+      case 'movy':
+        return _showMovy;
+      case 'moviesdrive':
+        return _showMoviesdrive;
+      case 'hdhub4u':
+        return _showHdhub4u;
+      case 'movieshunt':
+        return _showMovieshunt;
+      case 'stalker':
+        return _showStalker;
+      case 'stravo':
+        return _showStravo;
+      case 'castle':
+        return _showCastle;
+      case 'torrent':
+        return _showTorrent;
+      case 'stremioaddon':
+        return _showStremioAddon;
+      case 'nuveoaddon':
+        return _showNuveoAddon;
+      case 'telegram':
+        return _showTelegram;
+      case 'telegram_premium':
+      case 'telegrampremium':
+        return _showTelegramPremium;
+      case 'filmu':
+        return _showFilmu;
+      case 'vegamovies':
+        return _showVegamovies;
+      case 'cinejoy':
+        return _showCinejoy;
+      case 'streamtape':
+        return _showStreamtape;
+      case 'netmirror':
+        return _showNetmirror;
+      case 'netmirror_center':
+        return _showNetmirrorCenter && _showNetmirror;
+      case 'netmirror_ott':
+        return _showNetmirrorOtt;
+      case 'directlink':
+      case 'direct':
+        return _showDirectLink;
+      case 'istreamflare':
+      case 'istream':
+        return _showIstreamflare;
+      default:
+        return _dynamicModuleVisibility[key] ?? true;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    _loadSourceVisibilities();
+    _initScreen();
+  }
+
+  Future<void> _initScreen() async {
     _loadFavoriteStatus();
     _loadWatchlistState();
     _loadTmdbDetails();
@@ -202,8 +270,11 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     _checkDownloadStatus();
     _loadWatchProgress();
     _loadTorrentioStreams();
-    _resolveAllLiveSources();
     _loadClearLogo();
+    await _loadSourceVisibilities();
+    if (mounted) {
+      _resolveAllLiveSources();
+    }
   }
 
   String? _clearLogoUrl;
@@ -370,9 +441,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       debugPrint('Error loading dynamic modules in MovieDetailScreen: $e');
     }
 
+    if (cloud.isNotEmpty) {
+      for (final entry in cloud.entries) {
+        if (entry.key.startsWith('source_show_')) {
+          await prefs.setBool(entry.key, entry.value == 'true');
+        } else if (entry.key == 'source_visibility' || entry.key == 'source_order') {
+          await prefs.setString(entry.key, entry.value);
+        }
+      }
+    }
+
     if (mounted) {
       setState(() {
         _showStreamplay = cloud.containsKey('source_show_streamplay') ? cloud['source_show_streamplay'] == 'true' : (prefs.getBool('source_show_streamplay') ?? true);
+        _showDirectLink = cloud.containsKey('source_show_directLink') ? cloud['source_show_directLink'] == 'true' : (prefs.getBool('source_show_directLink') ?? true);
+        _showStreamtape = cloud.containsKey('source_show_streamtape') ? cloud['source_show_streamtape'] == 'true' : (prefs.getBool('source_show_streamtape') ?? true);
+        _showIstreamflare = cloud.containsKey('source_show_istreamflare') ? cloud['source_show_istreamflare'] == 'true' : (prefs.getBool('source_show_istreamflare') ?? true);
         _showFlyflix = cloud.containsKey('source_show_flyflix') ? cloud['source_show_flyflix'] == 'true' : (prefs.getBool('source_show_flyflix') ?? true);
         _showMovy = cloud.containsKey('source_show_movy') ? cloud['source_show_movy'] == 'true' : (prefs.getBool('source_show_movy') ?? true);
         _showMoviesdrive = cloud.containsKey('source_show_moviesdrive') ? cloud['source_show_moviesdrive'] == 'true' : (prefs.getBool('source_show_moviesdrive') ?? true);
@@ -437,7 +521,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       }
       mergedOrder.remove('mkvbase');
       mergedOrder.remove('cinemm');
-      setState(() => _sourceOrder = mergedOrder);
+      setState(() => _sourceOrder = mergedOrder.where(_isSourceKeyVisible).toList());
 
       // Trigger resolution for all visible dynamic modules now that dynamic modules are loaded
       final builtInKeys = {'movieshunt', 'hdhub4u', 'moviesdrive', 'vegamovies', 'cinejoy', 'filmu'};
@@ -1963,7 +2047,22 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   Future<void> _checkDownloadStatus() async {
-    final localPath = await DownloadManager.getLocalPath(movie.id);
+    String? localPath;
+    if (movie.videoSource != null && movie.videoSource!.isNotEmpty) {
+      final vs = movie.videoSource!;
+      if (!vs.startsWith('http://') && !vs.startsWith('https://')) {
+        final clean = vs.startsWith('file://') ? vs.replaceFirst('file://', '') : vs;
+        if (File(clean).existsSync()) {
+          localPath = clean;
+        }
+      }
+    }
+    localPath ??= await DownloadManager.getLocalPath(
+      movie.id,
+      tmdbId: movie.tmdbId,
+      imdbId: movie.imdbId,
+      title: movie.title,
+    );
     final isDown = localPath != null && (kIsWeb || await File(localPath).exists());
     if (mounted) {
       setState(() {
@@ -3598,7 +3697,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             final Map<String, Widget> sourceWidgets = {};
 
                         // CineFreak Direct Streams
-            if ((_resolvingCinefreak || _liveCinefreakSources.isNotEmpty) && enabledKeys.contains('cinefreak')) {
+            if (_showCinefreak && (_resolvingCinefreak || _liveCinefreakSources.isNotEmpty) && enabledKeys.contains('cinefreak')) {
               sourceWidgets['cinefreak'] = _buildSourceTile(
                 icon: Icons.cloud_download_rounded,
                 title: '${pos('cinefreak')}. CineCloud Direct Server',
@@ -3628,7 +3727,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Flyflix Multi-Server
-            if ((_resolvingFlyflix || _liveFlyflixSources.isNotEmpty) && enabledKeys.contains('flyflix')) {
+            if (_showFlyflix && (_resolvingFlyflix || _liveFlyflixSources.isNotEmpty) && enabledKeys.contains('flyflix')) {
               sourceWidgets['flyflix'] = _buildSourceTile(
                 icon: Icons.movie_filter_rounded,
                 title: '${pos('flyflix')}. Flyflix Multi-Server',
@@ -3658,7 +3757,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // MovieBox Server
-            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
+            if (_showMoviebox && (_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
               sourceWidgets['moviebox'] = _buildSourceTile(
                 icon: Icons.movie_filter_rounded,
                 title: '${pos('moviebox')}. MovieBox Server',
@@ -3688,7 +3787,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Movy.bz Multi-Source
-            if ((_resolvingMovy || _liveMovySources.isNotEmpty) && enabledKeys.contains('movy')) {
+            if (_showMovy && (_resolvingMovy || _liveMovySources.isNotEmpty) && enabledKeys.contains('movy')) {
               sourceWidgets['movy'] = _buildSourceTile(
                 icon: Icons.auto_awesome_motion_rounded,
                 title: '${pos('movy')}. Movy.bz Multi-Source',
@@ -3718,7 +3817,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // MoviesDrive (FSL & HubCloud)
-            if ((_resolvingMoviesdrive || _liveMoviesdriveSources.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
+            if (_showMoviesdrive && (_resolvingMoviesdrive || _liveMoviesdriveSources.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
               sourceWidgets['moviesdrive'] = _buildSourceTile(
                 icon: Icons.flash_on_rounded,
                 title: '${pos('moviesdrive')}. MoviesDrive FSL',
@@ -3748,7 +3847,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // HDHub4u API
-            if ((_resolvingHdhub4u || _liveHdhub4uSources.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
+            if (_showHdhub4u && (_resolvingHdhub4u || _liveHdhub4uSources.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
               sourceWidgets['hdhub4u'] = _buildSourceTile(
                 icon: Icons.hd_rounded,
                 title: '${pos('hdhub4u')}. HDHub4u 4K & Dolby',
@@ -3778,7 +3877,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // MoviesHunt Server
-            if ((_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
+            if (_showMovieshunt && (_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
               sourceWidgets['movieshunt'] = _buildSourceTile(
                 icon: Icons.movie_filter_rounded,
                 title: '${pos('movieshunt')}. MoviesHunt Server',
@@ -3808,7 +3907,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 2. Vidlink Server
-            if ((_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
+            if (_showVidlink && (_resolvingVidlink || _liveVidlinkSources.isNotEmpty) && enabledKeys.contains('vidlink')) {
               sourceWidgets['vidlink'] = _buildSourceTile(
                 icon: Icons.play_arrow_rounded,
                 title: '${pos('vidlink')}. Vidlink Server',
@@ -3828,7 +3927,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // StreamPlay Multi-API
-            if ((_resolvingStreamplay || _liveStreamplaySources.isNotEmpty) && enabledKeys.contains('streamplay')) {
+            if (_showStreamplay && (_resolvingStreamplay || _liveStreamplaySources.isNotEmpty) && enabledKeys.contains('streamplay')) {
               sourceWidgets['streamplay'] = _buildSourceTile(
                 icon: Icons.flash_on_rounded,
                 title: '${pos('streamplay')}. StreamPlay Multi-API',
@@ -3857,38 +3956,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
               );
             }
 
-            // MovieBox Server
-            if ((_resolvingMoviebox || _liveMovieboxSources.isNotEmpty) && enabledKeys.contains('moviebox')) {
-              sourceWidgets['moviebox'] = _buildSourceTile(
-                icon: Icons.movie_filter_rounded,
-                title: '${pos('moviebox')}. MovieBox Server',
-                subtitle: _resolvingMoviebox
-                    ? 'Searching MovieBox...'
-                    : '${_liveMovieboxSources.length} links available',
-                disabled: _resolvingMoviebox,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (_liveMovieboxSources.length == 1) {
-                    _playWithResolution(
-                      _liveMovieboxSources.first.url,
-                      resumeDirectly: resumeDirectly,
-                      sourceName: _liveMovieboxSources.first.name,
-                      headers: _liveMovieboxSources.first.headers,
-                    );
-                  } else {
-                    _showSubSourceSelector(
-                      context,
-                      'MOVIEBOX STREAMS',
-                      _liveMovieboxSources,
-                      resumeDirectly: resumeDirectly,
-                    );
-                  }
-                },
-              );
-            }
-
             // 6. Stalker VOD Server
-            if ((_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
+            if (_showStalker && (_resolvingStalker || _liveStalkerSources.isNotEmpty) && enabledKeys.contains('stalker')) {
               final uniquePortals = _liveStalkerSources.map((s) {
                 final stripped = s.url.replaceAll('stalker://', '');
                 final portalMatch = RegExp(r'^(\d+)').firstMatch(stripped);
@@ -3925,7 +3994,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 7. Stravo Server
-            if ((_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
+            if (_showStravo && (_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
               sourceWidgets['stravo'] = _buildSourceTile(
                 icon: Icons.rocket_launch_rounded,
                 title: '${pos('stravo')}. Stravo Server',
@@ -3947,7 +4016,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
             // 8. Torrent Server
             final totalTorrents = _torrentioSources.length + customMagnets.length;
-            if (totalTorrents > 0 && enabledKeys.contains('torrent')) {
+            if (_showTorrent && totalTorrents > 0 && enabledKeys.contains('torrent')) {
               sourceWidgets['torrent'] = _buildSourceTile(
                 icon: Icons.cloud_circle_rounded,
                 title: '${pos('torrent')}. Torrent Server',
@@ -3964,7 +4033,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 9. Stremio Addons
-            if ((_resolvingStremio || _liveStremioSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+            if (_showStremioAddon && (_resolvingStremio || _liveStremioSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
               sourceWidgets['stremioAddon'] = _buildSourceTile(
                 icon: Icons.extension_rounded,
                 title: '${pos('stremioAddon')}. Stremio Addons',
@@ -3985,7 +4054,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Nuveo Addons (uses stremioAddon key)
-            if ((_resolvingNuveo || _liveNuveoSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
+            if (_showNuveoAddon && (_resolvingNuveo || _liveNuveoSources.isNotEmpty) && enabledKeys.contains('stremioAddon')) {
               sourceWidgets['nuveoAddon'] = _buildSourceTile(
                 icon: Icons.auto_awesome_rounded,
                 title: '${pos('stremioAddon')}. Nuveo Addons',
@@ -4006,7 +4075,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
  
             // Castle Server
-            if ((_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
+            if (_showCastle && (_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
               sourceWidgets['castle'] = _buildSourceTile(
                 icon: Icons.castle_rounded,
                 title: '${pos('castle')}. Castle TV Server',
@@ -4042,7 +4111,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
              // Telegram Server
-             if ((_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
+             if (_showTelegram && (_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty) && enabledKeys.contains('telegram')) {
                final isSearching = _resolvingTelegram || _isSearchingTelegramGroup;
                sourceWidgets['telegram'] = _buildSourceTile(
                  icon: Icons.send_rounded,
@@ -4237,7 +4306,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 1. Direct MP4/MKV Link (always shown at top if exist)
-            if (dbMp4Sources.isNotEmpty) {
+            if (_showDirectLink && dbMp4Sources.isNotEmpty) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.video_file_rounded,
@@ -4352,7 +4421,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
  
             // 4. Streamtape Server (always shown at top if exist)
-            if (dbStreamtapeSources.isNotEmpty) {
+            if (_showStreamtape && dbStreamtapeSources.isNotEmpty) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.folder_shared_rounded,
@@ -4427,11 +4496,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
             // Dynamically append other sources in sorted visibility order
             for (final key in _sourceOrder) {
+              if (!_isSourceKeyVisible(key)) continue;
               if (key == 'stremioAddon') {
-                if (sourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
+                if (_showStremioAddon && sourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
                   items.add(sourceWidgets['stremioAddon']!);
                 }
-                if (sourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
+                if (_showNuveoAddon && sourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
                   items.add(sourceWidgets['nuveoAddon']!);
                 }
               } else {
@@ -4980,6 +5050,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 url: source.url,
                                 headers: source.headers,
                                 isSelected: false,
+                                explicitQuality: source.qualityBadgeText ?? source.quality,
+                                explicitSize: source.size,
+                                explicitLanguages: source.languages,
                                 onTap: () {
                                   Navigator.of(context).pop();
                                   _playWithResolution(
@@ -5526,11 +5599,34 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       return;
     }
 
-    final localPath = await DownloadManager.getLocalPath(movie.id);
+    // 1. Instant check cached downloaded local path
+    if (_downloadedLocalPath != null && (kIsWeb || await File(_downloadedLocalPath!).exists())) {
+      _play(_downloadedLocalPath!, resumeDirectly: resumeDirectly, sourceName: 'Offline Download');
+      return;
+    }
+
+    // 2. Direct local file check on movie.videoSource
+    if (movie.videoSource != null && movie.videoSource!.isNotEmpty) {
+      final vs = movie.videoSource!;
+      if (!vs.startsWith('http://') && !vs.startsWith('https://')) {
+        final clean = vs.startsWith('file://') ? vs.replaceFirst('file://', '') : vs;
+        if (kIsWeb || await File(clean).exists()) {
+          _play(clean, resumeDirectly: resumeDirectly, sourceName: 'Offline Local File');
+          return;
+        }
+      }
+    }
+
+    // 3. Fallback check local path with full ID matching
+    final localPath = await DownloadManager.getLocalPath(
+      movie.id,
+      tmdbId: movie.tmdbId,
+      imdbId: movie.imdbId,
+      title: movie.title,
+    );
     if (!mounted) return;
     if (localPath != null && (kIsWeb || await File(localPath).exists())) {
-      if (!mounted) return;
-      _play(localPath, resumeDirectly: resumeDirectly);
+      _play(localPath, resumeDirectly: resumeDirectly, sourceName: 'Offline Download');
       return;
     }
 
@@ -5722,8 +5818,31 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
             final Map<String, Widget> downloadSourceWidgets = {};
 
+            // Flyflix Multi-Server (Direct Download)
+            if (_showFlyflix && (_resolvingFlyflix || _liveFlyflixSources.isNotEmpty) && enabledKeys.contains('flyflix')) {
+              downloadSourceWidgets['flyflix'] = _buildSourceTile(
+                icon: Icons.cloud_download_rounded,
+                title: '${pos('flyflix')}. Flyflix Multi-Server',
+                subtitle: _resolvingFlyflix
+                    ? 'Extracting Flyflix servers...'
+                    : (_liveFlyflixSources.isEmpty
+                        ? 'No direct download links'
+                        : '${_liveFlyflixSources.length} high-speed direct link(s) available'),
+                disabled: _resolvingFlyflix || _liveFlyflixSources.isEmpty,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  if (_liveFlyflixSources.length == 1) {
+                    final s = _liveFlyflixSources.first;
+                    _downloadSourceUrl(s.url, sourceName: s.name, headers: s.headers);
+                  } else {
+                    _showDownloadSubSelector('FLYFLIX DOWNLOADS', _liveFlyflixSources);
+                  }
+                },
+              );
+            }
+
             // 1. MoviesDrive Cloud Server (Direct Fast Download)
-            if ((_resolvingMoviesdrive || _liveMoviesdriveSources.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
+            if (_showMoviesdrive && (_resolvingMoviesdrive || _liveMoviesdriveSources.isNotEmpty) && enabledKeys.contains('moviesdrive')) {
               downloadSourceWidgets['moviesdrive'] = _buildSourceTile(
                 icon: Icons.cloud_download_rounded,
                 title: '${pos('moviesdrive')}. MoviesDrive Cloud Server',
@@ -5746,7 +5865,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 2. HDHub4u Server (Direct Fast Download)
-            if ((_resolvingHdhub4u || _liveHdhub4uSources.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
+            if (_showHdhub4u && (_resolvingHdhub4u || _liveHdhub4uSources.isNotEmpty) && enabledKeys.contains('hdhub4u')) {
               downloadSourceWidgets['hdhub4u'] = _buildSourceTile(
                 icon: Icons.hd_rounded,
                 title: '${pos('hdhub4u')}. HDHub4u Server',
@@ -5769,7 +5888,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // MoviesHunt Server (Direct Fast Download)
-            if ((_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
+            if (_showMovieshunt && (_resolvingMovieshunt || _liveMovieshuntSources.isNotEmpty) && enabledKeys.contains('movieshunt')) {
               downloadSourceWidgets['movieshunt'] = _buildSourceTile(
                 icon: Icons.movie_filter_rounded,
                 title: '${pos('movieshunt')}. MoviesHunt Server',
@@ -5792,7 +5911,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Stravo Server
-            if ((_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
+            if (_showStravo && (_resolvingStravo || _liveStravoSources.isNotEmpty) && enabledKeys.contains('stravo')) {
               downloadSourceWidgets['stravo'] = _buildSourceTile(
                 icon: Icons.rocket_launch_rounded,
                 title: '${pos('stravo')}. Stravo Server',
@@ -5812,7 +5931,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Torrent Server (Seedr Cloud Download)
-            if (totalTorrents > 0 && enabledKeys.contains('torrent')) {
+            if (_showTorrent && totalTorrents > 0 && enabledKeys.contains('torrent')) {
               final torrentSources = [
                 ..._torrentioSources,
                 ...movie.streamSources.where(_isMagnetSource),
@@ -5834,7 +5953,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Castle Server
-            if ((_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
+            if (_showCastle && (_resolvingCastle || _liveCastleSources.isNotEmpty) && enabledKeys.contains('castle')) {
               downloadSourceWidgets['castle'] = _buildSourceTile(
                 icon: Icons.castle_rounded,
                 title: '${pos('castle')}. Castle TV Server',
@@ -5854,7 +5973,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // Telegram Server
-            if ((_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty || enabledKeys.contains('telegram')) && enabledKeys.contains('telegram')) {
+            if (_showTelegram && (_resolvingTelegram || _isSearchingTelegramGroup || _liveTelegramSources.isNotEmpty || enabledKeys.contains('telegram')) && enabledKeys.contains('telegram')) {
               final isSearching = _resolvingTelegram || _isSearchingTelegramGroup;
               downloadSourceWidgets['telegram'] = _buildSourceTile(
                 icon: Icons.send_rounded,
@@ -5909,7 +6028,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             final List<Widget> items = [];
 
             // 1. Direct MP4/MKV Link (always shown at top if exist)
-            if (dbMp4Sources.isNotEmpty) {
+            if (_showDirectLink && dbMp4Sources.isNotEmpty) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.video_file_rounded,
@@ -5931,7 +6050,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             }
 
             // 4. Streamtape Server (always shown at top if exist)
-            if (dbStreamtapeSources.isNotEmpty) {
+            if (_showStreamtape && dbStreamtapeSources.isNotEmpty) {
               items.add(
                 _buildSourceTile(
                   icon: Icons.folder_shared_rounded,
@@ -5954,11 +6073,12 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
             // Dynamic sources
             for (final key in _sourceOrder) {
+              if (!_isSourceKeyVisible(key)) continue;
               if (key == 'stremioAddon') {
-                if (downloadSourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
+                if (_showStremioAddon && downloadSourceWidgets.containsKey('stremioAddon') && enabledKeys.contains('stremioAddon')) {
                   items.add(downloadSourceWidgets['stremioAddon']!);
                 }
-                if (downloadSourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
+                if (_showNuveoAddon && downloadSourceWidgets.containsKey('nuveoAddon') && enabledKeys.contains('stremioAddon')) {
                   items.add(downloadSourceWidgets['nuveoAddon']!);
                 }
               } else {
@@ -6440,6 +6560,15 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                                 child: ListTile(
                                   leading: Icon(Icons.download_rounded, color: AppColors.accentBright),
                                   title: Text(source.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  subtitle: (source.size != null && source.size!.isNotEmpty) || (source.quality != null && source.quality!.isNotEmpty)
+                                      ? Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            [if (source.quality != null && source.quality!.isNotEmpty) source.quality!, if (source.size != null && source.size!.isNotEmpty) 'Size: ${source.size!}'].join(' • '),
+                                            style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                                          ),
+                                        )
+                                      : null,
                                   tileColor: Colors.white.withValues(alpha: 0.03),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                   onTap: () {
